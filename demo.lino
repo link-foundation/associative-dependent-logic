@@ -1,0 +1,15 @@
+# --- term definitions (no probabilities here)
+(a: a is a)
+
+# --- operator defaults (redefinable)
+(!=: not =)
+(and: avg)     # so (1 and 0) = 0.5
+(or:  max)
+
+# --- axioms as probability assignments
+((a = a) has probability 1)
+((a != a) has probability 0)
+
+# --- query
+(? ((a = a) and (a != a)))   # -> 0.5
+(? ((a = a) or  (a != a)))   # -> 1
