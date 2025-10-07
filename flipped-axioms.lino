@@ -1,0 +1,10 @@
+(a: a is a)
+(!=: not =)
+(and: avg)
+(or:  max)
+
+((a = a) has probability 0)
+((a != a) has probability 1)
+
+(? ((a = a) and (a != a)))   # -> 0.5
+(? ((a = a) or  (a != a)))   # -> 1
