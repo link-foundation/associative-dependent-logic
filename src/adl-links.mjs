@@ -122,9 +122,11 @@ class Env {
       'and': (...xs)=> xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : this.lo, // avg
       'or' : (...xs)=> xs.length ? Math.max(...xs) : this.lo,
       '='  : (L,R,ctx)=> {
-        // If assigned explicitly, use that
-        const k = keyOf(['=',L,R]);
-        if (this.assign.has(k)) return this.assign.get(k);
+        // If assigned explicitly, use that (check both prefix and infix key forms)
+        const kPrefix = keyOf(['=',L,R]);
+        if (this.assign.has(kPrefix)) return this.assign.get(kPrefix);
+        const kInfix = keyOf([L,'=',R]);
+        if (this.assign.has(kInfix)) return this.assign.get(kInfix);
         // Default: syntactic equality of terms/trees
         return isStructurallySame(L,R) ? this.hi : this.lo;
       },
@@ -237,8 +239,10 @@ function _reinitOps(env) {
   env.ops.set('and', (...xs) => xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : env.lo);
   env.ops.set('or', (...xs) => xs.length ? Math.max(...xs) : env.lo);
   env.ops.set('=', (L,R,ctx) => {
-    const k = keyOf(['=',L,R]);
-    if (env.assign.has(k)) return env.assign.get(k);
+    const kPrefix = keyOf(['=',L,R]);
+    if (env.assign.has(kPrefix)) return env.assign.get(kPrefix);
+    const kInfix = keyOf([L,'=',R]);
+    if (env.assign.has(kInfix)) return env.assign.get(kInfix);
     return isStructurallySame(L,R) ? env.hi : env.lo;
   });
   env.ops.set('!=', (...args) => env.getOp('not')( env.getOp('=')(...args) ));
