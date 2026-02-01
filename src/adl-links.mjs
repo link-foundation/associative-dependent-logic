@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 // ADL — minimal associative-dependent logic over LiNo (Links Notation)
+// Supports many-valued logics from unary (1-valued) through continuous probabilistic (∞-valued).
+// See: https://en.wikipedia.org/wiki/Many-valued_logic
+//
 // - Uses official LiNo parser to parse links
 // - Terms are defined via (x: x is x)
 // - Probabilities are assigned ONLY via: ((<expr>) has probability <p>)
 // - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|prod|ps), (or: ...), (not: ...)
+// - Range: (range: 0 1) for [0,1] or (range: -1 1) for [-1,1] (balanced/symmetric)
+// - Valence: (valence: N) to restrict truth values to N discrete levels (N=2 → Boolean, N=3 → ternary, etc.)
 // - Query: (? <expr>)
 
 import fs from 'node:fs';
@@ -61,8 +66,7 @@ function parseOne(tokens) {
   if (i !== tokens.length) throw new Error('extra tokens after link');
   return ast;
 }
-const isNum = s => /^(\d+(\.\d+)?|\.\d+)$/.test(s);
-const toNum = s => Math.max(0, Math.min(1, parseFloat(s)));
+const isNum = s => /^-?(\d+(\.\d+)?|\.\d+)$/.test(s);
 const clamp01 = x => Math.max(0, Math.min(1, x));
 function keyOf(node) {
   if (Array.isArray(node)) return '(' + node.map(keyOf).join(' ') + ')';
@@ -77,29 +81,73 @@ function isStructurallySame(a,b){
   return String(a) === String(b);
 }
 
+// ---------- Quantization for N-valued logics ----------
+// Given N discrete levels and a range [lo, hi], quantize a value to the nearest level.
+// For N=2 (Boolean): levels are {lo, hi} (e.g. {0, 1} or {-1, 1})
+// For N=3 (ternary): levels are {lo, mid, hi} (e.g. {0, 0.5, 1} or {-1, 0, 1})
+// For N=0 or Infinity (continuous): no quantization
+// See: https://en.wikipedia.org/wiki/Many-valued_logic
+function quantize(x, valence, lo, hi) {
+  if (valence < 2) return x; // unary or continuous — no quantization
+  const step = (hi - lo) / (valence - 1);
+  const level = Math.round((x - lo) / step);
+  return lo + Math.max(0, Math.min(valence - 1, level)) * step;
+}
+
 // ---------- Environment ----------
 class Env {
-  constructor(){
+  constructor(options){
+    const opts = options || {};
     this.terms = new Set();                     // declared terms (via (x: x is x))
-    this.assign = new Map();                    // key(expr) -> probability
+    this.assign = new Map();                    // key(expr) -> truth value
     this.symbolProb = new Map();                // optional symbol priors if you want (x: 0.7)
+
+    // Range: [lo, hi] — default [0, 1] (standard probabilistic)
+    // Use [-1, 1] for balanced/symmetric range
+    // See: https://en.wikipedia.org/wiki/Balanced_ternary
+    this.lo = opts.lo !== undefined ? opts.lo : 0;
+    this.hi = opts.hi !== undefined ? opts.hi : 1;
+
+    // Valence: number of discrete truth values (0 or Infinity = continuous)
+    // N=1: unary logic (trivial, only one truth value)
+    // N=2: binary/Boolean logic — https://en.wikipedia.org/wiki/Boolean_algebra
+    // N=3: ternary logic — https://en.wikipedia.org/wiki/Three-valued_logic
+    // N=4+: N-valued logic — https://en.wikipedia.org/wiki/Many-valued_logic
+    // N=0/Infinity: continuous probabilistic / fuzzy logic — https://en.wikipedia.org/wiki/Fuzzy_logic
+    this.valence = opts.valence !== undefined ? opts.valence : 0;
 
     // ops (redefinable)
     this.ops = new Map(Object.entries({
-      'not': (x)=>1-x,
-      'and': (...xs)=> xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : 0, // avg
-      'or' : (...xs)=> xs.length ? Math.max(...xs) : 0,
+      'not': (x)=> this.hi - (x - this.lo),  // negation: mirrors around midpoint
+      'and': (...xs)=> xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : this.lo, // avg
+      'or' : (...xs)=> xs.length ? Math.max(...xs) : this.lo,
       '='  : (L,R,ctx)=> {
         // If assigned explicitly, use that
         const k = keyOf(['=',L,R]);
         if (this.assign.has(k)) return this.assign.get(k);
         // Default: syntactic equality of terms/trees
-        return isStructurallySame(L,R) ? 1 : 0;
+        return isStructurallySame(L,R) ? this.hi : this.lo;
       },
     }));
     // sugar: "!=" as not of "=" (can be redefined)
     this.defineOp('!=', (...args)=> this.getOp('not')( this.getOp('=')(...args) ));
   }
+
+  // Clamp and optionally quantize a value to the valid range
+  clamp(x) {
+    const clamped = Math.max(this.lo, Math.min(this.hi, x));
+    if (this.valence >= 2) return quantize(clamped, this.valence, this.lo, this.hi);
+    return clamped;
+  }
+
+  // Parse a numeric string respecting current range
+  toNum(s) {
+    return this.clamp(parseFloat(s));
+  }
+
+  // Midpoint of the range (useful for paradox resolution, default symbol prob, etc.)
+  get mid() { return (this.lo + this.hi) / 2; }
+
   getOp(name){
     if (!this.ops.has(name)) throw new Error(`Unknown op: ${name}`);
     return this.ops.get(name);
@@ -107,16 +155,16 @@ class Env {
   defineOp(name, fn){ this.ops.set(name, fn); }
 
   setExprProb(exprNode, p){
-    this.assign.set(keyOf(exprNode), clamp01(p));
+    this.assign.set(keyOf(exprNode), this.clamp(p));
   }
-  setSymbolProb(sym, p){ this.symbolProb.set(sym, clamp01(p)); }
-  getSymbolProb(sym){ return this.symbolProb.has(sym) ? this.symbolProb.get(sym) : 0.5; }
+  setSymbolProb(sym, p){ this.symbolProb.set(sym, this.clamp(p)); }
+  getSymbolProb(sym){ return this.symbolProb.has(sym) ? this.symbolProb.get(sym) : this.mid; }
 }
 
 // ---------- Eval ----------
 function evalNode(node, env){
   if (typeof node === 'string') {
-    if (isNum(node)) return toNum(node);
+    if (isNum(node)) return env.toNum(node);
     // bare symbol → optional prior probability if set; otherwise irrelevant in calc
     return env.getSymbolProb(node);
   }
@@ -133,14 +181,32 @@ function evalNode(node, env){
 
   // Assignment: ((expr) has probability p)
   if (node.length === 4 && node[1] === 'has' && node[2] === 'probability' && isNum(node[3])) {
-    env.setExprProb(node[0], toNum(node[3]));
-    return toNum(node[3]);
+    env.setExprProb(node[0], parseFloat(node[3]));
+    return env.toNum(node[3]);
+  }
+
+  // Range configuration: (range: lo hi) — sets the truth value range
+  // (range: 0 1) for standard [0,1] or (range: -1 1) for balanced [-1,1]
+  // See: https://en.wikipedia.org/wiki/Balanced_ternary
+  // Must be checked in evalNode for (range lo hi) prefix form
+  if (node.length === 3 && node[0] === 'range' && isNum(node[1]) && isNum(node[2])) {
+    env.lo = parseFloat(node[1]);
+    env.hi = parseFloat(node[2]);
+    // Re-initialize ops for new range
+    _reinitOps(env);
+    return 1;
+  }
+
+  // Valence configuration: (valence N) prefix form
+  if (node.length === 2 && node[0] === 'valence' && isNum(node[1])) {
+    env.valence = parseInt(node[1], 10);
+    return 1;
   }
 
   // Query: (? expr)
   if (node[0] === '?') {
     const v = evalNode(node[1], env);
-    return { query:true, value: clamp01(v) };
+    return { query:true, value: env.clamp(v) };
   }
 
   // Infix AND/OR: ((A) and (B))  /  ((A) or (B))
@@ -148,21 +214,34 @@ function evalNode(node, env){
     const op = env.getOp(node[1]);
     const L = evalNode(node[0], env);
     const R = evalNode(node[2], env);
-    return clamp01(op(L,R));
+    return env.clamp(op(L,R));
   }
 
   // Infix equality/inequality: (L = R), (L != R)
   if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='=' || node[1]==='!=')) {
     const op = env.getOp(node[1]);
     // Equality gets raw subtrees (so syntactic/assigned equality works)
-    return clamp01(op(node[0], node[2], keyOf));
+    return env.clamp(op(node[0], node[2], keyOf));
   }
 
   // Prefix: (not X), (and X Y ...), (or X Y ...)
   const [head, ...args] = node;
   const op = env.getOp(head);
   const vals = args.map(a => evalNode(a, env));
-  return clamp01(op(...vals));
+  return env.clamp(op(...vals));
+}
+
+// Re-initialize default ops when range changes
+function _reinitOps(env) {
+  env.ops.set('not', (x) => env.hi - (x - env.lo));
+  env.ops.set('and', (...xs) => xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : env.lo);
+  env.ops.set('or', (...xs) => xs.length ? Math.max(...xs) : env.lo);
+  env.ops.set('=', (L,R,ctx) => {
+    const k = keyOf(['=',L,R]);
+    if (env.assign.has(k)) return env.assign.get(k);
+    return isStructurallySame(L,R) ? env.hi : env.lo;
+  });
+  env.ops.set('!=', (...args) => env.getOp('not')( env.getOp('=')(...args) ));
 }
 
 function defineForm(head, rhs, env){
@@ -172,10 +251,25 @@ function defineForm(head, rhs, env){
     return 1;
   }
 
+  // Range configuration: (range: lo hi) — sets the truth value range
+  if (head === 'range' && rhs.length === 2 && isNum(rhs[0]) && isNum(rhs[1])) {
+    env.lo = parseFloat(rhs[0]);
+    env.hi = parseFloat(rhs[1]);
+    _reinitOps(env);
+    return 1;
+  }
+
+  // Valence configuration: (valence: N) — sets the number of truth values
+  // N=1: unary (trivial), N=2: binary (Boolean), N=3: ternary, N=0: continuous
+  if (head === 'valence' && rhs.length === 1 && isNum(rhs[0])) {
+    env.valence = parseInt(rhs[0], 10);
+    return 1;
+  }
+
   // Optional symbol prior: (a: 0.7) — not required for your use-case, but allowed
   if (rhs.length === 1 && isNum(rhs[0])) {
-    env.setSymbolProb(head, toNum(rhs[0]));
-    return toNum(rhs[0]);
+    env.setSymbolProb(head, parseFloat(rhs[0]));
+    return env.toNum(rhs[0]);
   }
 
   // Operator redefinitions
@@ -185,21 +279,22 @@ function defineForm(head, rhs, env){
     if (rhs.length === 2 && typeof rhs[0]==='string' && typeof rhs[1]==='string') {
       const outer = env.getOp(rhs[0]);
       const inner = env.getOp(rhs[1]);
-      env.defineOp(head, (...xs) => clamp01( outer( inner(...xs) ) ));
+      env.defineOp(head, (...xs) => env.clamp( outer( inner(...xs) ) ));
       return 1;
     }
 
     // Aggregator selection: (and: avg|min|max|prod|ps)
     if ((head==='and' || head==='or') && rhs.length===1 && typeof rhs[0]==='string') {
       const sel = rhs[0];
+      const lo = env.lo;
       const agg =
         sel==='avg' ? xs=>xs.reduce((a,b)=>a+b,0)/xs.length :
-        sel==='min' ? xs=>xs.length? Math.min(...xs) : 0 :
-        sel==='max' ? xs=>xs.length? Math.max(...xs) : 0 :
+        sel==='min' ? xs=>xs.length? Math.min(...xs) : lo :
+        sel==='max' ? xs=>xs.length? Math.max(...xs) : lo :
         sel==='prod'? xs=>xs.reduce((a,b)=>a*b,1) :
         sel==='ps'  ? xs=> 1 - xs.reduce((a,b)=>a*(1-b),1) : null;
       if (!agg) throw new Error(`Unknown aggregator "${sel}"`);
-      env.defineOp(head, (...xs)=> xs.length? agg(xs) : 0);
+      env.defineOp(head, (...xs)=> xs.length? agg(xs) : lo);
       return 1;
     }
 
@@ -217,7 +312,7 @@ function defineForm(head, rhs, env){
 }
 
 // ---------- Runner ----------
-function run(text){
+function run(text, options){
   const parser = new Parser();
   const links = parser.parse(text);
 
@@ -235,7 +330,7 @@ function run(text){
       return parseOne(toks);
     });
 
-  const env = new Env();
+  const env = new Env(options);
   const outs = [];
   for (let form of forms) {
     // Unwrap single-element arrays (LiNo wraps everything in outer parens)
@@ -260,4 +355,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   for (const v of outs) console.log(String(+v.toFixed(6)).replace(/\.0+$/,''));
 }
 
-export { run, tokenizeOne, parseOne, Env, evalNode };
+export { run, tokenizeOne, parseOne, Env, evalNode, quantize };
