@@ -25,8 +25,8 @@ Variable x : nat.
 ```
 
 ```lino
-# LiNo (Implemented)
-(x: Nat)
+# LiNo (Implemented) — prefix type notation
+(x: Natural x)
 ```
 
 ### 3. Function Types (Non-Dependent) ✅
@@ -43,7 +43,7 @@ nat -> bool
 
 ```lino
 # LiNo (Implemented)
-(Pi (_: Nat) Bool)
+(Pi (Natural _) Boolean)
 ```
 
 ### 4. Dependent Product (Π-Type / Forall) ✅
@@ -62,7 +62,7 @@ forall (n : nat), Vec n bool
 
 ```lino
 # LiNo (Implemented)
-(Pi (n: Nat) (Vec n Bool))
+(Pi (Natural n) (Vec n Boolean))
 ```
 
 ### 5. Lambda Abstraction ✅
@@ -79,7 +79,7 @@ fun (x : nat) => x + 1
 
 ```lino
 # LiNo (Implemented)
-(lam (x: Nat) (+ x 1))
+(lambda (Natural x) (x + 1))
 ```
 
 ### 6. Function Application ✅
@@ -98,7 +98,7 @@ f x y z
 
 ```lino
 # LiNo (Implemented)
-(app f x)
+(apply f x)
 ```
 
 ### 7. Let Binding 📋
@@ -115,7 +115,7 @@ let x : nat := 5 in x + 1
 
 ```lino
 # LiNo (Proposed)
-(let (x: Nat) 5 (+ x 1))
+(let (Natural x) 5 (x + 1))
 ```
 
 ### 8. Inductive Type Definitions 📋
@@ -136,9 +136,9 @@ Inductive nat : Set :=
 
 ```lino
 # LiNo (Proposed)
-(inductive Nat (Type 0)
-  (zero: Nat)
-  (succ: (Pi (_: Nat) Nat)))
+(inductive Natural (Type 0)
+  (zero: Natural zero)
+  (succ: (Pi (Natural _) Natural)))
 ```
 
 ### 9. Pattern Matching / Recursion 📋
@@ -161,8 +161,8 @@ Fixpoint add (a b : nat) : nat :=
 
 ```lino
 # LiNo (Proposed)
-(def add: (Pi (a: Nat) (Pi (b: Nat) Nat))
-  (lam (a: Nat) (lam (b: Nat)
+(def add: (Pi (Natural a) (Pi (Natural b) Natural))
+  (lambda (Natural a) (lambda (Natural b)
     (match a
       (zero => b)
       ((succ n) => (succ (add n b)))))))
@@ -191,8 +191,8 @@ Qed.
 ```lino
 # LiNo (Proposed) - explicit proof term
 (theorem plus_zero
-  : (Pi (n: Nat) (= (+ n zero) n))
-  (lam (n: Nat)
+  : (Pi (Natural n) (= (n + zero) n))
+  (lambda (Natural n)
     (match n
       (zero => (refl zero))
       ((succ m) => (cong succ (plus_zero m))))))
@@ -216,9 +216,9 @@ exists n : nat, n > 0
 
 ```lino
 # LiNo (Proposed)
-(Sigma (n: Nat) (> n 0))
+(Sigma (Natural n) (> n 0))
 # or:
-(exists (n: Nat) (> n 0))
+(exists (Natural n) (> n 0))
 ```
 
 ## Integration with ADL Probabilistic Logic
@@ -236,8 +236,8 @@ exists n : nat, n > 0
 (raining: (PProp 0.7))
 
 # Query type
-(?type (lam (x: Nat) (+ x 1)))
-# Output: (Pi (x: Nat) Nat)
+(? (type of (lambda (Natural x) (x + 1))))
+# Output: (Pi (Natural x) Natural)
 
 # Query probability
 (? (raining today))
@@ -249,9 +249,9 @@ exists n : nat, n > 0
 ```lino
 # Define a type
 (inductive Weather (Type 0)
-  (sunny: Weather)
-  (rainy: Weather)
-  (cloudy: Weather))
+  (sunny: Weather sunny)
+  (rainy: Weather rainy)
+  (cloudy: Weather cloudy))
 
 # Assign probabilities to inhabitants
 ((sunny has probability 0.3) in Weather)
@@ -259,7 +259,7 @@ exists n : nat, n > 0
 ((cloudy has probability 0.2) in Weather)
 
 # Dependent type with probabilistic index
-(forecast: (Pi (w: Weather) (PProp (weather_prob w))))
+(forecast: (Pi (Weather w) (PProp (weather_prob w))))
 ```
 
 ## Encoding in Pure Associative Links
@@ -268,40 +268,40 @@ For completeness, here is how the above would look using only the associative li
 
 ```lino
 # Define meta-concepts as links
-(type-of: type-of is type-of)
+(of: of is of)
 (reduces-to: reduces-to is reduces-to)
 (has-constructor: has-constructor is has-constructor)
 
 # Universe hierarchy
 (Type-0: Type-0 is Type-0)
 (Type-1: Type-1 is Type-1)
-((Type-0 type-of Type-1) has probability 1)
+((Type-0 of Type-1) has probability 1)
 
-# Nat type
-(Nat: Nat is Nat)
-((Nat type-of Type-0) has probability 1)
+# Natural type
+(Natural: Natural is Natural)
+((Natural of Type-0) has probability 1)
 
 # Constructors
 (zero: zero is zero)
-((zero type-of Nat) has probability 1)
-((Nat has-constructor zero) has probability 1)
+((zero of Natural) has probability 1)
+((Natural has-constructor zero) has probability 1)
 
 (succ: succ is succ)
-((succ type-of (Pi Nat Nat)) has probability 1)
-((Nat has-constructor succ) has probability 1)
+((succ of (Pi Natural Natural)) has probability 1)
+((Natural has-constructor succ) has probability 1)
 
 # A function: add
 (add: add is add)
-((add type-of (Pi Nat (Pi Nat Nat))) has probability 1)
+((add of (Pi Natural (Pi Natural Natural))) has probability 1)
 
 # Reduction rules as links
 (((add zero b) reduces-to b) has probability 1)
 (((add (succ n) b) reduces-to (succ (add n b))) has probability 1)
 
 # Type checking is querying the network
-(? (zero type-of Nat))          # -> 1 (true)
-(? (succ type-of (Pi Nat Nat))) # -> 1 (true)
-(? ((succ zero) type-of Nat))   # -> 1 (true, by reduction)
+(? (zero of Natural))                    # -> 1 (true)
+(? (succ of (Pi Natural Natural)))       # -> 1 (true)
+(? ((succ zero) of Natural))             # -> 1 (true, by reduction)
 ```
 
 This encoding treats the entire type system as data within the associative network, which aligns with the Links Theory principle that everything is a link.

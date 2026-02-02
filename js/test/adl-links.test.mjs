@@ -1215,21 +1215,26 @@ describe('Type System: substitute (beta-reduction helper)', () => {
     );
   });
 
-  it('should not substitute inside shadowing lambda bindings', () => {
-    const expr = ['lam', ['x:', 'Nat'], 'x'];
+  it('should not substitute inside shadowing lambda bindings (colon form)', () => {
+    const expr = ['lambda', ['x:', 'Natural'], 'x'];
+    assert.deepStrictEqual(substitute(expr, 'x', '5'), expr);
+  });
+
+  it('should not substitute inside shadowing lambda bindings (prefix form)', () => {
+    const expr = ['lambda', ['Natural', 'x'], 'x'];
     assert.deepStrictEqual(substitute(expr, 'x', '5'), expr);
   });
 
   it('should not substitute inside shadowing Pi bindings', () => {
-    const expr = ['Pi', ['x:', 'Nat'], 'x'];
-    assert.deepStrictEqual(substitute(expr, 'x', 'Bool'), expr);
+    const expr = ['Pi', ['x:', 'Natural'], 'x'];
+    assert.deepStrictEqual(substitute(expr, 'x', 'Boolean'), expr);
   });
 
   it('should substitute free variables in lambda body', () => {
-    const expr = ['lam', ['y:', 'Nat'], 'x'];
+    const expr = ['lambda', ['Natural', 'y'], 'x'];
     assert.deepStrictEqual(
       substitute(expr, 'x', '5'),
-      ['lam', ['y:', 'Nat'], '5']
+      ['lambda', ['Natural', 'y'], '5']
     );
   });
 });
@@ -1260,11 +1265,12 @@ describe('Type System: universe sorts — (Type N)', () => {
   });
 });
 
-describe('Type System: typed variable declarations — (x: A)', () => {
-  it('should declare a typed variable', () => {
+describe('Type System: typed variable declarations — (name: Type name)', () => {
+  it('should declare a typed variable via prefix notation', () => {
     const results = run(`
-(x: Nat)
-(? (x type-of Nat))
+(Natural: (Type 0))
+(x: Natural x)
+(? (x of Natural))
 `);
     assert.strictEqual(results.length, 1);
     assert.strictEqual(results[0], 1);
@@ -1272,19 +1278,23 @@ describe('Type System: typed variable declarations — (x: A)', () => {
 
   it('should return false for wrong type', () => {
     const results = run(`
-(x: Nat)
-(? (x type-of Bool))
+(Natural: (Type 0))
+(Boolean: (Type 0))
+(x: Natural x)
+(? (x of Boolean))
 `);
     assert.strictEqual(results[0], 0);
   });
 
   it('should support multiple typed declarations', () => {
     const results = run(`
-(x: Nat)
-(y: Bool)
-(? (x type-of Nat))
-(? (y type-of Bool))
-(? (x type-of Bool))
+(Natural: (Type 0))
+(Boolean: (Type 0))
+(x: Natural x)
+(y: Boolean y)
+(? (x of Natural))
+(? (y of Boolean))
+(? (x of Boolean))
 `);
     assert.strictEqual(results.length, 3);
     assert.strictEqual(results[0], 1);
@@ -1293,94 +1303,97 @@ describe('Type System: typed variable declarations — (x: A)', () => {
   });
 });
 
-describe('Type System: Pi-types — (Pi (x: A) B)', () => {
+describe('Type System: Pi-types — (Pi (Natural x) B)', () => {
   it('should evaluate a Pi-type as valid', () => {
-    const results = run('(? (Pi (x: Nat) Nat))');
+    const results = run('(? (Pi (Natural x) Natural))');
     assert.strictEqual(results[0], 1);
   });
 
   it('should register Pi-type in the type environment', () => {
     const env = new Env();
-    evalNode(['Pi', ['x:', 'Nat'], 'Nat'], env);
-    const typeOfPi = env.getType(['Pi', ['x:', 'Nat'], 'Nat']);
+    evalNode(['Pi', ['Natural', 'x'], 'Natural'], env);
+    const typeOfPi = env.getType(['Pi', ['Natural', 'x'], 'Natural']);
     assert.ok(typeOfPi !== null);
   });
 
   it('should register the parameter type from Pi', () => {
     const env = new Env();
-    evalNode(['Pi', ['n:', 'Nat'], ['Vec', 'n', 'Bool']], env);
+    evalNode(['Pi', ['Natural', 'n'], ['Vec', 'n', 'Boolean']], env);
     assert.ok(env.terms.has('n'));
-    assert.strictEqual(env.getType('n'), 'Nat');
+    assert.strictEqual(env.getType('n'), 'Natural');
   });
 
-  it('non-dependent function type: (Pi (_: Nat) Bool)', () => {
-    const results = run('(? (Pi (_: Nat) Bool))');
+  it('non-dependent function type: (Pi (Natural _) Boolean)', () => {
+    const results = run('(? (Pi (Natural _) Boolean))');
     assert.strictEqual(results[0], 1);
   });
 });
 
-describe('Type System: lambda abstraction — (lam (x: A) body)', () => {
+describe('Type System: lambda abstraction — (lambda (Natural x) body)', () => {
   it('should evaluate a lambda as valid', () => {
-    const results = run('(? (lam (x: Nat) x))');
+    const results = run('(? (lambda (Natural x) x))');
     assert.strictEqual(results[0], 1);
   });
 
   it('should store lambda type as a Pi-type', () => {
     const env = new Env();
-    evalNode(['lam', ['x:', 'Nat'], 'x'], env);
-    const t = env.getType(['lam', ['x:', 'Nat'], 'x']);
+    evalNode(['lambda', ['Natural', 'x'], 'x'], env);
+    const t = env.getType(['lambda', ['Natural', 'x'], 'x']);
     assert.ok(t !== null);
     assert.ok(t.includes('Pi'));
   });
 });
 
-describe('Type System: application — (app f x) with beta-reduction', () => {
-  it('should beta-reduce (app (lam (x: Nat) x) 0.5) to 0.5', () => {
-    const results = run('(? (app (lam (x: Nat) x) 0.5))');
+describe('Type System: application — (apply f x) with beta-reduction', () => {
+  it('should beta-reduce (apply (lambda (Natural x) x) 0.5) to 0.5', () => {
+    const results = run('(? (apply (lambda (Natural x) x) 0.5))');
     assert.strictEqual(results.length, 1);
     assert.strictEqual(results[0], 0.5);
   });
 
   it('should beta-reduce with arithmetic in body', () => {
-    const results = run('(? (app (lam (x: Nat) (x + 0.1)) 0.2))');
+    const results = run('(? (apply (lambda (Natural x) (x + 0.1)) 0.2))');
     assert.strictEqual(results[0], 0.3);
   });
 
-  it('should apply named lambda via (app name arg)', () => {
+  it('should apply named lambda via (apply name arg)', () => {
     const results = run(`
-(id: lam (x: Nat) x)
-(? (app id 0.7))
+(identity: lambda (Natural x) x)
+(? (apply identity 0.7))
 `);
     assert.strictEqual(results[0], 0.7);
   });
 
   it('should apply named lambda via prefix form (name arg)', () => {
     const results = run(`
-(id: lam (x: Nat) x)
-(? (id 0.7))
+(identity: lambda (Natural x) x)
+(? (identity 0.7))
 `);
     assert.strictEqual(results[0], 0.7);
   });
 
   it('should apply const function', () => {
-    const results = run('(? (app (lam (x: Nat) 0.5) 0.9))');
+    const results = run('(? (apply (lambda (Natural x) 0.5) 0.9))');
     assert.strictEqual(results[0], 0.5);
   });
 });
 
-describe('Type System: type-of query — (expr type-of Type)', () => {
-  it('should confirm type with type-of link', () => {
+describe('Type System: type check query — (expr of Type)', () => {
+  it('should confirm type with of link', () => {
     const results = run(`
-(x: Nat)
-(? (x type-of Nat))
+(Natural: (Type 0))
+(x: Natural x)
+(? (x of Natural))
 `);
     assert.strictEqual(results[0], 1);
   });
 
   it('should reject wrong type', () => {
     const results = run(`
-(x: Nat)
-(? (x type-of Bool))
+(Natural: (Type 0))
+(Boolean: (Type 0))
+(x: Natural x)
+(? (x of Boolean))
 `);
     assert.strictEqual(results[0], 0);
   });
@@ -1388,26 +1401,27 @@ describe('Type System: type-of query — (expr type-of Type)', () => {
   it('should work with universe types', () => {
     const results = run(`
 (Type 0)
-(? ((Type 0) type-of (Type 1)))
+(? ((Type 0) of (Type 1)))
 `);
     assert.strictEqual(results[0], 1);
   });
 });
 
-describe('Type System: ?type query — type inference', () => {
+describe('Type System: type of query — (type of expr)', () => {
   it('should infer type of a typed variable', () => {
     const results = run(`
-(x: Nat)
-(?type x)
+(Natural: (Type 0))
+(x: Natural x)
+(? (type of x))
 `);
     assert.strictEqual(results.length, 1);
-    assert.strictEqual(results[0], 'Nat');
+    assert.strictEqual(results[0], 'Natural');
   });
 
   it('should return unknown for untyped expressions', () => {
     const results = run(`
 (a: a is a)
-(?type a)
+(? (type of a))
 `);
     assert.strictEqual(results[0], 'unknown');
   });
@@ -1416,24 +1430,24 @@ describe('Type System: ?type query — type inference', () => {
 describe('Type System: encoding Lean/Rocq core concepts as links', () => {
   it('should define natural number type and constructors', () => {
     const results = run(`
-(Nat: (Type 0))
-(zero: Nat)
-(succ: (Pi (n: Nat) Nat))
-(? (zero type-of Nat))
-(? (Nat type-of (Type 0)))
+(Natural: (Type 0))
+(zero: Natural zero)
+(succ: (Pi (Natural n) Natural))
+(? (zero of Natural))
+(? (Natural of (Type 0)))
 `);
     assert.strictEqual(results.length, 2);
     assert.strictEqual(results[0], 1);
     assert.strictEqual(results[1], 1);
   });
 
-  it('should define Bool type and constructors', () => {
+  it('should define Boolean type and constructors', () => {
     const results = run(`
-(Bool: (Type 0))
-(true-val: Bool)
-(false-val: Bool)
-(? (true-val type-of Bool))
-(? (false-val type-of Bool))
+(Boolean: (Type 0))
+(true-val: Boolean true-val)
+(false-val: Boolean false-val)
+(? (true-val of Boolean))
+(? (false-val of Boolean))
 `);
     assert.strictEqual(results[0], 1);
     assert.strictEqual(results[1], 1);
@@ -1441,18 +1455,18 @@ describe('Type System: encoding Lean/Rocq core concepts as links', () => {
 
   it('should define identity function with type', () => {
     const results = run(`
-(Nat: (Type 0))
-(id: (Pi (x: Nat) Nat))
-(? (id type-of (Pi (x: Nat) Nat)))
+(Natural: (Type 0))
+(identity: (Pi (Natural x) Natural))
+(? (identity of (Pi (Natural x) Natural)))
 `);
     assert.strictEqual(results[0], 1);
   });
 
   it('should combine types with probability assignments', () => {
     const results = run(`
-(Nat: (Type 0))
-(zero: Nat)
-(? (zero type-of Nat))
+(Natural: (Type 0))
+(zero: Natural zero)
+(? (zero of Natural))
 ((zero = zero) has probability 1)
 (? (zero = zero))
 `);
@@ -1463,8 +1477,8 @@ describe('Type System: encoding Lean/Rocq core concepts as links', () => {
 
   it('should define and apply identity function', () => {
     const results = run(`
-(id: lam (x: Nat) x)
-(? (app id 0.5))
+(identity: lambda (Natural x) x)
+(? (apply identity 0.5))
 `);
     assert.strictEqual(results[0], 0.5);
   });
@@ -1518,11 +1532,11 @@ describe('Type System: backward compatibility', () => {
   it('mixed: types alongside probabilistic logic', () => {
     const results = run(`
 (a: a is a)
-(Nat: (Type 0))
-(x: Nat)
+(Natural: (Type 0))
+(x: Natural x)
 ((a = a) has probability 1)
 (? (a = a))
-(? (x type-of Nat))
+(? (x of Natural))
 (? (Type 0))
 `);
     assert.strictEqual(results.length, 3);
@@ -1533,64 +1547,70 @@ describe('Type System: backward compatibility', () => {
 });
 
 describe('Type System: prefix type notation — (name: Type name)', () => {
-  it('(zero: Nat zero) declares zero has type Nat', () => {
-    const env = new Env();
-    run('(Nat: (Type 0))');
+  it('(zero: Natural zero) declares zero has type Natural', () => {
     const results = run(`
-(Nat: (Type 0))
-(zero: Nat zero)
-(? (zero type-of Nat))
+(Natural: (Type 0))
+(zero: Natural zero)
+(? (zero of Natural))
 `);
     assert.strictEqual(results[0], 1);
   });
 
-  it('(boolean: Type boolean) declares boolean has type Type', () => {
+  it('(Boolean: (Type 0) Boolean) declares Boolean has type (Type 0)', () => {
     const results = run(`
 (Type 0)
 (Boolean: (Type 0) Boolean)
-(? (Boolean type-of (Type 0)))
+(? (Boolean of (Type 0)))
 `);
     assert.strictEqual(results[0], 1);
   });
 
   it('prefix notation with simple type names', () => {
     const results = run(`
-(Nat: (Type 0))
-(Bool: (Type 0))
-(zero: Nat zero)
-(true-val: Bool true-val)
-(? (zero type-of Nat))
-(? (true-val type-of Bool))
+(Natural: (Type 0))
+(Boolean: (Type 0))
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(? (zero of Natural))
+(? (true-val of Boolean))
 `);
     assert.strictEqual(results[0], 1);
     assert.strictEqual(results[1], 1);
   });
 
-  it('prefix notation coexists with colon notation', () => {
+  it('prefix notation with Pi-type constructor', () => {
     const results = run(`
-(Nat: (Type 0))
-(zero: Nat zero)
-(succ: Nat)
-(? (zero type-of Nat))
-(? (succ type-of Nat))
+(Natural: (Type 0))
+(zero: Natural zero)
+(succ: (Pi (Natural n) Natural))
+(? (zero of Natural))
+(? (succ of (Pi (Natural n) Natural)))
 `);
     assert.strictEqual(results[0], 1);
     assert.strictEqual(results[1], 1);
   });
 
-  it('type hierarchy: (type: type type), (boolean: type boolean)', () => {
+  it('type hierarchy: (Type: (Type 0) Type), (Boolean: Type Boolean)', () => {
     const results = run(`
 (Type 0)
 (Type: (Type 0) Type)
 (Boolean: Type Boolean)
 (True: Boolean True)
 (False: Boolean False)
-(? (Boolean type-of Type))
-(? (True type-of Boolean))
-(? (False type-of Boolean))
+(? (Boolean of Type))
+(? (True of Boolean))
+(? (False of Boolean))
 `);
     assert.strictEqual(results[0], 1);
     assert.strictEqual(results[1], 1);
     assert.strictEqual(results[2], 1);
+  });
+
+  it('lambda with multi-param binding: (lambda (Natural x, Natural y) body)', () => {
+    const results = run(`
+(Natural: (Type 0))
+(? (lambda (Natural x, Natural y) (x + y)))
+`);
+    assert.strictEqual(results[0], 1);
   });
 });

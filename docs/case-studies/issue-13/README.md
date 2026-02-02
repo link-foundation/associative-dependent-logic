@@ -93,14 +93,14 @@ ADL is a **probabilistic logic framework** built on [Links Notation (LiNo)](http
 | Redefinable operators | Yes | `(and: min)`, `(!=: not =)` |
 | Decimal-precision arithmetic | Yes | `0.1 + 0.2 = 0.3` |
 | Paradox resolution | Yes | Liar paradox → midpoint |
-| **Type annotations** | **Yes** (v0.7.0) | `(x: Nat)` — typed declarations stored as links |
-| **Dependent products** | **Yes** (v0.7.0) | `(Pi (x: A) B)` — Π-types as links |
-| **Lambda abstraction** | **Yes** (v0.7.0) | `(lam (x: A) e)` — lambdas as links |
-| **Application** | **Yes** (v0.7.0) | `(app f x)` with β-reduction |
+| **Type annotations** | **Yes** (v0.7.0) | `(x: Natural x)` — prefix type notation stored as links |
+| **Dependent products** | **Yes** (v0.7.0) | `(Pi (Natural x) B)` — Π-types as links |
+| **Lambda abstraction** | **Yes** (v0.7.0) | `(lambda (Natural x) e)` — lambdas as links |
+| **Application** | **Yes** (v0.7.0) | `(apply f x)` with β-reduction |
 | **Universe hierarchy** | **Yes** (v0.7.0) | `(Type 0)`, `(Type 1)`, ... |
 | **Substitution** | **Yes** (v0.7.0) | Full β-reduction with variable shadowing |
 | **Normalization** | **Partial** | Single-step β-reduction (no full normalization) |
-| **Type checking** | **Partial** | `type-of` queries and `?type` inference |
+| **Type checking** | **Partial** | `(expr of Type)` queries and `(type of expr)` inference |
 
 ### LiNo Syntax Recap
 
@@ -126,8 +126,8 @@ To define the core of Lean/Rocq within ADL, we need to add these capabilities:
 Currently, `(a: a is a)` defines a term. We need a way to **annotate terms with types**:
 
 ```lino
-(a: Nat)          # a has type Nat
-(f: Nat -> Bool)  # f is a function from Nat to Bool
+(a: Natural a)          # a has type Natural (prefix type notation)
+(f: (Type 0) f)         # f is a type
 ```
 
 ### 2. Dependent Products (Π-types)
@@ -135,7 +135,7 @@ Currently, `(a: a is a)` defines a term. We need a way to **annotate terms with 
 The ability to express types that depend on values:
 
 ```lino
-(forall (n: Nat) (Vec n Nat))   # For all n:Nat, the type Vec n Nat
+(forall (Natural n) (Vec n Natural))   # For all n:Natural, the type Vec n Natural
 ```
 
 ### 3. Lambda Abstraction
@@ -143,7 +143,7 @@ The ability to express types that depend on values:
 The ability to create functions:
 
 ```lino
-(lambda (x: Nat) (x + 1))      # A function that adds 1
+(lambda (Natural x) (x + 1))      # A function that adds 1
 ```
 
 ### 4. Application and β-Reduction
@@ -151,7 +151,7 @@ The ability to create functions:
 Applying a function to an argument and reducing:
 
 ```lino
-((lambda (x: Nat) (x + 1)) 3)  # Should reduce to 4
+((lambda (Natural x) (x + 1)) 3)  # Should reduce to 4
 ```
 
 ### 5. Universe Hierarchy
@@ -159,7 +159,7 @@ Applying a function to an argument and reducing:
 A hierarchy of types:
 
 ```lino
-(Type 0)    # The type of "small" types (Nat, Bool, etc.)
+(Type 0)    # The type of "small" types (Natural, Boolean, etc.)
 (Type 1)    # The type of Type 0
 ```
 
@@ -168,9 +168,9 @@ A hierarchy of types:
 For the full Calculus of Inductive Constructions:
 
 ```lino
-(inductive Nat
-  (zero: Nat)
-  (succ: (forall (n: Nat) Nat)))
+(inductive Natural
+  (zero: Natural zero)
+  (succ: (forall (Natural n) Natural)))
 ```
 
 ---
@@ -186,8 +186,8 @@ The [Links Theory](https://github.com/link-foundation/deep-theory) (Deep Theory)
 
 This maps naturally to dependent type theory, where **terms and types are the same syntactic category**. In the CoC:
 
-- A type is just a term: `Nat` is a term of type `Type₀`
-- A function type is just a term: `Nat → Bool` is a term of type `Type₀`
+- A type is just a term: `Natural` is a term of type `Type₀`
+- A function type is just a term: `Natural → Boolean` is a term of type `Type₀`
 - A proof is just a term: a proof of `P` is a term of type `P`
 
 In Links Theory:
@@ -222,7 +222,7 @@ The **typing judgment** `Γ ⊢ e : T` ("in context Γ, expression e has type T"
 Which in LiNo could be:
 
 ```lino
-((e has type T) in (x₁: A₁) (x₂: A₂))
+((e has type T) in (A₁ x₁) (A₂ x₂))
 ```
 
 ---
@@ -240,41 +240,41 @@ Which in LiNo could be:
 (Type 0)
 (Type 1)
 
-# Type annotations
-(x: Nat)
-(f: (Pi (x: Nat) Nat))
+# Type annotations (prefix type notation)
+(x: Natural x)
+(f: (Pi (Natural x) Natural) f)
 
 # Dependent product (Π-type / forall)
-(Pi (x: Nat) (Vec x Bool))
+(Pi (Natural x) (Vec x Boolean))
 
 # Non-dependent function type (sugar for Pi where x doesn't appear in body)
-(Nat -> Bool)
+(Natural -> Boolean)
 
 # Lambda abstraction
-(lam (x: Nat) (+ x 1))
+(lambda (Natural x) (x + 1))
 
 # Application
-(app (lam (x: Nat) (+ x 1)) 3)
+(apply (lambda (Natural x) (x + 1)) 3)
 
 # Let binding
-(let (x: Nat) 5 (+ x 1))
+(let (Natural x) 5 (x + 1))
 
 # Inductive type definition
-(inductive Nat
-  (zero: Nat)
-  (succ: (Pi (n: Nat) Nat)))
+(inductive Natural
+  (zero: Natural zero)
+  (succ: (Pi (Natural n) Natural)))
 
 # Pattern matching
 (match n
   (zero => 0)
   ((succ m) => (+ 1 (f m))))
 
-# Type checking query
-(?type (lam (x: Nat) (+ x 1)))   # -> (Pi (x: Nat) Nat)
+# Type inference query
+(? (type of (lambda (Natural x) (x + 1))))   # -> (Pi (Natural x) Natural)
 
 # Proof term
 (theorem plus_comm
-  (Pi (a: Nat) (Pi (b: Nat) (= (+ a b) (+ b a))))
+  (Pi (Natural a) (Pi (Natural b) (= (a + b) (b + a))))
   proof_term)
 ```
 
@@ -284,11 +284,11 @@ Which in LiNo could be:
 # A proposition with probability
 ((P x) has probability 0.8)
 
-# Type-checked with probability
-(?type ((P x) has probability 0.8))   # -> Prop with confidence 0.8
+# Type inference with probability
+(? (type of ((P x) has probability 0.8)))   # -> Prop with confidence 0.8
 
 # Dependent type with probabilistic witness
-(Sigma (x: Nat) ((P x) has probability (> 0.5)))
+(Sigma (Natural x) ((P x) has probability (> 0.5)))
 ```
 
 **Pros:**
@@ -325,13 +325,13 @@ LiNo text → LiNo Parser → AST
 (mode: types)
 
 # Now all expressions are type-checked
-(def Nat: (Type 0)
+(def Natural: (Type 0)
   (inductive
-    (zero: Nat)
-    (succ: (Pi (_: Nat) Nat))))
+    (zero: Natural zero)
+    (succ: (Pi (Natural _) Natural))))
 
-(def plus: (Pi (a: Nat) (Pi (b: Nat) Nat))
-  (lam (a: Nat) (lam (b: Nat)
+(def plus: (Pi (Natural a) (Pi (Natural b) Natural))
+  (lambda (Natural a) (lambda (Natural b)
     (match a
       (zero => b)
       ((succ n) => (succ (plus n b)))))))
@@ -374,7 +374,7 @@ This is inspired by the research paper ["A Type Theory for Probabilistic and Bay
 (P: Prop 0.8)     # P is true with probability 0.8
 
 # Dependent product with probabilistic types
-(Pi (x: Nat) (Prop (prob x)))   # A family of propositions with varying probability
+(Pi (Natural x) (Prop (prob x)))   # A family of propositions with varying probability
 ```
 
 **Syntax in LiNo:**
@@ -388,19 +388,19 @@ This is inspired by the research paper ["A Type Theory for Probabilistic and Bay
 
 # Conditional probability as dependent type
 (umbrella_given_rain:
-  (Pi (r: (PProp p)) (PProp (cond_prob umbrella r))))
+  (Pi (PProp p) r) (PProp (cond_prob umbrella r))))
 
 # Bayesian update as a type-theoretic operation
 (bayes:
-  (Pi (prior: (PProp p))
-  (Pi (likelihood: (Pi (_: A) (PProp l)))
-  (Pi (evidence: (PProp e))
-  (PProp (bayesian_update p l e))))))
+  (Pi (PProp p) prior)
+  (Pi (Pi (A _) (PProp l)) likelihood)
+  (Pi (PProp e) evidence)
+  (PProp (bayesian_update p l e)))))
 
 # ADL's existing probability operations become type-theoretic
-(and: (Pi (a: (PProp p)) (Pi (b: (PProp q)) (PProp (agg_and p q)))))
-(or:  (Pi (a: (PProp p)) (Pi (b: (PProp q)) (PProp (agg_or p q)))))
-(not: (Pi (a: (PProp p)) (PProp (negate p))))
+(and: (Pi (PProp p) a) (Pi (PProp q) b) (PProp (agg_and p q)))))
+(or:  (Pi (PProp p) a) (Pi (PProp q) b) (PProp (agg_or p q)))))
+(not: (Pi (PProp p) a) (PProp (negate p))))
 ```
 
 **Pros:**
@@ -427,40 +427,40 @@ In this approach, the entire type system is encoded as an associative network of
 ```lino
 # Everything is a link. A link has an ID and references other links.
 
-# Define the concept "type-of" as a link
-(type-of: type-of is type-of)
+# Define the concept "of" as a link
+(of: of is of)
 
 # Define universe levels as links
 (Type-0: Type-0 is Type-0)
 (Type-1: Type-1 is Type-1)
-((Type-0 type-of Type-1) has probability 1)   # Type₀ : Type₁
+((Type-0 of Type-1) has probability 1)   # Type₀ : Type₁
 
-# Define Nat as a link of type Type-0
-(Nat: Nat is Nat)
-((Nat type-of Type-0) has probability 1)       # Nat : Type₀
+# Define Natural as a link of type Type-0
+(Natural: Natural is Natural)
+((Natural of Type-0) has probability 1)       # Natural : Type₀
 
-# Define zero as a link of type Nat
+# Define zero as a link of type Natural
 (zero: zero is zero)
-((zero type-of Nat) has probability 1)         # zero : Nat
+((zero of Natural) has probability 1)         # zero : Natural
 
 # Define succ as a function link
 (succ: succ is succ)
-((succ type-of (Pi Nat Nat)) has probability 1)  # succ : Nat → Nat
+((succ of (Pi Natural Natural)) has probability 1)  # succ : Natural → Natural
 
 # Dependent product as a link pattern
 (Pi: Pi is Pi)
-((Pi type-of (Pi Type-0 (Pi Type-0 Type-0))) has probability 1)
+((Pi of (Pi Type-0 (Pi Type-0 Type-0))) has probability 1)
 
 # Application: (succ zero) is a link
 ((succ zero): (succ zero) is (succ zero))
-((succ zero) type-of Nat)
+((succ zero) of Natural)
 
 # Lambda: represented as a link with binding structure
 (lambda: lambda is lambda)
-((lambda x Nat (+ x 1)) type-of (Pi Nat Nat))
+((lambda x Natural (x + 1)) of (Pi Natural Natural))
 ```
 
-**The key principle:** Every construct (type, term, function, proof) is just a link with other links indicating its relationships (type-of, reduces-to, equivalent-to).
+**The key principle:** Every construct (type, term, function, proof) is just a link with other links indicating its relationships (of, reduces-to, equivalent-to).
 
 **Pros:**
 - Maximally faithful to Links Theory and the associative model
@@ -522,13 +522,13 @@ In this approach, the entire type system is encoded as an associative network of
 The ADL evaluator has been extended with all 5 core expression forms of the CoC:
 
 1. ✅ `(Type N)` — universe sorts with automatic hierarchy `(Type 0) : (Type 1) : ...`
-2. ✅ `(Pi (x: A) B)` — dependent products (Π-types)
-3. ✅ `(lam (x: A) e)` — lambda abstraction with typed parameters
-4. ✅ `(app f x)` — application with full β-reduction
+2. ✅ `(Pi (Natural x) B)` — dependent products (Π-types)
+3. ✅ `(lambda (Natural x) e)` — lambda abstraction with typed parameters
+4. ✅ `(apply f x)` — application with full β-reduction
 5. ✅ Substitution with variable shadowing support
-6. ✅ Type checking via `type-of` queries and `?type` inference
+6. ✅ Type checking via `(expr of Type)` queries and `(? (type of expr))` inference
 
-**Implementation:** ~500 lines of new code in each implementation (JS + Rust), plus 41 new tests each (all backward-compatible with existing 122 tests).
+**Implementation:** ~500 lines of new code in each implementation (JS + Rust), plus 46 new tests each (all backward-compatible with existing 124 tests).
 
 **Key design principle:** "Everything is a link" — types are stored as associations in the link network, type-checking is querying the network, and the type system coexists with the probabilistic logic engine.
 

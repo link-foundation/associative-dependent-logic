@@ -212,8 +212,10 @@ class Env {
 }
 
 // ---------- Binding parser ----------
-// Parse a binding form: (x: A) as ['x:', A] — using standard LiNo link definition syntax.
-// The colon is only used as part of the link name (e.g., 'x:'), never as a standalone separator.
+// Parse a binding form in two supported syntaxes:
+// 1. Colon form: (x: A) as ['x:', A] — standard LiNo link definition syntax
+// 2. Prefix type form: (A x) as ['A', 'x'] — type-first notation for lambda/Pi bindings
+//    e.g. (Natural x), used in (lambda (Natural x) body)
 // Returns { paramName, paramType } or null if not a valid binding.
 function parseBinding(binding) {
   if (!Array.isArray(binding)) return null;
@@ -221,7 +223,54 @@ function parseBinding(binding) {
   if (binding.length === 2 && typeof binding[0] === 'string' && binding[0].endsWith(':')) {
     return { paramName: binding[0].slice(0, -1), paramType: binding[1] };
   }
+  // ['A', 'x'] — prefix type form: type name first, then variable name
+  // Type names must start with uppercase (convention from Lean/Rocq)
+  if (binding.length === 2 && typeof binding[0] === 'string' && typeof binding[1] === 'string'
+      && /^[A-Z]/.test(binding[0]) && !binding[1].endsWith(':')) {
+    return { paramName: binding[1], paramType: binding[0] };
+  }
   return null;
+}
+
+// ---------- Multi-binding parser ----------
+// Parse comma-separated bindings: (Natural x, Natural y) → [{paramName:'x', paramType:'Natural'}, ...]
+// Tokens arrive as ['Natural', 'x,', 'Natural', 'y'] or ['Natural', 'x'] (single binding)
+function parseBindings(binding) {
+  if (!Array.isArray(binding)) return null;
+  // Try single binding first
+  const single = parseBinding(binding);
+  if (single) return [single];
+  // Try comma-separated: flatten tokens, split by commas
+  const tokens = [];
+  for (const tok of binding) {
+    if (typeof tok === 'string') {
+      // Split tokens that end with comma: 'x,' → 'x', separator
+      if (tok.endsWith(',')) {
+        tokens.push(tok.slice(0, -1));
+        tokens.push(',');
+      } else {
+        tokens.push(tok);
+      }
+    } else {
+      tokens.push(tok);
+    }
+  }
+  // Group into pairs separated by commas
+  const bindings = [];
+  let i = 0;
+  while (i < tokens.length) {
+    if (tokens[i] === ',') { i++; continue; }
+    if (i + 1 < tokens.length && typeof tokens[i] === 'string' && typeof tokens[i+1] === 'string' && tokens[i+1] !== ',') {
+      const pair = parseBinding([tokens[i], tokens[i+1]]);
+      if (pair) {
+        bindings.push(pair);
+        i += 2;
+        continue;
+      }
+    }
+    return null; // invalid binding format
+  }
+  return bindings.length > 0 ? bindings : null;
 }
 
 // ---------- Substitution (for beta-reduction) ----------
@@ -233,7 +282,7 @@ function substitute(expr, name, replacement) {
   }
   if (Array.isArray(expr)) {
     // Don't substitute inside a binding that shadows the variable
-    if (expr.length === 3 && (expr[0] === 'lam' || expr[0] === 'Pi') && Array.isArray(expr[1])) {
+    if (expr.length === 3 && (expr[0] === 'lambda' || expr[0] === 'Pi') && Array.isArray(expr[1])) {
       const parsed = parseBinding(expr[1]);
       if (parsed && parsed.paramName === name) {
         return expr; // shadowed
@@ -293,6 +342,8 @@ function evalNode(node, env){
   // Query: (? expr)
   if (node[0] === '?') {
     const v = evalNode(node[1], env);
+    // If inner result is already a query (e.g. from (type of x)), pass it through
+    if (v && typeof v === 'object' && v.query) return v;
     return { query:true, value: env.clamp(v) };
   }
 
@@ -353,7 +404,7 @@ function evalNode(node, env){
     return 1;
   }
 
-  // Dependent product (Pi-type): (Pi (x: A) B)
+  // Dependent product (Pi-type): (Pi (A x) B) or (Pi (x: A) B)
   if (node.length === 3 && node[0] === 'Pi') {
     const binding = node[1];
     const parsed = parseBinding(binding);
@@ -366,33 +417,37 @@ function evalNode(node, env){
     return 1;
   }
 
-  // Lambda abstraction: (lam (x: A) body)
-  if (node.length === 3 && node[0] === 'lam') {
+  // Lambda abstraction: (lambda (A x) body) or (lambda (x: A) body)
+  // Also supports multi-param: (lambda (A x, B y) body)
+  if (node.length === 3 && node[0] === 'lambda') {
     const binding = node[1];
-    const parsed = parseBinding(binding);
-    if (parsed) {
-      const { paramName, paramType } = parsed;
+    const bindings = parseBindings(binding);
+    if (bindings && bindings.length > 0) {
+      // For single binding — standard case
+      const { paramName, paramType } = bindings[0];
       const body = node[2];
       env.terms.add(paramName);
       env.setType(paramName, paramType);
+      // Register additional bindings
+      for (let i = 1; i < bindings.length; i++) {
+        env.terms.add(bindings[i].paramName);
+        env.setType(bindings[i].paramName, bindings[i].paramType);
+      }
       const bodyType = env.getType(body);
       const paramTypeKey = typeof paramType === 'string' ? paramType : keyOf(paramType);
       const bodyTypeKey = bodyType || 'unknown';
-      env.setType(node, '(Pi (' + paramName + ': ' + paramTypeKey + ') ' + bodyTypeKey + ')');
+      env.setType(node, '(Pi (' + paramTypeKey + ' ' + paramName + ') ' + bodyTypeKey + ')');
     }
     return 1;
   }
 
-  // Named definition with type: (def name : type body) — (def: name (: type) body)
-  // Handled via define form
-
-  // Application: (app f x) — explicit application with beta-reduction
-  if (node.length === 3 && node[0] === 'app') {
+  // Application: (apply f x) — explicit application with beta-reduction
+  if (node.length === 3 && node[0] === 'apply') {
     const fn = node[1];
     const arg = node[2];
 
-    // Check if fn is a lambda: (lam (x: A) body)
-    if (Array.isArray(fn) && fn.length === 3 && fn[0] === 'lam') {
+    // Check if fn is a lambda: (lambda (A x) body)
+    if (Array.isArray(fn) && fn.length === 3 && fn[0] === 'lambda') {
       const parsed = parseBinding(fn[1]);
       if (parsed) {
         const body = fn[2];
@@ -416,9 +471,10 @@ function evalNode(node, env){
     return typeof fVal === 'number' ? fVal : (fVal && fVal.value !== undefined ? fVal.value : 0);
   }
 
-  // Type query: (?type expr) — returns the type of an expression
-  if (node[0] === '?type' || node[0] === '?type:') {
-    const expr = node[1];
+  // Type query: (type of expr) — returns the type of an expression
+  // e.g. (? (type of x)) → returns the type string
+  if (node.length === 3 && node[0] === 'type' && node[1] === 'of') {
+    const expr = node[2];
     const typeStr = env.getType(expr);
     if (typeStr) {
       return { query: true, value: typeStr, typeQuery: true };
@@ -426,8 +482,9 @@ function evalNode(node, env){
     return { query: true, value: 'unknown', typeQuery: true };
   }
 
-  // type-of query via links: (expr type-of Type) — checks if expr has the given type
-  if (node.length === 3 && node[1] === 'type-of') {
+  // Type check query: (expr of Type) — checks if expr has the given type
+  // e.g. (? (x of Natural)) → returns 1 or 0
+  if (node.length === 3 && node[1] === 'of') {
     const expr = node[0];
     const expectedType = node[2];
     const actualType = env.getType(expr);
@@ -517,35 +574,17 @@ function defineForm(head, rhs, env){
     return 1;
   }
 
-  // Typed variable/type declaration: (x: A) where A is not numeric
-  // This sets the type of x to A, e.g. (x: Nat), (Nat: (Type 0))
-  if (rhs.length === 1 && !isNum(typeof rhs[0] === 'string' ? rhs[0] : '')) {
-    // Check if rhs[0] is a type expression (not a simple operator alias or numeric)
-    if (Array.isArray(rhs[0]) || (typeof rhs[0] === 'string' && !isNum(rhs[0]))) {
-      // Only treat as type annotation if:
-      // 1. rhs is a complex expression like (Type 0), (Pi ...), etc.
-      // 2. Or rhs is a capitalized type name like Nat, Bool (convention)
-      // 3. Or head is not an operator
-      const isOp = ['=','!=','and','or','not','is','?:'].includes(head) || /[=!]/.test(head);
-      if (!isOp) {
-        const typeExpr = rhs[0];
-        if (Array.isArray(typeExpr)) {
-          // Complex type expression like (Type 0), (Pi (x: Nat) Nat)
-          env.terms.add(head);
-          env.setType(head, typeExpr);
-          // Also evaluate the type expression itself
-          evalNode(typeExpr, env);
-          return 1;
-        }
-        // Only treat as type annotation for non-operator single names
-        // if the type name starts with uppercase (convention from Lean/Rocq)
-        // or if head also starts with lowercase (variable : Type convention)
-        if (typeof typeExpr === 'string' && /^[A-Z]/.test(typeExpr)) {
-          env.terms.add(head);
-          env.setType(head, typeExpr);
-          return 1;
-        }
-      }
+  // Typed declaration with complex type expression: (Nat: (Type 0)), (succ: (Pi (Natural n) Natural))
+  // Only complex expressions (arrays) are accepted as type annotations in single-element form.
+  // Simple name type annotations like (x: Nat) are NOT supported — use (x: Nat x) prefix form instead.
+  if (rhs.length === 1 && Array.isArray(rhs[0])) {
+    const isOp = ['=','!=','and','or','not','is','?:'].includes(head) || /[=!]/.test(head);
+    if (!isOp) {
+      const typeExpr = rhs[0];
+      env.terms.add(head);
+      env.setType(head, typeExpr);
+      evalNode(typeExpr, env);
+      return 1;
     }
   }
 
@@ -599,8 +638,8 @@ function defineForm(head, rhs, env){
     throw new Error(`Unsupported operator definition for "${head}"`);
   }
 
-  // Lambda definition: (name: lam (x: A) body)
-  if (rhs.length >= 2 && rhs[0] === 'lam') {
+  // Lambda definition: (name: lambda (A x) body)
+  if (rhs.length >= 2 && rhs[0] === 'lambda') {
     if (rhs.length === 3 && Array.isArray(rhs[1])) {
       const parsed = parseBinding(rhs[1]);
       if (parsed) {
@@ -610,7 +649,7 @@ function defineForm(head, rhs, env){
         env.setLambda(head, paramName, paramType, body);
         const paramTypeKey = typeof paramType === 'string' ? paramType : keyOf(paramType);
         const bodyTypeKey = env.getType(body) || (typeof body === 'string' ? body : keyOf(body));
-        env.setType(head, '(Pi (' + paramName + ': ' + paramTypeKey + ') ' + bodyTypeKey + ')');
+        env.setType(head, '(Pi (' + paramTypeKey + ' ' + paramName + ') ' + bodyTypeKey + ')');
         return 1;
       }
     }
@@ -688,4 +727,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 }
 
-export { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute };
+export { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute, parseBindings };

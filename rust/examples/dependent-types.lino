@@ -11,30 +11,34 @@
 
 # === Define Types as Links ===
 # Types are just links with type annotations
-# Colon notation: (Name: TypeExpr)
-(Nat: (Type 0))
-(Bool: (Type 0))
+# Complex type expression: (Name: (Type 0))
+(Natural: (Type 0))
+(Boolean: (Type 0))
 
 # === Constructors using Prefix Type Notation ===
 # (name: TypeName name) — the LiNo-native way to declare typed terms
-(zero: Nat zero)
-(true-val: Bool true-val)
-(false-val: Bool false-val)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(false-val: Boolean false-val)
 
 # Pi-types for function constructors
-(succ: (Pi (n: Nat) Nat))
+(succ: (Pi (Natural n) Natural))
 
 # === Type Checking via Queries ===
-# "Is zero of type Nat?" — querying the link network
-(? (zero type-of Nat))
-(? (Nat type-of (Type 0)))
+# "Is zero of type Natural?" — querying the link network
+(? (zero of Natural))
+(? (Natural of (Type 0)))
 
 # === Functions as Links ===
-# Define identity function: id(x) = x
-(id: lam (x: Nat) x)
+# Define identity function: identity(x) = x
+(identity: lambda (Natural x) x)
 
 # Apply identity function
-(? (app id 0.7))
+(? (apply identity 0.7))
+
+# === Type Queries ===
+# "What is the type of x?"
+(? (type of zero))
 
 # === Combining Types with Probabilistic Logic ===
 # The type system coexists with the probabilistic logic

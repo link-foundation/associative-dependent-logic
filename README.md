@@ -9,7 +9,7 @@ This project provides two equivalent implementations:
 - **[JavaScript](./js/)** — Node.js implementation using the official [links-notation](https://github.com/link-foundation/links-notation) parser
 - **[Rust](./rust/)** — Rust implementation using the official [links-notation](https://github.com/link-foundation/links-notation) crate
 
-Both implementations pass the same 122 tests and produce identical results.
+Both implementations pass the same 170 tests and produce identical results.
 
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -26,6 +26,8 @@ ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built 
 - Resolve paradoxical statements (e.g. the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox))
 - Perform decimal-precision arithmetic (`+`, `-`, `*`, `/`) — `0.1 + 0.2 = 0.3`, not `0.30000000000000004`
 - Query the truth value of complex expressions
+- Define dependent types as links — universe hierarchy, Pi-types, lambdas, type queries
+- Combine types with probabilistic logic in a unified framework
 
 ## Supported Logic Types
 
@@ -218,6 +220,76 @@ Queries are evaluated and their truth value is printed to stdout.
 (a: a is a)  # Inline comments are also supported
 ```
 
+### Dependent Type System
+
+Types are just links — "everything is a link". The type system coexists with probabilistic logic.
+
+#### Type Declarations
+
+```lino
+# Universe hierarchy
+(Type 0)
+(Type 1)
+
+# Type definition (complex type expression)
+(Natural: (Type 0))
+(Boolean: (Type 0))
+
+# Typed term via prefix type notation: (name: TypeName name)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+```
+
+#### Pi-types (Dependent Products)
+
+```lino
+# (Pi (TypeName varName) ReturnType)
+(succ: (Pi (Natural n) Natural))
+```
+
+#### Lambda Abstraction
+
+```lino
+# (lambda (TypeName varName) body)
+(identity: lambda (Natural x) x)
+
+# Multi-parameter: (lambda (TypeName x, TypeName y) body)
+(add: lambda (Natural x, Natural y) (x + y))
+```
+
+#### Application
+
+```lino
+# Explicit: (apply function argument)
+(? (apply identity 0.7))         # -> 0.7
+
+# Prefix: (functionName argument)
+(? (identity 0.7))               # -> 0.7
+```
+
+#### Type Queries
+
+```lino
+# Type check: (expr of Type) — returns 1 (true) or 0 (false)
+(? (zero of Natural))            # -> 1
+(? (Natural of (Type 0)))        # -> 1
+
+# Type inference: (type of expr) — returns the type name
+(? (type of zero))               # -> Natural
+```
+
+#### Type Hierarchy Example
+
+```lino
+(Type 0)
+(Type: (Type 0) Type)
+(Boolean: Type Boolean)
+(True: Boolean True)
+(False: Boolean False)
+(? (Boolean of Type))            # -> 1
+(? (True of Boolean))            # -> 1
+```
+
 ## Built-in Operators
 
 - `=`: Equality (checks assigned probability, then structural equality, then numeric comparison with decimal precision)
@@ -321,7 +393,7 @@ In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Pr
 
 ## Testing
 
-Both implementations have 122 matching tests:
+Both implementations have 170 matching tests:
 
 ```bash
 # JavaScript
@@ -339,6 +411,7 @@ The test suites cover:
 - Truth constants (`true`, `false`, `unknown`, `undefined`): defaults, redefinition, range changes, use in expressions, quantization
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
+- Dependent type system: universes, Pi-types, lambdas, application, type queries, prefix type notation
 
 ## API
 
