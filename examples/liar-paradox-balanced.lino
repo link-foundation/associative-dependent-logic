@@ -1,0 +1,10 @@
+(range: -1 1)
+
+(s: s is s)
+(!=: not =)
+(and: avg)
+(or: max)
+
+((s = false) has probability 0)
+(? (s = false))
+(? (not (s = false)))
