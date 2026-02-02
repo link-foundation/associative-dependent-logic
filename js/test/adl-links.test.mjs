@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { run, tokenizeOne, parseOne, Env, evalNode, quantize } from '../src/adl-links.mjs';
+import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound } from '../src/adl-links.mjs';
 
 const approx = (actual, expected, epsilon = 1e-9) =>
   assert.ok(Math.abs(actual - expected) < epsilon,
@@ -842,5 +842,89 @@ describe('Liar paradox resolution across logic types', () => {
 (? (s = false))
 `, { lo: -1, hi: 1, valence: 5 });
     assert.strictEqual(results[0], 0);
+  });
+});
+
+// ===== Decimal-precision arithmetic =====
+
+describe('decRound', () => {
+  it('should round 0.1 + 0.2 to exactly 0.3', () => {
+    assert.strictEqual(decRound(0.1 + 0.2), 0.3);
+  });
+
+  it('should round 0.3 - 0.1 to exactly 0.2', () => {
+    assert.strictEqual(decRound(0.3 - 0.1), 0.2);
+  });
+
+  it('should preserve exact values', () => {
+    assert.strictEqual(decRound(1.0), 1.0);
+    assert.strictEqual(decRound(0.0), 0.0);
+    assert.strictEqual(decRound(0.5), 0.5);
+  });
+
+  it('should handle non-finite values', () => {
+    assert.strictEqual(decRound(Infinity), Infinity);
+    assert.strictEqual(decRound(-Infinity), -Infinity);
+    assert.ok(Number.isNaN(decRound(NaN)));
+  });
+});
+
+describe('Decimal arithmetic operators', () => {
+  it('(? (0.1 + 0.2)) should equal 0.3', () => {
+    const results = run('(? (0.1 + 0.2))');
+    assert.strictEqual(results[0], 0.3);
+  });
+
+  it('(? (0.3 - 0.1)) should equal 0.2', () => {
+    const results = run('(? (0.3 - 0.1))');
+    assert.strictEqual(results[0], 0.2);
+  });
+
+  it('(? (0.1 * 0.2)) should equal 0.02', () => {
+    const results = run('(? (0.1 * 0.2))');
+    assert.strictEqual(results[0], 0.02);
+  });
+
+  it('(? (1 / 3)) should equal 0.333333333333', () => {
+    const results = run('(? (1 / 3))');
+    approx(results[0], 1/3, 1e-9);
+  });
+
+  it('(? (0 / 0)) should handle division by zero', () => {
+    const results = run('(? (0 / 0))');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('(? ((0.1 + 0.2) = 0.3)) should equal 1 (true)', () => {
+    const results = run('(? ((0.1 + 0.2) = 0.3))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('(? ((0.1 + 0.2) != 0.3)) should equal 0 (false)', () => {
+    const results = run('(? ((0.1 + 0.2) != 0.3))');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('(? ((0.3 - 0.1) = 0.2)) should equal 1 (true)', () => {
+    const results = run('(? ((0.3 - 0.1) = 0.2))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('arithmetic with nested expressions', () => {
+    const results = run('(? ((0.1 + 0.2) + (0.3 + 0.1)))');
+    assert.strictEqual(results[0], 0.7);
+  });
+
+  it('arithmetic does not clamp intermediate values', () => {
+    const results = run('(? (2 + 3))');
+    // Query clamps to [0,1], so 5 becomes 1
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('arithmetic equality across expressions', () => {
+    const results = run(`
+(? ((0.1 + 0.2) = (0.5 - 0.2)))
+`);
+    assert.strictEqual(results[0], 1);
   });
 });

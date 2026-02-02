@@ -222,6 +222,19 @@ pub fn is_structurally_same(a: &Node, b: &Node) -> bool {
     }
 }
 
+// ========== Decimal-precision arithmetic ==========
+// Round to at most DECIMAL_PRECISION significant decimal places to eliminate
+// IEEE-754 floating-point artefacts (e.g. 0.1+0.2 → 0.3, not 0.30000000000000004).
+const DECIMAL_PRECISION: i32 = 12;
+
+pub fn dec_round(x: f64) -> f64 {
+    if !x.is_finite() {
+        return x;
+    }
+    let factor = 10f64.powi(DECIMAL_PRECISION);
+    (x * factor).round() / factor
+}
+
 // ========== Quantization ==========
 
 /// Quantize a value to N discrete levels in range [lo, hi].
@@ -292,6 +305,11 @@ pub enum Op {
     Neq,
     /// Composition: outer(inner(...))
     Compose { outer: String, inner: String },
+    /// Arithmetic: +, -, *, / (decimal-precision)
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
 
 // ========== Environment ==========
@@ -334,6 +352,10 @@ impl Env {
         ops.insert("or".to_string(), Op::Agg(Aggregator::Max));
         ops.insert("=".to_string(), Op::Eq);
         ops.insert("!=".to_string(), Op::Neq);
+        ops.insert("+".to_string(), Op::Add);
+        ops.insert("-".to_string(), Op::Sub);
+        ops.insert("*".to_string(), Op::Mul);
+        ops.insert("/".to_string(), Op::Div);
 
         Self {
             terms: HashSet::new(),
@@ -412,6 +434,34 @@ impl Env {
                 let inner_result = self.apply_op(inner, vals);
                 self.apply_op(outer, &[inner_result])
             }
+            Op::Add => {
+                if vals.len() >= 2 {
+                    dec_round(vals[0] + vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Sub => {
+                if vals.len() >= 2 {
+                    dec_round(vals[0] - vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Mul => {
+                if vals.len() >= 2 {
+                    dec_round(vals[0] * vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Div => {
+                if vals.len() >= 2 && vals[1] != 0.0 {
+                    dec_round(vals[0] / vals[1])
+                } else {
+                    0.0
+                }
+            }
         }
     }
 
@@ -456,6 +506,10 @@ impl Env {
         self.ops.insert("or".to_string(), Op::Agg(Aggregator::Max));
         self.ops.insert("=".to_string(), Op::Eq);
         self.ops.insert("!=".to_string(), Op::Neq);
+        self.ops.insert("+".to_string(), Op::Add);
+        self.ops.insert("-".to_string(), Op::Sub);
+        self.ops.insert("*".to_string(), Op::Mul);
+        self.ops.insert("/".to_string(), Op::Div);
     }
 }
 
@@ -481,6 +535,16 @@ impl EvalResult {
 }
 
 // ========== Evaluator ==========
+
+/// Evaluate a node in arithmetic context — numeric literals are NOT clamped to the logic range.
+fn eval_arith(node: &Node, env: &mut Env) -> f64 {
+    if let Node::Leaf(ref s) = node {
+        if is_num(s) {
+            return s.parse::<f64>().unwrap_or(0.0);
+        }
+    }
+    eval_node(node, env).as_f64()
+}
 
 /// Evaluate an AST node in the given environment.
 pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
@@ -571,6 +635,18 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 }
             }
 
+            // Infix arithmetic: (A + B), (A - B), (A * B), (A / B)
+            // Arithmetic uses raw numeric values (not clamped to the logic range)
+            if children.len() == 3 {
+                if let Node::Leaf(ref op_name) = children[1] {
+                    if op_name == "+" || op_name == "-" || op_name == "*" || op_name == "/" {
+                        let l = eval_arith(&children[0], env);
+                        let r = eval_arith(&children[2], env);
+                        return EvalResult::Value(env.apply_op(op_name, &[l, r]));
+                    }
+                }
+            }
+
             // Infix AND/OR: ((A) and (B)) / ((A) or (B))
             if children.len() == 3 {
                 if let Node::Leaf(ref op_name) = children[1] {
@@ -598,9 +674,33 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                                 return EvalResult::Value(env.clamp(outer_val));
                             }
                             _ => {
-                                return EvalResult::Value(
-                                    env.clamp(env.apply_eq(&children[0], &children[2])),
-                                );
+                                let raw = env.apply_eq(&children[0], &children[2]);
+                                // If there's an explicit assignment or structural match, trust it
+                                let k_prefix = key_of(&Node::List(vec![
+                                    Node::Leaf("=".to_string()),
+                                    children[0].clone(),
+                                    children[2].clone(),
+                                ]));
+                                let k_infix = key_of(&Node::List(vec![
+                                    children[0].clone(),
+                                    Node::Leaf("=".to_string()),
+                                    children[2].clone(),
+                                ]));
+                                if env.assign.contains_key(&k_prefix)
+                                    || env.assign.contains_key(&k_infix)
+                                    || is_structurally_same(&children[0], &children[2])
+                                {
+                                    return EvalResult::Value(env.clamp(raw));
+                                }
+                                // No explicit assignment — try numeric comparison (decimal-precision)
+                                let l = eval_arith(&children[0], env);
+                                let r = eval_arith(&children[2], env);
+                                let num_eq = if dec_round(l) == dec_round(r) {
+                                    env.hi
+                                } else {
+                                    env.lo
+                                };
+                                return EvalResult::Value(env.clamp(num_eq));
                             }
                         }
                     }
@@ -617,9 +717,35 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                                 return EvalResult::Value(env.clamp(outer_val));
                             }
                             _ => {
-                                return EvalResult::Value(
-                                    env.clamp(env.apply_neq(&children[0], &children[2])),
-                                );
+                                // Check explicit assignment or structural match first
+                                let k_prefix = key_of(&Node::List(vec![
+                                    Node::Leaf("=".to_string()),
+                                    children[0].clone(),
+                                    children[2].clone(),
+                                ]));
+                                let k_infix = key_of(&Node::List(vec![
+                                    children[0].clone(),
+                                    Node::Leaf("=".to_string()),
+                                    children[2].clone(),
+                                ]));
+                                if env.assign.contains_key(&k_prefix)
+                                    || env.assign.contains_key(&k_infix)
+                                    || is_structurally_same(&children[0], &children[2])
+                                {
+                                    return EvalResult::Value(
+                                        env.clamp(env.apply_neq(&children[0], &children[2])),
+                                    );
+                                }
+                                // No explicit assignment — try numeric comparison
+                                let l = eval_arith(&children[0], env);
+                                let r = eval_arith(&children[2], env);
+                                let num_eq = if dec_round(l) == dec_round(r) {
+                                    env.hi
+                                } else {
+                                    env.lo
+                                };
+                                let neq = env.apply_op("not", &[num_eq]);
+                                return EvalResult::Value(env.clamp(neq));
                             }
                         }
                     }
@@ -1937,5 +2063,98 @@ mod tests {
             }),
         );
         assert_eq!(results[0], 0.0);
+    }
+
+    // ===== Decimal-precision arithmetic =====
+
+    #[test]
+    fn dec_round_01_plus_02() {
+        assert_eq!(dec_round(0.1_f64 + 0.2_f64), 0.3);
+    }
+
+    #[test]
+    fn dec_round_03_minus_01() {
+        assert_eq!(dec_round(0.3_f64 - 0.1_f64), 0.2);
+    }
+
+    #[test]
+    fn dec_round_exact_values() {
+        assert_eq!(dec_round(1.0), 1.0);
+        assert_eq!(dec_round(0.0), 0.0);
+        assert_eq!(dec_round(0.5), 0.5);
+    }
+
+    #[test]
+    fn dec_round_non_finite() {
+        assert_eq!(dec_round(f64::INFINITY), f64::INFINITY);
+        assert_eq!(dec_round(f64::NEG_INFINITY), f64::NEG_INFINITY);
+        assert!(dec_round(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn arith_add() {
+        let results = run("(? (0.1 + 0.2))", None);
+        assert_eq!(results[0], 0.3);
+    }
+
+    #[test]
+    fn arith_sub() {
+        let results = run("(? (0.3 - 0.1))", None);
+        assert_eq!(results[0], 0.2);
+    }
+
+    #[test]
+    fn arith_mul() {
+        let results = run("(? (0.1 * 0.2))", None);
+        assert_eq!(results[0], 0.02);
+    }
+
+    #[test]
+    fn arith_div() {
+        let results = run("(? (1 / 3))", None);
+        approx(results[0], 1.0 / 3.0);
+    }
+
+    #[test]
+    fn arith_div_by_zero() {
+        let results = run("(? (0 / 0))", None);
+        assert_eq!(results[0], 0.0);
+    }
+
+    #[test]
+    fn arith_add_eq_03() {
+        let results = run("(? ((0.1 + 0.2) = 0.3))", None);
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn arith_add_neq_03() {
+        let results = run("(? ((0.1 + 0.2) != 0.3))", None);
+        assert_eq!(results[0], 0.0);
+    }
+
+    #[test]
+    fn arith_sub_eq_02() {
+        let results = run("(? ((0.3 - 0.1) = 0.2))", None);
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn arith_nested() {
+        let results = run("(? ((0.1 + 0.2) + (0.3 + 0.1)))", None);
+        assert_eq!(results[0], 0.7);
+    }
+
+    #[test]
+    fn arith_clamps_in_query() {
+        // 2 + 3 = 5, but query clamps to [0,1], so result is 1
+        let results = run("(? (2 + 3))", None);
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn arith_equality_across_expressions() {
+        let results = run("(? ((0.1 + 0.2) = (0.5 - 0.2)))", None);
+        assert_eq!(results[0], 1.0);
     }
 }
