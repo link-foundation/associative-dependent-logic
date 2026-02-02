@@ -6,8 +6,8 @@ A prototype for logic framework that can reason about anything relative to given
 
 This project provides two equivalent implementations:
 
-- **[JavaScript](./js/)** — Node.js implementation using the official [LiNo parser](https://github.com/linksplatform/protocols-lino)
-- **[Rust](./rust/)** — Rust implementation with a built-in LiNo parser (no external dependencies)
+- **[JavaScript](./js/)** — Node.js implementation using the official [links-notation](https://github.com/link-foundation/links-notation) parser
+- **[Rust](./rust/)** — Rust implementation using the official [links-notation](https://github.com/link-foundation/links-notation) crate
 
 Both implementations pass the same 93 tests and produce identical results.
 
@@ -15,7 +15,7 @@ For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Overview
 
-ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built on top of [LiNo (Links Notation)](https://github.com/linksplatform/protocols-lino). It supports [many-valued logics](https://en.wikipedia.org/wiki/Many-valued_logic) from unary (1-valued) through continuous probabilistic ([fuzzy](https://en.wikipedia.org/wiki/Fuzzy_logic)), allowing you to:
+ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built on top of [LiNo (Links Notation)](https://github.com/link-foundation/links-notation). It supports [many-valued logics](https://en.wikipedia.org/wiki/Many-valued_logic) from unary (1-valued) through continuous probabilistic ([fuzzy](https://en.wikipedia.org/wiki/Fuzzy_logic)), allowing you to:
 
 - Define terms
 - Assign probabilities (truth values) to logical expressions

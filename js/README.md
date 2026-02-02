@@ -78,7 +78,7 @@ The test suite includes 93 tests covering:
 
 ## Dependencies
 
-- [`@linksplatform/protocols-lino`](https://github.com/linksplatform/protocols-lino) — official LiNo parser
+- [`links-notation`](https://github.com/link-foundation/links-notation) — official LiNo parser
 
 ## License
 

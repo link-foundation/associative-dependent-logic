@@ -2,7 +2,7 @@
 // Supports many-valued logics from unary (1-valued) through continuous probabilistic (∞-valued).
 // See: https://en.wikipedia.org/wiki/Many-valued_logic
 //
-// - Parses LiNo text into links
+// - Uses official links-notation crate to parse LiNo text into links
 // - Terms are defined via (x: x is x)
 // - Probabilities are assigned ONLY via: ((<expr>) has probability <p>)
 // - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|prod|ps), (or: ...), (not: ...)
@@ -14,47 +14,29 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 // ========== LiNo Parser ==========
-// Minimal LiNo parser: parses text into a list of link strings.
-// Each link is delimited by matching parentheses at the top level.
-// Lines starting with # are comments.
+// Uses the official links-notation crate for parsing LiNo text.
+// See: https://github.com/link-foundation/links-notation
 
 /// Parse LiNo text into a vector of link strings (each a top-level parenthesized expression).
 pub fn parse_lino(text: &str) -> Vec<String> {
-    let mut links = Vec::new();
-    let mut depth = 0i32;
-    let mut start = None;
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-
-        // Skip line comments at top level
-        if depth == 0 && c == '#' {
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
-            }
+    // The links-notation crate treats blank lines as group separators,
+    // so we split the input by blank lines and parse each segment separately.
+    let mut all_links = Vec::new();
+    for segment in text.split("\n\n") {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
             continue;
         }
-
-        if c == '(' {
-            if depth == 0 {
-                start = Some(i);
-            }
-            depth += 1;
-        } else if c == ')' {
-            depth -= 1;
-            if depth == 0 {
-                if let Some(s) = start {
-                    let link: String = chars[s..=i].iter().collect();
-                    links.push(link);
-                    start = None;
+        match links_notation::parse_lino_to_links(trimmed) {
+            Ok(links) => {
+                for link in links {
+                    all_links.push(link.to_string());
                 }
             }
+            Err(_) => {}
         }
-        i += 1;
     }
-    links
+    all_links
 }
 
 // ========== AST ==========

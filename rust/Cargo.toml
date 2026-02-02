@@ -1,6 +1,6 @@
 [package]
 name = "associative-dependent-logic"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "A prototype for logic framework that can reason about anything relative to given probability of input statements"
 license = "Unlicense"
@@ -12,3 +12,6 @@ path = "src/main.rs"
 [lib]
 name = "adl"
 path = "src/lib.rs"
+
+[dependencies]
+links-notation = "0.13.0"
