@@ -148,6 +148,13 @@ class Env {
     this.defineOp('-', (a,b)=> decRound(a - b));
     this.defineOp('*', (a,b)=> decRound(a * b));
     this.defineOp('/', (a,b)=> b === 0 ? 0 : decRound(a / b));
+
+    // Initialize truth constants: true, false, unknown, undefined
+    // These are predefined symbol probabilities based on the current range.
+    // By default: (false: min(range)), (true: max(range)),
+    //             (unknown: mid(range)), (undefined: mid(range))
+    // They can be redefined by the user via (true: <value>), (false: <value>), etc.
+    this._initTruthConstants();
   }
 
   // Clamp and optionally quantize a value to the valid range
@@ -164,6 +171,16 @@ class Env {
 
   // Midpoint of the range (useful for paradox resolution, default symbol prob, etc.)
   get mid() { return (this.lo + this.hi) / 2; }
+
+  // Initialize truth constants based on current range.
+  // (false: min(range)), (true: max(range)),
+  // (unknown: mid(range)), (undefined: mid(range))
+  _initTruthConstants() {
+    this.symbolProb.set('true', this.hi);
+    this.symbolProb.set('false', this.lo);
+    this.symbolProb.set('unknown', this.mid);
+    this.symbolProb.set('undefined', this.mid);
+  }
 
   getOp(name){
     if (!this.ops.has(name)) throw new Error(`Unknown op: ${name}`);
@@ -297,6 +314,8 @@ function _reinitOps(env) {
   env.ops.set('-', (a,b) => decRound(a - b));
   env.ops.set('*', (a,b) => decRound(a * b));
   env.ops.set('/', (a,b) => b === 0 ? 0 : decRound(a / b));
+  // Re-initialize truth constants for new range
+  env._initTruthConstants();
 }
 
 function defineForm(head, rhs, env){

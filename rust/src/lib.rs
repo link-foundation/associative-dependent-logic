@@ -339,7 +339,7 @@ impl Env {
         ops.insert("*".to_string(), Op::Mul);
         ops.insert("/".to_string(), Op::Div);
 
-        Self {
+        let mut env = Self {
             terms: HashSet::new(),
             assign: HashMap::new(),
             symbol_prob: HashMap::new(),
@@ -347,12 +347,31 @@ impl Env {
             hi: opts.hi,
             valence: opts.valence,
             ops,
-        }
+        };
+
+        // Initialize truth constants: true, false, unknown, undefined
+        // These are predefined symbol probabilities based on the current range.
+        // By default: (false: min(range)), (true: max(range)),
+        //             (unknown: mid(range)), (undefined: mid(range))
+        // They can be redefined by the user via (true: <value>), (false: <value>), etc.
+        env.init_truth_constants();
+        env
     }
 
     /// Midpoint of the range.
     pub fn mid(&self) -> f64 {
         (self.lo + self.hi) / 2.0
+    }
+
+    /// Initialize truth constants based on current range.
+    /// (false: min(range)), (true: max(range)),
+    /// (unknown: mid(range)), (undefined: mid(range))
+    pub fn init_truth_constants(&mut self) {
+        self.symbol_prob.insert("true".to_string(), self.hi);
+        self.symbol_prob.insert("false".to_string(), self.lo);
+        let mid = self.mid();
+        self.symbol_prob.insert("unknown".to_string(), mid);
+        self.symbol_prob.insert("undefined".to_string(), mid);
     }
 
     /// Clamp and optionally quantize a value to the valid range.
@@ -492,6 +511,8 @@ impl Env {
         self.ops.insert("-".to_string(), Op::Sub);
         self.ops.insert("*".to_string(), Op::Mul);
         self.ops.insert("/".to_string(), Op::Div);
+        // Re-initialize truth constants for new range
+        self.init_truth_constants();
     }
 }
 
@@ -2138,5 +2159,300 @@ mod tests {
     fn arith_equality_across_expressions() {
         let results = run("(? ((0.1 + 0.2) = (0.5 - 0.2)))", None);
         assert_eq!(results[0], 1.0);
+    }
+
+    // ===== Truth constants: true, false, unknown, undefined =====
+    // These are predefined symbol probabilities based on the current range.
+    // By default: (false: min(range)), (true: max(range)),
+    //             (unknown: mid(range)), (undefined: mid(range))
+    // They can be redefined by the user via (true: <value>), (false: <value>), etc.
+    // See: https://github.com/link-foundation/associative-dependent-logic/issues/11
+
+    // --- Default values in [0,1] range ---
+
+    #[test]
+    fn truth_const_true_default_01() {
+        let results = run("(? true)", None);
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn truth_const_false_default_01() {
+        let results = run("(? false)", None);
+        assert_eq!(results[0], 0.0);
+    }
+
+    #[test]
+    fn truth_const_unknown_default_01() {
+        let results = run("(? unknown)", None);
+        assert_eq!(results[0], 0.5);
+    }
+
+    #[test]
+    fn truth_const_undefined_default_01() {
+        let results = run("(? undefined)", None);
+        assert_eq!(results[0], 0.5);
+    }
+
+    // --- Default values in [-1,1] range ---
+
+    #[test]
+    fn truth_const_true_default_balanced() {
+        let results = run(
+            "(range: -1 1)\n(? true)",
+            Some(EnvOptions {
+                lo: -1.0,
+                hi: 1.0,
+                valence: 0,
+            }),
+        );
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn truth_const_false_default_balanced() {
+        let results = run(
+            "(range: -1 1)\n(? false)",
+            Some(EnvOptions {
+                lo: -1.0,
+                hi: 1.0,
+                valence: 0,
+            }),
+        );
+        assert_eq!(results[0], -1.0);
+    }
+
+    #[test]
+    fn truth_const_unknown_default_balanced() {
+        let results = run(
+            "(range: -1 1)\n(? unknown)",
+            Some(EnvOptions {
+                lo: -1.0,
+                hi: 1.0,
+                valence: 0,
+            }),
+        );
+        assert_eq!(results[0], 0.0);
+    }
+
+    #[test]
+    fn truth_const_undefined_default_balanced() {
+        let results = run(
+            "(range: -1 1)\n(? undefined)",
+            Some(EnvOptions {
+                lo: -1.0,
+                hi: 1.0,
+                valence: 0,
+            }),
+        );
+        assert_eq!(results[0], 0.0);
+    }
+
+    // --- Redefinition ---
+
+    #[test]
+    fn truth_const_redefine_true() {
+        let results = run("(true: 0.8)\n(? true)", None);
+        assert_eq!(results[0], 0.8);
+    }
+
+    #[test]
+    fn truth_const_redefine_false() {
+        let results = run("(false: 0.2)\n(? false)", None);
+        assert_eq!(results[0], 0.2);
+    }
+
+    #[test]
+    fn truth_const_redefine_unknown() {
+        let results = run("(unknown: 0.3)\n(? unknown)", None);
+        assert_eq!(results[0], 0.3);
+    }
+
+    #[test]
+    fn truth_const_redefine_undefined() {
+        let results = run("(undefined: 0.7)\n(? undefined)", None);
+        assert_eq!(results[0], 0.7);
+    }
+
+    #[test]
+    fn truth_const_redefine_in_balanced_range() {
+        let results = run(
+            "(range: -1 1)\n(true: 0.5)\n(false: -0.5)\n(? true)\n(? false)",
+            Some(EnvOptions {
+                lo: -1.0,
+                hi: 1.0,
+                valence: 0,
+            }),
+        );
+        assert_eq!(results[0], 0.5);
+        assert_eq!(results[1], -0.5);
+    }
+
+    // --- Range change re-initializes defaults ---
+
+    #[test]
+    fn truth_const_range_change_reinit() {
+        let results = run(
+            "(? true)\n(? false)\n(range: -1 1)\n(? true)\n(? false)\n(? unknown)",
+            None,
+        );
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0], 1.0); // true in [0,1]
+        assert_eq!(results[1], 0.0); // false in [0,1]
+        assert_eq!(results[2], 1.0); // true in [-1,1]
+        assert_eq!(results[3], -1.0); // false in [-1,1]
+        assert_eq!(results[4], 0.0); // unknown in [-1,1]
+    }
+
+    // --- Use in expressions ---
+
+    #[test]
+    fn truth_const_not_true() {
+        let results = run("(? (not true))", None);
+        assert_eq!(results[0], 0.0);
+    }
+
+    #[test]
+    fn truth_const_not_false() {
+        let results = run("(? (not false))", None);
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn truth_const_not_unknown() {
+        let results = run("(? (not unknown))", None);
+        assert_eq!(results[0], 0.5);
+    }
+
+    #[test]
+    fn truth_const_true_and_false_avg() {
+        let results = run("(? (true and false))", None);
+        assert_eq!(results[0], 0.5);
+    }
+
+    #[test]
+    fn truth_const_true_or_false_max() {
+        let results = run("(? (true or false))", None);
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn truth_const_true_and_false_min() {
+        let results = run("(and: min)\n(? (true and false))", None);
+        assert_eq!(results[0], 0.0);
+    }
+
+    #[test]
+    fn truth_const_balanced_not() {
+        let results = run(
+            "(range: -1 1)\n(? (not true))\n(? (not false))\n(? (not unknown))",
+            Some(EnvOptions {
+                lo: -1.0,
+                hi: 1.0,
+                valence: 0,
+            }),
+        );
+        assert_eq!(results[0], -1.0); // not(1) = -1
+        assert_eq!(results[1], 1.0); // not(-1) = 1
+        assert_eq!(results[2], 0.0); // not(0) = 0
+    }
+
+    // --- With quantization ---
+
+    #[test]
+    fn truth_const_binary_valence() {
+        let results = run("(valence: 2)\n(? true)\n(? false)\n(? unknown)", None);
+        assert_eq!(results[0], 1.0); // true = 1
+        assert_eq!(results[1], 0.0); // false = 0
+        assert_eq!(results[2], 1.0); // unknown = 0.5, quantized to 1
+    }
+
+    #[test]
+    fn truth_const_ternary_valence() {
+        let results = run("(valence: 3)\n(? true)\n(? false)\n(? unknown)", None);
+        assert_eq!(results[0], 1.0); // true = 1
+        assert_eq!(results[1], 0.0); // false = 0
+        assert_eq!(results[2], 0.5); // unknown = 0.5
+    }
+
+    #[test]
+    fn truth_const_ternary_balanced() {
+        let results = run(
+            "(range: -1 1)\n(valence: 3)\n(? true)\n(? false)\n(? unknown)",
+            Some(EnvOptions {
+                lo: -1.0,
+                hi: 1.0,
+                valence: 3,
+            }),
+        );
+        assert_eq!(results[0], 1.0); // true = 1
+        assert_eq!(results[1], -1.0); // false = -1
+        assert_eq!(results[2], 0.0); // unknown = 0
+    }
+
+    // --- Env API ---
+
+    #[test]
+    fn truth_const_env_api_01() {
+        let env = Env::new(None);
+        assert_eq!(env.get_symbol_prob("true"), 1.0);
+        assert_eq!(env.get_symbol_prob("false"), 0.0);
+        assert_eq!(env.get_symbol_prob("unknown"), 0.5);
+        assert_eq!(env.get_symbol_prob("undefined"), 0.5);
+    }
+
+    #[test]
+    fn truth_const_env_api_balanced() {
+        let env = Env::new(Some(EnvOptions {
+            lo: -1.0,
+            hi: 1.0,
+            valence: 0,
+        }));
+        assert_eq!(env.get_symbol_prob("true"), 1.0);
+        assert_eq!(env.get_symbol_prob("false"), -1.0);
+        assert_eq!(env.get_symbol_prob("unknown"), 0.0);
+        assert_eq!(env.get_symbol_prob("undefined"), 0.0);
+    }
+
+    #[test]
+    fn truth_const_survive_op_redef() {
+        let results = run("(and: min)\n(or: max)\n(? true)\n(? false)", None);
+        assert_eq!(results[0], 1.0);
+        assert_eq!(results[1], 0.0);
+    }
+
+    // --- Liar paradox with truth constants ---
+
+    #[test]
+    fn truth_const_liar_paradox_01() {
+        let results = run(
+            r#"
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+"#,
+            None,
+        );
+        assert_eq!(results[0], 0.5);
+    }
+
+    #[test]
+    fn truth_const_liar_paradox_balanced() {
+        let results = run(
+            r#"
+(range: -1 1)
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+"#,
+            Some(EnvOptions {
+                lo: -1.0,
+                hi: 1.0,
+                valence: 3,
+            }),
+        );
+        assert_eq!(results[0], 0.0);
     }
 }

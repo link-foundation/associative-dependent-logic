@@ -14,7 +14,7 @@ This document describes the internal architecture of **Associative-Dependent Log
 │   ├── src/
 │   │   └── adl-links.mjs   # Core implementation (~370 lines)
 │   ├── test/
-│   │   └── adl-links.test.mjs  # 93 tests
+│   │   └── adl-links.test.mjs  # 122 tests
 │   ├── demo.lino
 │   ├── flipped-axioms.lino
 │   └── examples/
@@ -25,7 +25,7 @@ This document describes the internal architecture of **Associative-Dependent Log
     ├── Cargo.toml
     ├── Cargo.lock
     ├── src/
-    │   ├── lib.rs           # Core implementation + 93 tests (~2000 lines)
+    │   ├── lib.rs           # Core implementation + 122 tests
     │   └── main.rs          # CLI entry point (~25 lines)
     ├── demo.lino
     ├── flipped-axioms.lino
@@ -35,7 +35,7 @@ This document describes the internal architecture of **Associative-Dependent Log
         └── ternary-kleene.lino
 ```
 
-Both implementations are equivalent: they pass the same 93 tests and produce identical results for all inputs.
+Both implementations are equivalent: they pass the same 122 tests and produce identical results for all inputs.
 
 ## Processing Pipeline
 
@@ -101,6 +101,25 @@ The environment holds all mutable state during evaluation:
 - **`lo`, `hi`**: Truth value range bounds. Default: `[0, 1]`.
 - **`valence`**: Number of discrete truth levels. Default: `0` (continuous).
 - **`ops`**: Map from operator names to operator implementations.
+
+### Truth Constants
+
+The environment pre-initializes four symbol probabilities based on the current range:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `true` | `hi` (max of range) | Represents the maximum truth value |
+| `false` | `lo` (min of range) | Represents the minimum truth value |
+| `unknown` | `(hi + lo) / 2` (midpoint) | Represents epistemic uncertainty |
+| `undefined` | `(hi + lo) / 2` (midpoint) | Represents lack of definition |
+
+These constants are:
+- **Automatically initialized** when the `Env` is created
+- **Re-initialized** when the range changes (via `(range: ...)` or `_reinitOps`/`reinit_ops`)
+- **Redefinable** by the user via `(true: <value>)`, `(false: <value>)`, etc. (using the existing symbol prior mechanism)
+
+In `[0, 1]` range: `true=1`, `false=0`, `unknown=0.5`, `undefined=0.5`.
+In `[-1, 1]` range: `true=1`, `false=-1`, `unknown=0`, `undefined=0`.
 
 ### Clamping and Quantization
 
@@ -208,13 +227,13 @@ Operators are redefinable at runtime via LiNo syntax:
 
 3. **Arithmetic is unclamped:** Arithmetic results are not restricted to the logic range `[lo, hi]`. Clamping only happens when results enter the logical domain (queries, logical operators). This allows natural arithmetic while preserving logic semantics.
 
-4. **Equivalent dual implementations:** JavaScript and Rust implementations are kept in sync with identical test suites (93 tests each), ensuring behavioral equivalence.
+4. **Equivalent dual implementations:** JavaScript and Rust implementations are kept in sync with identical test suites (122 tests each), ensuring behavioral equivalence.
 
 5. **Redefinable operators:** All operators can be redefined at runtime, enabling exploration of different logical semantics within the same framework.
 
 ## Testing
 
-Both implementations share 93 identical tests organized in these categories:
+Both implementations share 122 identical tests organized in these categories:
 
 - **Tokenization** (4 tests): Simple/nested links, inline comments, paren balancing
 - **Parsing** (3 tests): Simple/nested/deeply nested AST construction
@@ -224,6 +243,7 @@ Both implementations share 93 identical tests organized in these categories:
 - **Logic types** (35+ tests): Unary through continuous, both ranges
 - **Liar paradox** (6 tests): Resolution across logic types and ranges
 - **Decimal arithmetic** (15 tests): Precision, all four operators, equality comparison, nested expressions, edge cases
+- **Truth constants** (29 tests): Default values in both ranges, redefinition, range change re-initialization, use in expressions, quantization with valence, Env API, liar paradox with truth constants
 
 Run tests:
 ```bash
