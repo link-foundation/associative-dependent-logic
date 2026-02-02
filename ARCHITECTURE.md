@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the internal architecture of **Associative-Dependent Logic (ADL)**, a minimal probabilistic logic framework built on [LiNo (Links Notation)](https://github.com/linksplatform/protocols-lino).
+This document describes the internal architecture of **Associative-Dependent Logic (ADL)**, a minimal probabilistic logic framework built on [LiNo (Links Notation)](https://github.com/link-foundation/links-notation).
 
 ## Project Structure
 
@@ -51,8 +51,8 @@ LiNo text → Parse → AST → Evaluate → Results
 
 **Output:** A list of link strings, where each link is a top-level parenthesized expression.
 
-- **JavaScript:** Uses the official [`@linksplatform/protocols-lino`](https://www.npmjs.com/package/@linksplatform/protocols-lino) parser.
-- **Rust:** Uses a built-in minimal parser (`parse_lino`) with no external dependencies.
+- **JavaScript:** Uses the official [`links-notation`](https://www.npmjs.com/package/links-notation) parser.
+- **Rust:** Uses the official [`links-notation`](https://crates.io/crates/links-notation) crate.
 
 Lines starting with `#` are treated as comments and skipped.
 

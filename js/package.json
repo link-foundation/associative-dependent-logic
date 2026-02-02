@@ -1,6 +1,6 @@
 {
   "name": "associative-dependent-logic",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A prototype for logic framework that can reason about anything relative to given probability of input statements",
   "type": "module",
   "main": "src/adl-links.mjs",
@@ -18,7 +18,7 @@
   "author": "",
   "license": "Unlicense",
   "dependencies": {
-    "@linksplatform/protocols-lino": "^0.7.0"
+    "links-notation": "^0.13.0"
   },
   "devDependencies": {},
   "engines": {

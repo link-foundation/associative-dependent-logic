@@ -79,7 +79,7 @@ The test suite includes 93 tests covering:
 
 ## Implementation Notes
 
-The Rust implementation includes a built-in minimal LiNo parser, so no external dependencies are needed. The implementation is a direct port of the JavaScript version and produces identical results for all test cases.
+The Rust implementation uses the official [`links-notation`](https://crates.io/crates/links-notation) crate for LiNo parsing. The implementation is a direct port of the JavaScript version and produces identical results for all test cases.
 
 ## License
 

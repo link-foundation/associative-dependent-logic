@@ -3,7 +3,7 @@
 // Supports many-valued logics from unary (1-valued) through continuous probabilistic (∞-valued).
 // See: https://en.wikipedia.org/wiki/Many-valued_logic
 //
-// - Uses official LiNo parser to parse links
+// - Uses official links-notation parser to parse links
 // - Terms are defined via (x: x is x)
 // - Probabilities are assigned ONLY via: ((<expr>) has probability <p>)
 // - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|prod|ps), (or: ...), (not: ...)
@@ -12,7 +12,7 @@
 // - Query: (? <expr>)
 
 import fs from 'node:fs';
-import { Parser } from '@linksplatform/protocols-lino';
+import { Parser } from 'links-notation';
 
 // ---------- helpers: canonical keys & tokenization of a single link string ----------
 function tokenizeOne(s) {
