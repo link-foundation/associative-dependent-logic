@@ -137,8 +137,8 @@ Inductive nat : Set :=
 ```lino
 # LiNo (Proposed)
 (inductive Nat (Type 0)
-  (zero : Nat)
-  (succ : (Pi (_ : Nat) Nat)))
+  (zero: Nat)
+  (succ: (Pi (_: Nat) Nat)))
 ```
 
 ### 9. Pattern Matching / Recursion 📋
@@ -161,8 +161,8 @@ Fixpoint add (a b : nat) : nat :=
 
 ```lino
 # LiNo (Proposed)
-(def add : (Pi (a : Nat) (Pi (b : Nat) Nat))
-  (lam (a : Nat) (lam (b : Nat)
+(def add: (Pi (a: Nat) (Pi (b: Nat) Nat))
+  (lam (a: Nat) (lam (b: Nat)
     (match a
       (zero => b)
       ((succ n) => (succ (add n b)))))))
@@ -191,8 +191,8 @@ Qed.
 ```lino
 # LiNo (Proposed) - explicit proof term
 (theorem plus_zero
-  : (Pi (n : Nat) (= (+ n zero) n))
-  (lam (n : Nat)
+  : (Pi (n: Nat) (= (+ n zero) n))
+  (lam (n: Nat)
     (match n
       (zero => (refl zero))
       ((succ m) => (cong succ (plus_zero m))))))
@@ -216,9 +216,9 @@ exists n : nat, n > 0
 
 ```lino
 # LiNo (Proposed)
-(Sigma (n : Nat) (> n 0))
+(Sigma (n: Nat) (> n 0))
 # or:
-(exists (n : Nat) (> n 0))
+(exists (n: Nat) (> n 0))
 ```
 
 ## Integration with ADL Probabilistic Logic
@@ -233,11 +233,11 @@ exists n : nat, n > 0
 ((raining today) has probability 0.7)
 
 # Type-checked probabilistic proposition
-(raining : (PProp 0.7))
+(raining: (PProp 0.7))
 
 # Query type
-(?type (lam (x : Nat) (+ x 1)))
-# Output: (Pi (x : Nat) Nat)
+(?type (lam (x: Nat) (+ x 1)))
+# Output: (Pi (x: Nat) Nat)
 
 # Query probability
 (? (raining today))
@@ -249,9 +249,9 @@ exists n : nat, n > 0
 ```lino
 # Define a type
 (inductive Weather (Type 0)
-  (sunny : Weather)
-  (rainy : Weather)
-  (cloudy : Weather))
+  (sunny: Weather)
+  (rainy: Weather)
+  (cloudy: Weather))
 
 # Assign probabilities to inhabitants
 ((sunny has probability 0.3) in Weather)
@@ -259,7 +259,7 @@ exists n : nat, n > 0
 ((cloudy has probability 0.2) in Weather)
 
 # Dependent type with probabilistic index
-(forecast : (Pi (w : Weather) (PProp (weather_prob w))))
+(forecast: (Pi (w: Weather) (PProp (weather_prob w))))
 ```
 
 ## Encoding in Pure Associative Links

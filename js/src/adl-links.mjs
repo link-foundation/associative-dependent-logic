@@ -212,15 +212,12 @@ class Env {
 }
 
 // ---------- Binding parser ----------
-// Parse a binding form: either (x : A) as [x, ':', A] or (x: A) as ['x:', A]
+// Parse a binding form: (x: A) as ['x:', A] — using standard LiNo link definition syntax.
+// The colon is only used as part of the link name (e.g., 'x:'), never as a standalone separator.
 // Returns { paramName, paramType } or null if not a valid binding.
 function parseBinding(binding) {
   if (!Array.isArray(binding)) return null;
-  // Form 1: [x, ':', A] — three elements with colon separator
-  if (binding.length === 3 && binding[1] === ':') {
-    return { paramName: binding[0], paramType: binding[2] };
-  }
-  // Form 2: ['x:', A] — two elements where first ends with colon (LiNo parser output)
+  // ['x:', A] — two elements where first ends with colon (standard LiNo link definition)
   if (binding.length === 2 && typeof binding[0] === 'string' && binding[0].endsWith(':')) {
     return { paramName: binding[0].slice(0, -1), paramType: binding[1] };
   }
@@ -266,10 +263,8 @@ function evalNode(node, env){
     const head = node[0].slice(0,-1);
     return defineForm(head, node.slice(1), env);
   }
-  if (node[1] === ':') {
-    const head = node[0];
-    return defineForm(head, node.slice(2), env);
-  }
+  // Note: (x : A) with spaces as a standalone colon separator is NOT supported.
+  // Use (x: A) instead — the colon must be part of the link name.
 
   // Assignment: ((expr) has probability p)
   if (node.length === 4 && node[1] === 'has' && node[2] === 'probability' && isNum(node[3])) {
@@ -358,7 +353,7 @@ function evalNode(node, env){
     return 1;
   }
 
-  // Dependent product (Pi-type): (Pi (x : A) B) or (Pi (x: A) B)
+  // Dependent product (Pi-type): (Pi (x: A) B)
   if (node.length === 3 && node[0] === 'Pi') {
     const binding = node[1];
     const parsed = parseBinding(binding);
@@ -371,7 +366,7 @@ function evalNode(node, env){
     return 1;
   }
 
-  // Lambda abstraction: (lam (x : A) body) or (lam (x: A) body)
+  // Lambda abstraction: (lam (x: A) body)
   if (node.length === 3 && node[0] === 'lam') {
     const binding = node[1];
     const parsed = parseBinding(binding);
@@ -383,7 +378,7 @@ function evalNode(node, env){
       const bodyType = env.getType(body);
       const paramTypeKey = typeof paramType === 'string' ? paramType : keyOf(paramType);
       const bodyTypeKey = bodyType || 'unknown';
-      env.setType(node, '(Pi (' + paramName + ' : ' + paramTypeKey + ') ' + bodyTypeKey + ')');
+      env.setType(node, '(Pi (' + paramName + ': ' + paramTypeKey + ') ' + bodyTypeKey + ')');
     }
     return 1;
   }
@@ -396,7 +391,7 @@ function evalNode(node, env){
     const fn = node[1];
     const arg = node[2];
 
-    // Check if fn is a lambda: (lam (x : A) body) or (lam (x: A) body)
+    // Check if fn is a lambda: (lam (x: A) body)
     if (Array.isArray(fn) && fn.length === 3 && fn[0] === 'lam') {
       const parsed = parseBinding(fn[1]);
       if (parsed) {
@@ -522,8 +517,8 @@ function defineForm(head, rhs, env){
     return 1;
   }
 
-  // Typed variable/type declaration: (x : A) where A is not numeric
-  // This sets the type of x to A, e.g. (x : Nat), (Nat : (Type 0))
+  // Typed variable/type declaration: (x: A) where A is not numeric
+  // This sets the type of x to A, e.g. (x: Nat), (Nat: (Type 0))
   if (rhs.length === 1 && !isNum(typeof rhs[0] === 'string' ? rhs[0] : '')) {
     // Check if rhs[0] is a type expression (not a simple operator alias or numeric)
     if (Array.isArray(rhs[0]) || (typeof rhs[0] === 'string' && !isNum(rhs[0]))) {
@@ -535,7 +530,7 @@ function defineForm(head, rhs, env){
       if (!isOp) {
         const typeExpr = rhs[0];
         if (Array.isArray(typeExpr)) {
-          // Complex type expression like (Type 0), (Pi (x : Nat) Nat)
+          // Complex type expression like (Type 0), (Pi (x: Nat) Nat)
           env.terms.add(head);
           env.setType(head, typeExpr);
           // Also evaluate the type expression itself
@@ -604,7 +599,7 @@ function defineForm(head, rhs, env){
     throw new Error(`Unsupported operator definition for "${head}"`);
   }
 
-  // Lambda definition: (name: lam (x : A) body) or (name: lam (x: A) body)
+  // Lambda definition: (name: lam (x: A) body)
   if (rhs.length >= 2 && rhs[0] === 'lam') {
     if (rhs.length === 3 && Array.isArray(rhs[1])) {
       const parsed = parseBinding(rhs[1]);
@@ -615,14 +610,14 @@ function defineForm(head, rhs, env){
         env.setLambda(head, paramName, paramType, body);
         const paramTypeKey = typeof paramType === 'string' ? paramType : keyOf(paramType);
         const bodyTypeKey = env.getType(body) || (typeof body === 'string' ? body : keyOf(body));
-        env.setType(head, '(Pi (' + paramName + ' : ' + paramTypeKey + ') ' + bodyTypeKey + ')');
+        env.setType(head, '(Pi (' + paramName + ': ' + paramTypeKey + ') ' + bodyTypeKey + ')');
         return 1;
       }
     }
   }
 
   // Typed definition: (name : Type) — just a type annotation (no body)
-  // Already handled by the (x : A) form in evalNode
+  // Already handled by the (x: A) form in evalNode
 
   // Generic symbol alias like (x: y) just copies y's prior probability if any
   if (rhs.length===1 && typeof rhs[0]==='string') {

@@ -1216,20 +1216,20 @@ describe('Type System: substitute (beta-reduction helper)', () => {
   });
 
   it('should not substitute inside shadowing lambda bindings', () => {
-    const expr = ['lam', ['x', ':', 'Nat'], 'x'];
+    const expr = ['lam', ['x:', 'Nat'], 'x'];
     assert.deepStrictEqual(substitute(expr, 'x', '5'), expr);
   });
 
   it('should not substitute inside shadowing Pi bindings', () => {
-    const expr = ['Pi', ['x', ':', 'Nat'], 'x'];
+    const expr = ['Pi', ['x:', 'Nat'], 'x'];
     assert.deepStrictEqual(substitute(expr, 'x', 'Bool'), expr);
   });
 
   it('should substitute free variables in lambda body', () => {
-    const expr = ['lam', ['y', ':', 'Nat'], 'x'];
+    const expr = ['lam', ['y:', 'Nat'], 'x'];
     assert.deepStrictEqual(
       substitute(expr, 'x', '5'),
-      ['lam', ['y', ':', 'Nat'], '5']
+      ['lam', ['y:', 'Nat'], '5']
     );
   });
 });
@@ -1260,10 +1260,10 @@ describe('Type System: universe sorts — (Type N)', () => {
   });
 });
 
-describe('Type System: typed variable declarations — (x : A)', () => {
+describe('Type System: typed variable declarations — (x: A)', () => {
   it('should declare a typed variable', () => {
     const results = run(`
-(x : Nat)
+(x: Nat)
 (? (x type-of Nat))
 `);
     assert.strictEqual(results.length, 1);
@@ -1272,7 +1272,7 @@ describe('Type System: typed variable declarations — (x : A)', () => {
 
   it('should return false for wrong type', () => {
     const results = run(`
-(x : Nat)
+(x: Nat)
 (? (x type-of Bool))
 `);
     assert.strictEqual(results[0], 0);
@@ -1280,8 +1280,8 @@ describe('Type System: typed variable declarations — (x : A)', () => {
 
   it('should support multiple typed declarations', () => {
     const results = run(`
-(x : Nat)
-(y : Bool)
+(x: Nat)
+(y: Bool)
 (? (x type-of Nat))
 (? (y type-of Bool))
 (? (x type-of Bool))
@@ -1293,62 +1293,62 @@ describe('Type System: typed variable declarations — (x : A)', () => {
   });
 });
 
-describe('Type System: Pi-types — (Pi (x : A) B)', () => {
+describe('Type System: Pi-types — (Pi (x: A) B)', () => {
   it('should evaluate a Pi-type as valid', () => {
-    const results = run('(? (Pi (x : Nat) Nat))');
+    const results = run('(? (Pi (x: Nat) Nat))');
     assert.strictEqual(results[0], 1);
   });
 
   it('should register Pi-type in the type environment', () => {
     const env = new Env();
-    evalNode(['Pi', ['x', ':', 'Nat'], 'Nat'], env);
-    const typeOfPi = env.getType(['Pi', ['x', ':', 'Nat'], 'Nat']);
+    evalNode(['Pi', ['x:', 'Nat'], 'Nat'], env);
+    const typeOfPi = env.getType(['Pi', ['x:', 'Nat'], 'Nat']);
     assert.ok(typeOfPi !== null);
   });
 
   it('should register the parameter type from Pi', () => {
     const env = new Env();
-    evalNode(['Pi', ['n', ':', 'Nat'], ['Vec', 'n', 'Bool']], env);
+    evalNode(['Pi', ['n:', 'Nat'], ['Vec', 'n', 'Bool']], env);
     assert.ok(env.terms.has('n'));
     assert.strictEqual(env.getType('n'), 'Nat');
   });
 
-  it('non-dependent function type: (Pi (_ : Nat) Bool)', () => {
-    const results = run('(? (Pi (_ : Nat) Bool))');
+  it('non-dependent function type: (Pi (_: Nat) Bool)', () => {
+    const results = run('(? (Pi (_: Nat) Bool))');
     assert.strictEqual(results[0], 1);
   });
 });
 
-describe('Type System: lambda abstraction — (lam (x : A) body)', () => {
+describe('Type System: lambda abstraction — (lam (x: A) body)', () => {
   it('should evaluate a lambda as valid', () => {
-    const results = run('(? (lam (x : Nat) x))');
+    const results = run('(? (lam (x: Nat) x))');
     assert.strictEqual(results[0], 1);
   });
 
   it('should store lambda type as a Pi-type', () => {
     const env = new Env();
-    evalNode(['lam', ['x', ':', 'Nat'], 'x'], env);
-    const t = env.getType(['lam', ['x', ':', 'Nat'], 'x']);
+    evalNode(['lam', ['x:', 'Nat'], 'x'], env);
+    const t = env.getType(['lam', ['x:', 'Nat'], 'x']);
     assert.ok(t !== null);
     assert.ok(t.includes('Pi'));
   });
 });
 
 describe('Type System: application — (app f x) with beta-reduction', () => {
-  it('should beta-reduce (app (lam (x : Nat) x) 0.5) to 0.5', () => {
-    const results = run('(? (app (lam (x : Nat) x) 0.5))');
+  it('should beta-reduce (app (lam (x: Nat) x) 0.5) to 0.5', () => {
+    const results = run('(? (app (lam (x: Nat) x) 0.5))');
     assert.strictEqual(results.length, 1);
     assert.strictEqual(results[0], 0.5);
   });
 
   it('should beta-reduce with arithmetic in body', () => {
-    const results = run('(? (app (lam (x : Nat) (x + 0.1)) 0.2))');
+    const results = run('(? (app (lam (x: Nat) (x + 0.1)) 0.2))');
     assert.strictEqual(results[0], 0.3);
   });
 
   it('should apply named lambda via (app name arg)', () => {
     const results = run(`
-(id: lam (x : Nat) x)
+(id: lam (x: Nat) x)
 (? (app id 0.7))
 `);
     assert.strictEqual(results[0], 0.7);
@@ -1356,14 +1356,14 @@ describe('Type System: application — (app f x) with beta-reduction', () => {
 
   it('should apply named lambda via prefix form (name arg)', () => {
     const results = run(`
-(id: lam (x : Nat) x)
+(id: lam (x: Nat) x)
 (? (id 0.7))
 `);
     assert.strictEqual(results[0], 0.7);
   });
 
   it('should apply const function', () => {
-    const results = run('(? (app (lam (x : Nat) 0.5) 0.9))');
+    const results = run('(? (app (lam (x: Nat) 0.5) 0.9))');
     assert.strictEqual(results[0], 0.5);
   });
 });
@@ -1371,7 +1371,7 @@ describe('Type System: application — (app f x) with beta-reduction', () => {
 describe('Type System: type-of query — (expr type-of Type)', () => {
   it('should confirm type with type-of link', () => {
     const results = run(`
-(x : Nat)
+(x: Nat)
 (? (x type-of Nat))
 `);
     assert.strictEqual(results[0], 1);
@@ -1379,7 +1379,7 @@ describe('Type System: type-of query — (expr type-of Type)', () => {
 
   it('should reject wrong type', () => {
     const results = run(`
-(x : Nat)
+(x: Nat)
 (? (x type-of Bool))
 `);
     assert.strictEqual(results[0], 0);
@@ -1397,7 +1397,7 @@ describe('Type System: type-of query — (expr type-of Type)', () => {
 describe('Type System: ?type query — type inference', () => {
   it('should infer type of a typed variable', () => {
     const results = run(`
-(x : Nat)
+(x: Nat)
 (?type x)
 `);
     assert.strictEqual(results.length, 1);
@@ -1416,9 +1416,9 @@ describe('Type System: ?type query — type inference', () => {
 describe('Type System: encoding Lean/Rocq core concepts as links', () => {
   it('should define natural number type and constructors', () => {
     const results = run(`
-(Nat : (Type 0))
-(zero : Nat)
-(succ : (Pi (n : Nat) Nat))
+(Nat: (Type 0))
+(zero: Nat)
+(succ: (Pi (n: Nat) Nat))
 (? (zero type-of Nat))
 (? (Nat type-of (Type 0)))
 `);
@@ -1429,9 +1429,9 @@ describe('Type System: encoding Lean/Rocq core concepts as links', () => {
 
   it('should define Bool type and constructors', () => {
     const results = run(`
-(Bool : (Type 0))
-(true-val : Bool)
-(false-val : Bool)
+(Bool: (Type 0))
+(true-val: Bool)
+(false-val: Bool)
 (? (true-val type-of Bool))
 (? (false-val type-of Bool))
 `);
@@ -1441,17 +1441,17 @@ describe('Type System: encoding Lean/Rocq core concepts as links', () => {
 
   it('should define identity function with type', () => {
     const results = run(`
-(Nat : (Type 0))
-(id : (Pi (x : Nat) Nat))
-(? (id type-of (Pi (x : Nat) Nat)))
+(Nat: (Type 0))
+(id: (Pi (x: Nat) Nat))
+(? (id type-of (Pi (x: Nat) Nat)))
 `);
     assert.strictEqual(results[0], 1);
   });
 
   it('should combine types with probability assignments', () => {
     const results = run(`
-(Nat : (Type 0))
-(zero : Nat)
+(Nat: (Type 0))
+(zero: Nat)
 (? (zero type-of Nat))
 ((zero = zero) has probability 1)
 (? (zero = zero))
@@ -1463,7 +1463,7 @@ describe('Type System: encoding Lean/Rocq core concepts as links', () => {
 
   it('should define and apply identity function', () => {
     const results = run(`
-(id: lam (x : Nat) x)
+(id: lam (x: Nat) x)
 (? (app id 0.5))
 `);
     assert.strictEqual(results[0], 0.5);
@@ -1518,8 +1518,8 @@ describe('Type System: backward compatibility', () => {
   it('mixed: types alongside probabilistic logic', () => {
     const results = run(`
 (a: a is a)
-(Nat : (Type 0))
-(x : Nat)
+(Nat: (Type 0))
+(x: Nat)
 ((a = a) has probability 1)
 (? (a = a))
 (? (x type-of Nat))
@@ -1535,9 +1535,9 @@ describe('Type System: backward compatibility', () => {
 describe('Type System: prefix type notation — (name: Type name)', () => {
   it('(zero: Nat zero) declares zero has type Nat', () => {
     const env = new Env();
-    run('(Nat : (Type 0))');
+    run('(Nat: (Type 0))');
     const results = run(`
-(Nat : (Type 0))
+(Nat: (Type 0))
 (zero: Nat zero)
 (? (zero type-of Nat))
 `);
@@ -1555,8 +1555,8 @@ describe('Type System: prefix type notation — (name: Type name)', () => {
 
   it('prefix notation with simple type names', () => {
     const results = run(`
-(Nat : (Type 0))
-(Bool : (Type 0))
+(Nat: (Type 0))
+(Bool: (Type 0))
 (zero: Nat zero)
 (true-val: Bool true-val)
 (? (zero type-of Nat))
@@ -1568,9 +1568,9 @@ describe('Type System: prefix type notation — (name: Type name)', () => {
 
   it('prefix notation coexists with colon notation', () => {
     const results = run(`
-(Nat : (Type 0))
+(Nat: (Type 0))
 (zero: Nat zero)
-(succ : Nat)
+(succ: Nat)
 (? (zero type-of Nat))
 (? (succ type-of Nat))
 `);

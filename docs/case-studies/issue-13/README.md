@@ -126,8 +126,8 @@ To define the core of Lean/Rocq within ADL, we need to add these capabilities:
 Currently, `(a: a is a)` defines a term. We need a way to **annotate terms with types**:
 
 ```lino
-(a : Nat)          # a has type Nat
-(f : Nat -> Bool)  # f is a function from Nat to Bool
+(a: Nat)          # a has type Nat
+(f: Nat -> Bool)  # f is a function from Nat to Bool
 ```
 
 ### 2. Dependent Products (Π-types)
@@ -135,7 +135,7 @@ Currently, `(a: a is a)` defines a term. We need a way to **annotate terms with 
 The ability to express types that depend on values:
 
 ```lino
-(forall (n : Nat) (Vec n Nat))   # For all n:Nat, the type Vec n Nat
+(forall (n: Nat) (Vec n Nat))   # For all n:Nat, the type Vec n Nat
 ```
 
 ### 3. Lambda Abstraction
@@ -143,7 +143,7 @@ The ability to express types that depend on values:
 The ability to create functions:
 
 ```lino
-(lambda (x : Nat) (x + 1))      # A function that adds 1
+(lambda (x: Nat) (x + 1))      # A function that adds 1
 ```
 
 ### 4. Application and β-Reduction
@@ -151,7 +151,7 @@ The ability to create functions:
 Applying a function to an argument and reducing:
 
 ```lino
-((lambda (x : Nat) (x + 1)) 3)  # Should reduce to 4
+((lambda (x: Nat) (x + 1)) 3)  # Should reduce to 4
 ```
 
 ### 5. Universe Hierarchy
@@ -169,8 +169,8 @@ For the full Calculus of Inductive Constructions:
 
 ```lino
 (inductive Nat
-  (zero : Nat)
-  (succ : (forall (n : Nat) Nat)))
+  (zero: Nat)
+  (succ: (forall (n: Nat) Nat)))
 ```
 
 ---
@@ -222,7 +222,7 @@ The **typing judgment** `Γ ⊢ e : T` ("in context Γ, expression e has type T"
 Which in LiNo could be:
 
 ```lino
-((e has type T) in (x₁ : A₁) (x₂ : A₂))
+((e has type T) in (x₁: A₁) (x₂: A₂))
 ```
 
 ---
@@ -241,28 +241,28 @@ Which in LiNo could be:
 (Type 1)
 
 # Type annotations
-(x : Nat)
-(f : (Pi (x : Nat) Nat))
+(x: Nat)
+(f: (Pi (x: Nat) Nat))
 
 # Dependent product (Π-type / forall)
-(Pi (x : Nat) (Vec x Bool))
+(Pi (x: Nat) (Vec x Bool))
 
 # Non-dependent function type (sugar for Pi where x doesn't appear in body)
 (Nat -> Bool)
 
 # Lambda abstraction
-(lam (x : Nat) (+ x 1))
+(lam (x: Nat) (+ x 1))
 
 # Application
-(app (lam (x : Nat) (+ x 1)) 3)
+(app (lam (x: Nat) (+ x 1)) 3)
 
 # Let binding
-(let (x : Nat) 5 (+ x 1))
+(let (x: Nat) 5 (+ x 1))
 
 # Inductive type definition
 (inductive Nat
-  (zero : Nat)
-  (succ : (Pi (n : Nat) Nat)))
+  (zero: Nat)
+  (succ: (Pi (n: Nat) Nat)))
 
 # Pattern matching
 (match n
@@ -270,11 +270,11 @@ Which in LiNo could be:
   ((succ m) => (+ 1 (f m))))
 
 # Type checking query
-(?type (lam (x : Nat) (+ x 1)))   # -> (Pi (x : Nat) Nat)
+(?type (lam (x: Nat) (+ x 1)))   # -> (Pi (x: Nat) Nat)
 
 # Proof term
 (theorem plus_comm
-  (Pi (a : Nat) (Pi (b : Nat) (= (+ a b) (+ b a))))
+  (Pi (a: Nat) (Pi (b: Nat) (= (+ a b) (+ b a))))
   proof_term)
 ```
 
@@ -288,7 +288,7 @@ Which in LiNo could be:
 (?type ((P x) has probability 0.8))   # -> Prop with confidence 0.8
 
 # Dependent type with probabilistic witness
-(Sigma (x : Nat) ((P x) has probability (> 0.5)))
+(Sigma (x: Nat) ((P x) has probability (> 0.5)))
 ```
 
 **Pros:**
@@ -325,13 +325,13 @@ LiNo text → LiNo Parser → AST
 (mode: types)
 
 # Now all expressions are type-checked
-(def Nat : (Type 0)
+(def Nat: (Type 0)
   (inductive
-    (zero : Nat)
-    (succ : (Pi (_ : Nat) Nat))))
+    (zero: Nat)
+    (succ: (Pi (_: Nat) Nat))))
 
-(def plus : (Pi (a : Nat) (Pi (b : Nat) Nat))
-  (lam (a : Nat) (lam (b : Nat)
+(def plus: (Pi (a: Nat) (Pi (b: Nat) Nat))
+  (lam (a: Nat) (lam (b: Nat)
     (match a
       (zero => b)
       ((succ n) => (succ (plus n b)))))))
@@ -368,39 +368,39 @@ This is inspired by the research paper ["A Type Theory for Probabilistic and Bay
 
 ```lino
 # Classical: P is either true or false
-(P : Prop)
+(P: Prop)
 
 # Probabilistic: P has a degree of truth
-(P : Prop 0.8)     # P is true with probability 0.8
+(P: Prop 0.8)     # P is true with probability 0.8
 
 # Dependent product with probabilistic types
-(Pi (x : Nat) (Prop (prob x)))   # A family of propositions with varying probability
+(Pi (x: Nat) (Prop (prob x)))   # A family of propositions with varying probability
 ```
 
 **Syntax in LiNo:**
 
 ```lino
 # Probabilistic Prop
-(PProp : (Type 0))
+(PProp: (Type 0))
 
 # A probabilistic proposition
-(raining : (PProp 0.7))       # "It is raining" with probability 0.7
+(raining: (PProp 0.7))       # "It is raining" with probability 0.7
 
 # Conditional probability as dependent type
-(umbrella_given_rain :
-  (Pi (r : (PProp p)) (PProp (cond_prob umbrella r))))
+(umbrella_given_rain:
+  (Pi (r: (PProp p)) (PProp (cond_prob umbrella r))))
 
 # Bayesian update as a type-theoretic operation
-(bayes :
-  (Pi (prior : (PProp p))
-  (Pi (likelihood : (Pi (_ : A) (PProp l)))
-  (Pi (evidence : (PProp e))
+(bayes:
+  (Pi (prior: (PProp p))
+  (Pi (likelihood: (Pi (_: A) (PProp l)))
+  (Pi (evidence: (PProp e))
   (PProp (bayesian_update p l e))))))
 
 # ADL's existing probability operations become type-theoretic
-(and : (Pi (a : (PProp p)) (Pi (b : (PProp q)) (PProp (agg_and p q)))))
-(or  : (Pi (a : (PProp p)) (Pi (b : (PProp q)) (PProp (agg_or p q)))))
-(not : (Pi (a : (PProp p)) (PProp (negate p))))
+(and: (Pi (a: (PProp p)) (Pi (b: (PProp q)) (PProp (agg_and p q)))))
+(or:  (Pi (a: (PProp p)) (Pi (b: (PProp q)) (PProp (agg_or p q)))))
+(not: (Pi (a: (PProp p)) (PProp (negate p))))
 ```
 
 **Pros:**

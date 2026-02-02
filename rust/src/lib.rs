@@ -590,27 +590,12 @@ impl EvalResult {
 
 // ========== Binding Parser ==========
 
-/// Parse a binding form: either (x : A) as [x, ":", A] or (x: A) as ["x:", A].
+/// Parse a binding form: (x: A) as ["x:", A] — using standard LiNo link definition syntax.
+/// The colon is only used as part of the link name (e.g., "x:"), never as a standalone separator.
 /// Returns (param_name, param_type_key) or None.
 pub fn parse_binding(binding: &Node) -> Option<(String, String)> {
     if let Node::List(children) = binding {
-        // Form 1: [x, ":", A] — three elements with colon separator
-        if children.len() == 3 {
-            if let Node::Leaf(ref colon) = children[1] {
-                if colon == ":" {
-                    let param_name = match &children[0] {
-                        Node::Leaf(s) => s.clone(),
-                        other => key_of(other),
-                    };
-                    let param_type = match &children[2] {
-                        Node::Leaf(s) => s.clone(),
-                        other => key_of(other),
-                    };
-                    return Some((param_name, param_type));
-                }
-            }
-        }
-        // Form 2: ["x:", A] — two elements where first ends with colon
+        // ["x:", A] — two elements where first ends with colon (standard LiNo link definition)
         if children.len() == 2 {
             if let Node::Leaf(ref s) = children[0] {
                 if s.ends_with(':') {
@@ -697,18 +682,8 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 }
             }
 
-            // (head : ...) form
-            if children.len() >= 3 {
-                if let Node::Leaf(ref colon) = children[1] {
-                    if colon == ":" {
-                        let head = match &children[0] {
-                            Node::Leaf(s) => s.clone(),
-                            other => key_of(other),
-                        };
-                        return define_form(&head, &children[2..], env);
-                    }
-                }
-            }
+            // Note: (x : A) with spaces as a standalone colon separator is NOT supported.
+            // Use (x: A) instead — the colon must be part of the link name.
 
             // Assignment: ((expr) has probability p)
             if children.len() == 4 {
@@ -906,7 +881,7 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 }
             }
 
-            // Dependent product (Pi-type): (Pi (x : A) B)
+            // Dependent product (Pi-type): (Pi (x: A) B)
             if children.len() == 3 {
                 if let Node::Leaf(ref first) = children[0] {
                     if first == "Pi" {
@@ -921,7 +896,7 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 }
             }
 
-            // Lambda abstraction: (lam (x : A) body)
+            // Lambda abstraction: (lam (x: A) body)
             if children.len() == 3 {
                 if let Node::Leaf(ref first) = children[0] {
                     if first == "lam" {
@@ -931,7 +906,7 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                             let body_key = key_of(&children[2]);
                             let body_type = env.get_type(&body_key).cloned().unwrap_or_else(|| "unknown".to_string());
                             let key = key_of(&Node::List(children.clone()));
-                            env.set_type(&key, &format!("(Pi ({} : {}) {})", param_name, param_type, body_type));
+                            env.set_type(&key, &format!("(Pi ({}: {}) {})", param_name, param_type, body_type));
                         }
                         return EvalResult::Value(1.0);
                     }
@@ -945,7 +920,7 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                         let fn_node = &children[1];
                         let arg = &children[2];
 
-                        // Check if fn is a lambda: (lam (x : A) body)
+                        // Check if fn is a lambda: (lam (x: A) body)
                         if let Node::List(ref fn_children) = fn_node {
                             if fn_children.len() == 3 {
                                 if let Node::Leaf(ref fn_head) = fn_children[0] {
@@ -1159,7 +1134,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         }
     }
 
-    // Lambda definition: (name: lam (x : A) body) or (name: lam (x: A) body)
+    // Lambda definition: (name: lam (x: A) body)
     if rhs.len() >= 2 {
         if let Node::Leaf(ref first) = rhs[0] {
             if first == "lam" && rhs.len() == 3 {
@@ -1173,7 +1148,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
                             other => key_of(other),
                         }
                     });
-                    env.set_type(head, &format!("(Pi ({} : {}) {})", param_name, param_type, body_type));
+                    env.set_type(head, &format!("(Pi ({}: {}) {})", param_name, param_type, body_type));
                     env.set_lambda(head, Lambda { param: param_name, param_type, body });
                     return EvalResult::Value(1.0);
                 }
@@ -1181,7 +1156,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         }
     }
 
-    // Typed variable/type declaration: (x : A) where A is not numeric
+    // Typed variable/type declaration: (x: A) where A is not numeric
     if rhs.len() == 1 {
         let is_op = head == "="
             || head == "!="
@@ -1196,7 +1171,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         if !is_op {
             match &rhs[0] {
                 Node::List(_) => {
-                    // Complex type expression like (Type 0), (Pi (x : Nat) Nat)
+                    // Complex type expression like (Type 0), (Pi (x: Nat) Nat)
                     env.terms.insert(head.to_string());
                     let type_key = key_of(&rhs[0]);
                     env.set_type(head, &type_key);
@@ -2937,8 +2912,7 @@ mod tests {
         let expr = Node::List(vec![
             Node::Leaf("lam".into()),
             Node::List(vec![
-                Node::Leaf("x".into()),
-                Node::Leaf(":".into()),
+                Node::Leaf("x:".into()),
                 Node::Leaf("Nat".into()),
             ]),
             Node::Leaf("x".into()),
@@ -2952,8 +2926,7 @@ mod tests {
         let expr = Node::List(vec![
             Node::Leaf("Pi".into()),
             Node::List(vec![
-                Node::Leaf("x".into()),
-                Node::Leaf(":".into()),
+                Node::Leaf("x:".into()),
                 Node::Leaf("Nat".into()),
             ]),
             Node::Leaf("x".into()),
@@ -2967,8 +2940,7 @@ mod tests {
         let expr = Node::List(vec![
             Node::Leaf("lam".into()),
             Node::List(vec![
-                Node::Leaf("y".into()),
-                Node::Leaf(":".into()),
+                Node::Leaf("y:".into()),
                 Node::Leaf("Nat".into()),
             ]),
             Node::Leaf("x".into()),
@@ -2979,8 +2951,7 @@ mod tests {
             Node::List(vec![
                 Node::Leaf("lam".into()),
                 Node::List(vec![
-                    Node::Leaf("y".into()),
-                    Node::Leaf(":".into()),
+                    Node::Leaf("y:".into()),
                     Node::Leaf("Nat".into()),
                 ]),
                 Node::Leaf("5".into()),
@@ -3033,7 +3004,7 @@ mod tests {
     fn typed_var_declare() {
         let results = run(
             r#"
-(x : Nat)
+(x: Nat)
 (? (x type-of Nat))
 "#,
             None,
@@ -3046,7 +3017,7 @@ mod tests {
     fn typed_var_wrong_type() {
         let results = run(
             r#"
-(x : Nat)
+(x: Nat)
 (? (x type-of Bool))
 "#,
             None,
@@ -3058,8 +3029,8 @@ mod tests {
     fn typed_var_multiple() {
         let results = run(
             r#"
-(x : Nat)
-(y : Bool)
+(x: Nat)
+(y: Bool)
 (? (x type-of Nat))
 (? (y type-of Bool))
 (? (x type-of Bool))
@@ -3076,7 +3047,7 @@ mod tests {
 
     #[test]
     fn pi_type_eval() {
-        let results = run("(? (Pi (x : Nat) Nat))", None);
+        let results = run("(? (Pi (x: Nat) Nat))", None);
         assert_eq!(results[0], 1.0);
     }
 
@@ -3087,15 +3058,14 @@ mod tests {
             &Node::List(vec![
                 Node::Leaf("Pi".into()),
                 Node::List(vec![
-                    Node::Leaf("x".into()),
-                    Node::Leaf(":".into()),
+                    Node::Leaf("x:".into()),
                     Node::Leaf("Nat".into()),
                 ]),
                 Node::Leaf("Nat".into()),
             ]),
             &mut env,
         );
-        assert!(env.get_type("(Pi (x : Nat) Nat)").is_some());
+        assert!(env.get_type("(Pi (x: Nat) Nat)").is_some());
     }
 
     #[test]
@@ -3105,8 +3075,7 @@ mod tests {
             &Node::List(vec![
                 Node::Leaf("Pi".into()),
                 Node::List(vec![
-                    Node::Leaf("n".into()),
-                    Node::Leaf(":".into()),
+                    Node::Leaf("n:".into()),
                     Node::Leaf("Nat".into()),
                 ]),
                 Node::List(vec![
@@ -3123,7 +3092,7 @@ mod tests {
 
     #[test]
     fn pi_type_non_dependent() {
-        let results = run("(? (Pi (_ : Nat) Bool))", None);
+        let results = run("(? (Pi (_: Nat) Bool))", None);
         assert_eq!(results[0], 1.0);
     }
 
@@ -3131,7 +3100,7 @@ mod tests {
 
     #[test]
     fn lambda_eval_valid() {
-        let results = run("(? (lam (x : Nat) x))", None);
+        let results = run("(? (lam (x: Nat) x))", None);
         assert_eq!(results[0], 1.0);
     }
 
@@ -3142,15 +3111,14 @@ mod tests {
             &Node::List(vec![
                 Node::Leaf("lam".into()),
                 Node::List(vec![
-                    Node::Leaf("x".into()),
-                    Node::Leaf(":".into()),
+                    Node::Leaf("x:".into()),
                     Node::Leaf("Nat".into()),
                 ]),
                 Node::Leaf("x".into()),
             ]),
             &mut env,
         );
-        let t = env.get_type("(lam (x : Nat) x)");
+        let t = env.get_type("(lam (x: Nat) x)");
         assert!(t.is_some());
         assert!(t.unwrap().contains("Pi"));
     }
@@ -3159,14 +3127,14 @@ mod tests {
 
     #[test]
     fn app_beta_identity() {
-        let results = run("(? (app (lam (x : Nat) x) 0.5))", None);
+        let results = run("(? (app (lam (x: Nat) x) 0.5))", None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], 0.5);
     }
 
     #[test]
     fn app_beta_arithmetic() {
-        let results = run("(? (app (lam (x : Nat) (x + 0.1)) 0.2))", None);
+        let results = run("(? (app (lam (x: Nat) (x + 0.1)) 0.2))", None);
         assert_eq!(results[0], 0.3);
     }
 
@@ -3174,7 +3142,7 @@ mod tests {
     fn app_named_lambda() {
         let results = run(
             r#"
-(id: lam (x : Nat) x)
+(id: lam (x: Nat) x)
 (? (app id 0.7))
 "#,
             None,
@@ -3186,7 +3154,7 @@ mod tests {
     fn app_named_lambda_prefix() {
         let results = run(
             r#"
-(id: lam (x : Nat) x)
+(id: lam (x: Nat) x)
 (? (id 0.7))
 "#,
             None,
@@ -3196,7 +3164,7 @@ mod tests {
 
     #[test]
     fn app_const_function() {
-        let results = run("(? (app (lam (x : Nat) 0.5) 0.9))", None);
+        let results = run("(? (app (lam (x: Nat) 0.5) 0.9))", None);
         assert_eq!(results[0], 0.5);
     }
 
@@ -3206,7 +3174,7 @@ mod tests {
     fn type_of_confirm() {
         let results = run(
             r#"
-(x : Nat)
+(x: Nat)
 (? (x type-of Nat))
 "#,
             None,
@@ -3218,7 +3186,7 @@ mod tests {
     fn type_of_reject() {
         let results = run(
             r#"
-(x : Nat)
+(x: Nat)
 (? (x type-of Bool))
 "#,
             None,
@@ -3244,7 +3212,7 @@ mod tests {
     fn type_query_typed_var() {
         let results = run_typed(
             r#"
-(x : Nat)
+(x: Nat)
 (?type x)
 "#,
             None,
@@ -3271,9 +3239,9 @@ mod tests {
     fn lean_nat_type_constructors() {
         let results = run(
             r#"
-(Nat : (Type 0))
-(zero : Nat)
-(succ : (Pi (n : Nat) Nat))
+(Nat: (Type 0))
+(zero: Nat)
+(succ: (Pi (n: Nat) Nat))
 (? (zero type-of Nat))
 (? (Nat type-of (Type 0)))
 "#,
@@ -3288,9 +3256,9 @@ mod tests {
     fn lean_bool_type_constructors() {
         let results = run(
             r#"
-(Bool : (Type 0))
-(true-val : Bool)
-(false-val : Bool)
+(Bool: (Type 0))
+(true-val: Bool)
+(false-val: Bool)
 (? (true-val type-of Bool))
 (? (false-val type-of Bool))
 "#,
@@ -3304,9 +3272,9 @@ mod tests {
     fn lean_identity_function_type() {
         let results = run(
             r#"
-(Nat : (Type 0))
-(id : (Pi (x : Nat) Nat))
-(? (id type-of (Pi (x : Nat) Nat)))
+(Nat: (Type 0))
+(id: (Pi (x: Nat) Nat))
+(? (id type-of (Pi (x: Nat) Nat)))
 "#,
             None,
         );
@@ -3317,8 +3285,8 @@ mod tests {
     fn types_with_probabilities() {
         let results = run(
             r#"
-(Nat : (Type 0))
-(zero : Nat)
+(Nat: (Type 0))
+(zero: Nat)
 (? (zero type-of Nat))
 ((zero = zero) has probability 1)
 (? (zero = zero))
@@ -3334,7 +3302,7 @@ mod tests {
     fn define_and_apply_identity() {
         let results = run(
             r#"
-(id: lam (x : Nat) x)
+(id: lam (x: Nat) x)
 (? (app id 0.5))
 "#,
             None,
@@ -3410,8 +3378,8 @@ mod tests {
         let results = run(
             r#"
 (a: a is a)
-(Nat : (Type 0))
-(x : Nat)
+(Nat: (Type 0))
+(x: Nat)
 ((a = a) has probability 1)
 (? (a = a))
 (? (x type-of Nat))
@@ -3431,7 +3399,7 @@ mod tests {
     fn prefix_type_zero_nat() {
         let results = run(
             r#"
-(Nat : (Type 0))
+(Nat: (Type 0))
 (zero: Nat zero)
 (? (zero type-of Nat))
 "#,
@@ -3457,8 +3425,8 @@ mod tests {
     fn prefix_type_multiple_constructors() {
         let results = run(
             r#"
-(Nat : (Type 0))
-(Bool : (Type 0))
+(Nat: (Type 0))
+(Bool: (Type 0))
 (zero: Nat zero)
 (true-val: Bool true-val)
 (? (zero type-of Nat))
@@ -3474,9 +3442,9 @@ mod tests {
     fn prefix_type_coexists_with_colon() {
         let results = run(
             r#"
-(Nat : (Type 0))
+(Nat: (Type 0))
 (zero: Nat zero)
-(succ : Nat)
+(succ: Nat)
 (? (zero type-of Nat))
 (? (succ type-of Nat))
 "#,
