@@ -9,7 +9,7 @@ This project provides two equivalent implementations:
 - **[JavaScript](./js/)** — Node.js implementation using the official [links-notation](https://github.com/link-foundation/links-notation) parser
 - **[Rust](./rust/)** — Rust implementation using the official [links-notation](https://github.com/link-foundation/links-notation) crate
 
-Both implementations pass the same 122 tests and produce identical results.
+Both implementations pass the same 176 tests and produce identical results.
 
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -26,6 +26,8 @@ ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built 
 - Resolve paradoxical statements (e.g. the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox))
 - Perform decimal-precision arithmetic (`+`, `-`, `*`, `/`) — `0.1 + 0.2 = 0.3`, not `0.30000000000000004`
 - Query the truth value of complex expressions
+- Define dependent types as links — universe hierarchy, Pi-types, lambdas, type queries
+- Combine types with probabilistic logic in a unified framework
 
 ## Supported Logic Types
 
@@ -218,6 +220,121 @@ Queries are evaluated and their truth value is printed to stdout.
 (a: a is a)  # Inline comments are also supported
 ```
 
+### Dependent Type System
+
+Types are just links — "everything is a link". The type system coexists with probabilistic logic. ADL is a **dynamic axiomatic system**: every link is a recursive fractal, definitions can be changed at any time, and the system embraces self-reference and paradoxes rather than forbidding them.
+
+#### Self-Referential Type: `(Type: Type Type)`
+
+The primary way to define the root type in ADL is self-referential — Type is its own type:
+
+```lino
+(Type: Type Type)
+```
+
+This follows the pattern `(SubType: Type SubType)` applied to Type itself. Unlike classical type theory (Lean, Rocq) which forbids `Type : Type` to avoid Russell's paradox, ADL's many-valued logic **resolves paradoxes** to the midpoint of the truth value range (0.5 in `[0,1]`, 0 in `[-1,1]`). This makes self-referential types safe and useful.
+
+```lino
+(Type: Type Type)
+(Natural: Type Natural)
+(Boolean: Type Boolean)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(? (Type of Type))               # -> 1
+(? (Natural of Type))            # -> 1
+(? (zero of Natural))            # -> 1
+(? (type of Natural))            # -> Type
+```
+
+#### Universe Hierarchy (Lean/Rocq Compatibility)
+
+For compatibility with Lean 4 and Rocq (Coq), ADL also supports a stratified **universe hierarchy** where each `(Type N)` is a member of `(Type N+1)`:
+
+- `(Type 0)` — the universe of "small" types (Natural, Boolean, etc.)
+- `(Type 1)` — the universe that contains `(Type 0)` and types formed from `(Type 0)` types
+- `(Type 2)` — contains `(Type 1)`, and so on
+
+This mirrors Lean 4 (`Type 0`, `Type 1`, ...) and Rocq (`Set`, `Type`, ...).
+
+Both systems can coexist — use `(Type: Type Type)` for the self-referential approach, and `(Type N)` when you need stratified universes:
+
+```lino
+(Type: Type Type)
+(Type 0)
+(Type 1)
+(Natural: (Type 0) Natural)      # Natural in universe 0
+(Boolean: Type Boolean)           # Boolean under self-referential Type
+(? (Natural of (Type 0)))        # -> 1
+(? (Boolean of Type))            # -> 1
+(? ((Type 0) of (Type 1)))       # -> 1
+```
+
+#### Type Declarations
+
+```lino
+# Type definition follows the pattern: (SubType: Type SubType)
+(Type: Type Type)
+(Natural: Type Natural)
+(Boolean: Type Boolean)
+
+# Typed term via prefix type notation: (name: TypeName name)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+```
+
+#### Pi-types (Dependent Products)
+
+```lino
+# (Pi (TypeName varName) ReturnType)
+(succ: (Pi (Natural n) Natural))
+```
+
+#### Lambda Abstraction
+
+```lino
+# (lambda (TypeName varName) body)
+(identity: lambda (Natural x) x)
+
+# Multi-parameter: (lambda (TypeName x, TypeName y) body)
+(add: lambda (Natural x, Natural y) (x + y))
+```
+
+#### Application
+
+```lino
+# Explicit: (apply function argument)
+(? (apply identity 0.7))         # -> 0.7
+
+# Prefix: (functionName argument)
+(? (identity 0.7))               # -> 0.7
+```
+
+#### Type Queries
+
+```lino
+# Type check: (expr of Type) — returns 1 (true) or 0 (false)
+(? (zero of Natural))            # -> 1
+(? (Natural of Type))            # -> 1
+
+# Type inference: (type of expr) — returns the type name
+(? (type of zero))               # -> Natural
+```
+
+#### Paradox Resolution in the Type System
+
+In classical type theory, `Type : Type` leads to [Russell's paradox](https://en.wikipedia.org/wiki/Russell%27s_paradox). ADL handles this differently — paradoxes are resolved to the midpoint truth value (0.5), not rejected:
+
+```lino
+(Type: Type Type)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))                  # -> 0.5 (paradox resolves to midpoint)
+(? (not (s = false)))            # -> 0.5 (fixed point of negation)
+(? (Type of Type))               # -> 1   (self-referential type works)
+```
+
+This means ADL can serve as a **meta-theory** for both classical and non-classical type systems, since it can express and reason about constructs that would be inconsistent in traditional frameworks.
+
 ## Built-in Operators
 
 - `=`: Equality (checks assigned probability, then structural equality, then numeric comparison with decimal precision)
@@ -321,7 +438,7 @@ In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Pr
 
 ## Testing
 
-Both implementations have 122 matching tests:
+Both implementations have 176 matching tests:
 
 ```bash
 # JavaScript
@@ -339,6 +456,8 @@ The test suites cover:
 - Truth constants (`true`, `false`, `unknown`, `undefined`): defaults, redefinition, range changes, use in expressions, quantization
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
+- Dependent type system: universes, Pi-types, lambdas, application, type queries, prefix type notation
+- Self-referential types: `(Type: Type Type)`, paradox resolution alongside types, coexistence with universe hierarchy
 
 ## API
 

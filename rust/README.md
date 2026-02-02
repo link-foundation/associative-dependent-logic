@@ -69,13 +69,15 @@ let q = quantize(0.4, 3, 0.0, 1.0); // -> 0.5 (nearest ternary level)
 cargo test
 ```
 
-The test suite includes 93 tests covering:
+The test suite includes 176 tests covering:
 - Tokenization, parsing, and quantization
 - Evaluation logic and operator aggregators
 - Many-valued logics: unary, binary (Boolean), ternary (Kleene), quaternary, quinary, higher N-valued, and continuous (fuzzy)
 - Both `[0, 1]` and `[-1, 1]` ranges
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic and numeric equality
+- Dependent type system: universes, Pi-types, lambdas, application, type queries
+- Self-referential types: `(Type: Type Type)`, paradox resolution alongside types
 
 ## Implementation Notes
 

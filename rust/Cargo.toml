@@ -1,6 +1,6 @@
 [package]
 name = "associative-dependent-logic"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "A prototype for logic framework that can reason about anything relative to given probability of input statements"
 license = "Unlicense"

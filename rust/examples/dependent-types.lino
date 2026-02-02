@@ -1,0 +1,60 @@
+# Dependent Types in Links Notation
+# Demonstrating how types are just links — "everything is a link"
+#
+# This example shows how the core of dependent type systems like
+# Lean 4 and Rocq (Coq) can be expressed in LiNo.
+# ADL is a dynamic axiomatic system: it embraces self-reference
+# and resolves paradoxes to the midpoint truth value (0.5).
+
+# === Self-Referential Type: Type is its own type ===
+# Unlike classical type theory which forbids Type : Type,
+# ADL allows it — paradoxes resolve to 0.5
+(Type: Type Type)
+
+# === Define Types as Links ===
+# Types follow the pattern: (SubType: Type SubType)
+(Natural: Type Natural)
+(Boolean: Type Boolean)
+
+# === Constructors using Prefix Type Notation ===
+# (name: TypeName name) — the LiNo-native way to declare typed terms
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(false-val: Boolean false-val)
+
+# Pi-types for function constructors
+(succ: (Pi (Natural n) Natural))
+
+# === Type Checking via Queries ===
+# "Is zero of type Natural?" — querying the link network
+(? (zero of Natural))
+(? (Natural of Type))
+(? (Type of Type))
+
+# === Functions as Links ===
+# Define identity function: identity(x) = x
+(identity: lambda (Natural x) x)
+
+# Apply identity function
+(? (apply identity 0.7))
+
+# === Type Queries ===
+# "What is the type of zero?"
+(? (type of zero))
+
+# === Combining Types with Probabilistic Logic ===
+# The type system coexists with the probabilistic logic
+((zero = zero) has probability 1)
+(? (zero = zero))
+
+# === Paradox Resolution ===
+# The liar paradox works alongside types — resolves to 0.5
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+
+# === Universe Hierarchy (Lean/Rocq compatibility) ===
+# Both (Type: Type Type) and (Type N) coexist
+(Type 0)
+(Type 1)
+(? ((Type 0) of (Type 1)))
