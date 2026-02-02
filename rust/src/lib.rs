@@ -3564,4 +3564,117 @@ mod tests {
         );
         assert_eq!(results[0], 1.0);
     }
+
+    // ===== Self-referential (Type: Type Type) — dynamic axiomatic system =====
+
+    #[test]
+    fn self_referential_type_type() {
+        let results = run(
+            r#"
+(Type: Type Type)
+(? (Type of Type))
+"#,
+            None,
+        );
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn self_referential_type_full_hierarchy() {
+        let results = run(
+            r#"
+(Type: Type Type)
+(Natural: Type Natural)
+(Boolean: Type Boolean)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(? (zero of Natural))
+(? (Natural of Type))
+(? (Boolean of Type))
+(? (Type of Type))
+"#,
+            None,
+        );
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0], 1.0);
+        assert_eq!(results[1], 1.0);
+        assert_eq!(results[2], 1.0);
+        assert_eq!(results[3], 1.0);
+    }
+
+    #[test]
+    fn self_referential_type_of_query() {
+        let results = run_typed(
+            r#"
+(Type: Type Type)
+(Natural: Type Natural)
+(? (type of Natural))
+(? (type of Type))
+"#,
+            None,
+        );
+        assert_eq!(results[0], RunResult::Type("Type".to_string()));
+        assert_eq!(results[1], RunResult::Type("Type".to_string()));
+    }
+
+    #[test]
+    fn self_referential_type_coexists_with_universe_hierarchy() {
+        let results = run(
+            r#"
+(Type: Type Type)
+(Type 0)
+(Type 1)
+(Natural: (Type 0) Natural)
+(Boolean: Type Boolean)
+(zero: Natural zero)
+(? (Type of Type))
+(? (Natural of (Type 0)))
+(? (Boolean of Type))
+(? (zero of Natural))
+(? ((Type 0) of (Type 1)))
+"#,
+            None,
+        );
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0], 1.0);
+        assert_eq!(results[1], 1.0);
+        assert_eq!(results[2], 1.0);
+        assert_eq!(results[3], 1.0);
+        assert_eq!(results[4], 1.0);
+    }
+
+    #[test]
+    fn self_referential_type_liar_paradox_alongside() {
+        let results = run(
+            r#"
+(Type: Type Type)
+(Natural: Type Natural)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+(? (Natural of Type))
+"#,
+            None,
+        );
+        approx(results[0], 0.5);
+        approx(results[1], 0.5);
+        assert_eq!(results[2], 1.0);
+    }
+
+    #[test]
+    fn self_referential_type_paradox_resolution() {
+        let results = run(
+            r#"
+(Type: Type Type)
+(R: R is R)
+((R = R) has probability 0.5)
+(? (R = R))
+(? (not (R = R)))
+"#,
+            None,
+        );
+        approx(results[0], 0.5);
+        approx(results[1], 0.5);
+    }
 }

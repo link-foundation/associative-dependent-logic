@@ -1614,3 +1614,92 @@ describe('Type System: prefix type notation — (name: Type name)', () => {
     assert.strictEqual(results[0], 1);
   });
 });
+
+describe('Type System: self-referential (Type: Type Type) — dynamic axiomatic system', () => {
+  it('(Type: Type Type) defines Type as its own type', () => {
+    const results = run(`
+(Type: Type Type)
+(? (Type of Type))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('(Type: Type Type) supports full type hierarchy', () => {
+    const results = run(`
+(Type: Type Type)
+(Natural: Type Natural)
+(Boolean: Type Boolean)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(? (zero of Natural))
+(? (Natural of Type))
+(? (Boolean of Type))
+(? (Type of Type))
+`);
+    assert.strictEqual(results.length, 4);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 1);
+  });
+
+  it('(type of Natural) returns Type when using self-referential Type', () => {
+    const results = run(`
+(Type: Type Type)
+(Natural: Type Natural)
+(? (type of Natural))
+(? (type of Type))
+`);
+    assert.strictEqual(results[0], 'Type');
+    assert.strictEqual(results[1], 'Type');
+  });
+
+  it('(Type: Type Type) coexists with (Type N) universe hierarchy', () => {
+    const results = run(`
+(Type: Type Type)
+(Type 0)
+(Type 1)
+(Natural: (Type 0) Natural)
+(Boolean: Type Boolean)
+(zero: Natural zero)
+(? (Type of Type))
+(? (Natural of (Type 0)))
+(? (Boolean of Type))
+(? (zero of Natural))
+(? ((Type 0) of (Type 1)))
+`);
+    assert.strictEqual(results.length, 5);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 1);
+    assert.strictEqual(results[4], 1);
+  });
+
+  it('paradox resolution: liar paradox alongside self-referential types', () => {
+    const results = run(`
+(Type: Type Type)
+(Natural: Type Natural)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+(? (Natural of Type))
+`);
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], 0.5);
+    assert.strictEqual(results[2], 1);
+  });
+
+  it('paradox resolution: self-referential equality resolves to 0.5', () => {
+    const results = run(`
+(Type: Type Type)
+(R: R is R)
+((R = R) has probability 0.5)
+(? (R = R))
+(? (not (R = R)))
+`);
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], 0.5);
+  });
+});

@@ -522,15 +522,19 @@ In this approach, the entire type system is encoded as an associative network of
 The ADL evaluator has been extended with all 5 core expression forms of the CoC:
 
 1. ✅ `(Type N)` — universe sorts with automatic hierarchy `(Type 0) : (Type 1) : ...`
-2. ✅ `(Pi (Natural x) B)` — dependent products (Π-types)
-3. ✅ `(lambda (Natural x) e)` — lambda abstraction with typed parameters
-4. ✅ `(apply f x)` — application with full β-reduction
-5. ✅ Substitution with variable shadowing support
-6. ✅ Type checking via `(expr of Type)` queries and `(? (type of expr))` inference
+2. ✅ `(Type: Type Type)` — self-referential type (ADL's primary approach, enabled by paradox resolution)
+3. ✅ `(Pi (Natural x) B)` — dependent products (Π-types)
+4. ✅ `(lambda (Natural x) e)` — lambda abstraction with typed parameters
+5. ✅ `(apply f x)` — application with full β-reduction
+6. ✅ Substitution with variable shadowing support
+7. ✅ Type checking via `(expr of Type)` queries and `(? (type of expr))` inference
 
-**Implementation:** ~500 lines of new code in each implementation (JS + Rust), plus 46 new tests each (all backward-compatible with existing 124 tests).
+**Implementation:** ~500 lines of new code in each implementation (JS + Rust), plus 52 new tests each (all backward-compatible with existing 124 tests).
 
-**Key design principle:** "Everything is a link" — types are stored as associations in the link network, type-checking is querying the network, and the type system coexists with the probabilistic logic engine.
+**Key design principles:**
+- **"Everything is a link"** — types are stored as associations in the link network, type-checking is querying the network, and the type system coexists with the probabilistic logic engine.
+- **Dynamic axiomatic system** — every link is a recursive fractal, definitions can be changed at any time, and the system embraces self-reference rather than forbidding it.
+- **Self-referential Type** — `(Type: Type Type)` is the primary way to define the root type. Unlike classical type theory which forbids `Type : Type` to avoid Russell's paradox, ADL's many-valued logic resolves paradoxes to the midpoint truth value (0.5 in `[0,1]`). Both `(Type: Type Type)` and `(Type N)` can coexist.
 
 ### Phase 2: Option C (Probabilistic Extension) — The Novel Contribution
 
