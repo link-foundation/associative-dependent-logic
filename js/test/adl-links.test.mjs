@@ -1268,7 +1268,7 @@ describe('Type System: universe sorts — (Type N)', () => {
 describe('Type System: typed variable declarations — (name: Type name)', () => {
   it('should declare a typed variable via prefix notation', () => {
     const results = run(`
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (x: Natural x)
 (? (x of Natural))
 `);
@@ -1278,8 +1278,8 @@ describe('Type System: typed variable declarations — (name: Type name)', () =>
 
   it('should return false for wrong type', () => {
     const results = run(`
-(Natural: (Type 0))
-(Boolean: (Type 0))
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 (x: Natural x)
 (? (x of Boolean))
 `);
@@ -1288,8 +1288,8 @@ describe('Type System: typed variable declarations — (name: Type name)', () =>
 
   it('should support multiple typed declarations', () => {
     const results = run(`
-(Natural: (Type 0))
-(Boolean: (Type 0))
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 (x: Natural x)
 (y: Boolean y)
 (? (x of Natural))
@@ -1381,7 +1381,7 @@ describe('Type System: application — (apply f x) with beta-reduction', () => {
 describe('Type System: type check query — (expr of Type)', () => {
   it('should confirm type with of link', () => {
     const results = run(`
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (x: Natural x)
 (? (x of Natural))
 `);
@@ -1390,8 +1390,8 @@ describe('Type System: type check query — (expr of Type)', () => {
 
   it('should reject wrong type', () => {
     const results = run(`
-(Natural: (Type 0))
-(Boolean: (Type 0))
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 (x: Natural x)
 (? (x of Boolean))
 `);
@@ -1410,7 +1410,7 @@ describe('Type System: type check query — (expr of Type)', () => {
 describe('Type System: type of query — (type of expr)', () => {
   it('should infer type of a typed variable', () => {
     const results = run(`
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (x: Natural x)
 (? (type of x))
 `);
@@ -1430,7 +1430,7 @@ describe('Type System: type of query — (type of expr)', () => {
 describe('Type System: encoding Lean/Rocq core concepts as links', () => {
   it('should define natural number type and constructors', () => {
     const results = run(`
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (zero: Natural zero)
 (succ: (Pi (Natural n) Natural))
 (? (zero of Natural))
@@ -1443,7 +1443,7 @@ describe('Type System: encoding Lean/Rocq core concepts as links', () => {
 
   it('should define Boolean type and constructors', () => {
     const results = run(`
-(Boolean: (Type 0))
+(Boolean: (Type 0) Boolean)
 (true-val: Boolean true-val)
 (false-val: Boolean false-val)
 (? (true-val of Boolean))
@@ -1455,7 +1455,7 @@ describe('Type System: encoding Lean/Rocq core concepts as links', () => {
 
   it('should define identity function with type', () => {
     const results = run(`
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (identity: (Pi (Natural x) Natural))
 (? (identity of (Pi (Natural x) Natural)))
 `);
@@ -1464,7 +1464,7 @@ describe('Type System: encoding Lean/Rocq core concepts as links', () => {
 
   it('should combine types with probability assignments', () => {
     const results = run(`
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (zero: Natural zero)
 (? (zero of Natural))
 ((zero = zero) has probability 1)
@@ -1532,7 +1532,7 @@ describe('Type System: backward compatibility', () => {
   it('mixed: types alongside probabilistic logic', () => {
     const results = run(`
 (a: a is a)
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (x: Natural x)
 ((a = a) has probability 1)
 (? (a = a))
@@ -1549,7 +1549,7 @@ describe('Type System: backward compatibility', () => {
 describe('Type System: prefix type notation — (name: Type name)', () => {
   it('(zero: Natural zero) declares zero has type Natural', () => {
     const results = run(`
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (zero: Natural zero)
 (? (zero of Natural))
 `);
@@ -1567,8 +1567,8 @@ describe('Type System: prefix type notation — (name: Type name)', () => {
 
   it('prefix notation with simple type names', () => {
     const results = run(`
-(Natural: (Type 0))
-(Boolean: (Type 0))
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 (zero: Natural zero)
 (true-val: Boolean true-val)
 (? (zero of Natural))
@@ -1580,7 +1580,7 @@ describe('Type System: prefix type notation — (name: Type name)', () => {
 
   it('prefix notation with Pi-type constructor', () => {
     const results = run(`
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (zero: Natural zero)
 (succ: (Pi (Natural n) Natural))
 (? (zero of Natural))
@@ -1608,7 +1608,7 @@ describe('Type System: prefix type notation — (name: Type name)', () => {
 
   it('lambda with multi-param binding: (lambda (Natural x, Natural y) body)', () => {
     const results = run(`
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (? (lambda (Natural x, Natural y) (x + y)))
 `);
     assert.strictEqual(results[0], 1);

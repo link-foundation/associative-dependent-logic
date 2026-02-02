@@ -1224,7 +1224,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         }
     }
 
-    // Typed declaration with complex type expression: (Natural: (Type 0)), (succ: (Pi (Natural n) Natural))
+    // Typed declaration with complex type expression: (succ: (Pi (Natural n) Natural))
     // Only complex expressions (arrays/lists) are accepted as type annotations in single-element form.
     // Simple name type annotations like (x: Natural) are NOT supported — use (x: Natural x) prefix form instead.
     if rhs.len() == 1 {
@@ -3074,7 +3074,7 @@ mod tests {
     fn typed_var_declare() {
         let results = run(
             r#"
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (x: Natural x)
 (? (x of Natural))
 "#,
@@ -3088,8 +3088,8 @@ mod tests {
     fn typed_var_wrong_type() {
         let results = run(
             r#"
-(Natural: (Type 0))
-(Boolean: (Type 0))
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 (x: Natural x)
 (? (x of Boolean))
 "#,
@@ -3102,8 +3102,8 @@ mod tests {
     fn typed_var_multiple() {
         let results = run(
             r#"
-(Natural: (Type 0))
-(Boolean: (Type 0))
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 (x: Natural x)
 (y: Boolean y)
 (? (x of Natural))
@@ -3249,7 +3249,7 @@ mod tests {
     fn type_check_confirm() {
         let results = run(
             r#"
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (x: Natural x)
 (? (x of Natural))
 "#,
@@ -3262,8 +3262,8 @@ mod tests {
     fn type_check_reject() {
         let results = run(
             r#"
-(Natural: (Type 0))
-(Boolean: (Type 0))
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 (x: Natural x)
 (? (x of Boolean))
 "#,
@@ -3290,7 +3290,7 @@ mod tests {
     fn type_of_query_typed_var() {
         let results = run_typed(
             r#"
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (x: Natural x)
 (? (type of x))
 "#,
@@ -3318,7 +3318,7 @@ mod tests {
     fn lean_natural_type_constructors() {
         let results = run(
             r#"
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (zero: Natural zero)
 (succ: (Pi (Natural n) Natural))
 (? (zero of Natural))
@@ -3335,7 +3335,7 @@ mod tests {
     fn lean_boolean_type_constructors() {
         let results = run(
             r#"
-(Boolean: (Type 0))
+(Boolean: (Type 0) Boolean)
 (true-val: Boolean true-val)
 (false-val: Boolean false-val)
 (? (true-val of Boolean))
@@ -3351,7 +3351,7 @@ mod tests {
     fn lean_identity_function_type() {
         let results = run(
             r#"
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (identity: (Pi (Natural x) Natural))
 (? (identity of (Pi (Natural x) Natural)))
 "#,
@@ -3364,7 +3364,7 @@ mod tests {
     fn types_with_probabilities() {
         let results = run(
             r#"
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (zero: Natural zero)
 (? (zero of Natural))
 ((zero = zero) has probability 1)
@@ -3457,7 +3457,7 @@ mod tests {
         let results = run(
             r#"
 (a: a is a)
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (x: Natural x)
 ((a = a) has probability 1)
 (? (a = a))
@@ -3478,7 +3478,7 @@ mod tests {
     fn prefix_type_zero_natural() {
         let results = run(
             r#"
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (zero: Natural zero)
 (? (zero of Natural))
 "#,
@@ -3504,8 +3504,8 @@ mod tests {
     fn prefix_type_multiple_constructors() {
         let results = run(
             r#"
-(Natural: (Type 0))
-(Boolean: (Type 0))
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 (zero: Natural zero)
 (true-val: Boolean true-val)
 (? (zero of Natural))
@@ -3521,7 +3521,7 @@ mod tests {
     fn prefix_type_with_pi_constructor() {
         let results = run(
             r#"
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (zero: Natural zero)
 (succ: (Pi (Natural n) Natural))
 (? (zero of Natural))
@@ -3557,7 +3557,7 @@ mod tests {
     fn lambda_multi_param() {
         let results = run(
             r#"
-(Natural: (Type 0))
+(Natural: (Type 0) Natural)
 (? (lambda (Natural x, Natural y) (x + y)))
 "#,
             None,

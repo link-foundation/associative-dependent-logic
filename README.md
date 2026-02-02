@@ -224,16 +224,29 @@ Queries are evaluated and their truth value is printed to stdout.
 
 Types are just links — "everything is a link". The type system coexists with probabilistic logic.
 
+#### Universe Hierarchy
+
+The type system uses a **universe hierarchy** to avoid paradoxes (like Russell's paradox). Each `(Type N)` is itself a member of `(Type N+1)`:
+
+- `(Type 0)` — the universe of "small" types (Natural, Boolean, etc.)
+- `(Type 1)` — the universe that contains `(Type 0)` and types formed from `(Type 0)` types
+- `(Type 2)` — contains `(Type 1)`, and so on
+
+This mirrors the universe hierarchy in Lean 4 (`Type 0`, `Type 1`, ...) and Rocq (`Set`, `Type`, ...). The stratification prevents a type from containing itself, which would lead to logical inconsistency.
+
+In LiNo, universes are declared and automatically stratified:
+
+```lino
+(Type 0)                         # universe of small types
+(Type 1)                         # (Type 0) : (Type 1)
+```
+
 #### Type Declarations
 
 ```lino
-# Universe hierarchy
-(Type 0)
-(Type 1)
-
-# Type definition (complex type expression)
-(Natural: (Type 0))
-(Boolean: (Type 0))
+# Type definition follows the pattern: (SubType: Type SubType)
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 
 # Typed term via prefix type notation: (name: TypeName name)
 (zero: Natural zero)

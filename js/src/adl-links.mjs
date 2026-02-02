@@ -574,7 +574,7 @@ function defineForm(head, rhs, env){
     return 1;
   }
 
-  // Typed declaration with complex type expression: (Natural: (Type 0)), (succ: (Pi (Natural n) Natural))
+  // Typed declaration with complex type expression: (succ: (Pi (Natural n) Natural))
   // Only complex expressions (arrays) are accepted as type annotations in single-element form.
   // Simple name type annotations like (x: Natural) are NOT supported — use (x: Natural x) prefix form instead.
   if (rhs.length === 1 && Array.isArray(rhs[0])) {

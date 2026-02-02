@@ -11,9 +11,9 @@
 
 # === Define Types as Links ===
 # Types are just links with type annotations
-# Complex type expression: (Name: (Type 0))
-(Natural: (Type 0))
-(Boolean: (Type 0))
+# Prefix type notation: (SubType: Type SubType)
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
 
 # === Constructors using Prefix Type Notation ===
 # (name: TypeName name) — the LiNo-native way to declare typed terms
