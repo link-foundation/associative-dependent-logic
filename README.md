@@ -9,7 +9,7 @@ This project provides two equivalent implementations:
 - **[JavaScript](./js/)** — Node.js implementation using the official [links-notation](https://github.com/link-foundation/links-notation) parser
 - **[Rust](./rust/)** — Rust implementation using the official [links-notation](https://github.com/link-foundation/links-notation) crate
 
-Both implementations pass the same 93 tests and produce identical results.
+Both implementations pass the same 122 tests and produce identical results.
 
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -22,6 +22,7 @@ ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built 
 - Redefine logical operators with different semantics
 - Configure truth value ranges: `[0, 1]` or `[-1, 1]` (balanced/symmetric)
 - Configure logic valence: 2-valued ([Boolean](https://en.wikipedia.org/wiki/Boolean_algebra)), 3-valued ([ternary/Kleene](https://en.wikipedia.org/wiki/Three-valued_logic)), N-valued, or continuous
+- Use and redefine truth constants: `true`, `false`, `unknown`, `undefined`
 - Resolve paradoxical statements (e.g. the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox))
 - Perform decimal-precision arithmetic (`+`, `-`, `*`, `/`) — `0.1 + 0.2 = 0.3`, not `0.30000000000000004`
 - Query the truth value of complex expressions
@@ -122,6 +123,38 @@ Sets the number of discrete truth values. Default is `0` (continuous, no quantiz
 - `(valence: 2)` — [Boolean logic](https://en.wikipedia.org/wiki/Boolean_algebra): truth values are quantized to `{0, 1}`
 - `(valence: 3)` — [Ternary logic](https://en.wikipedia.org/wiki/Three-valued_logic): truth values are quantized to `{0, 0.5, 1}`
 - `(valence: N)` — [N-valued logic](https://en.wikipedia.org/wiki/Many-valued_logic): truth values are quantized to N evenly-spaced levels
+
+### Truth Constants
+
+The symbols `true`, `false`, `unknown`, and `undefined` are predefined with values based on the current range:
+
+| Constant | Default in `[0, 1]` | Default in `[-1, 1]` | Definition |
+|----------|---------------------|----------------------|------------|
+| `true`   | `1`                 | `1`                  | `max(range)` |
+| `false`  | `0`                 | `-1`                 | `min(range)` |
+| `unknown` | `0.5`              | `0`                  | `(max(range) - min(range)) / 2 + min(range)` |
+| `undefined` | `0.5`            | `0`                  | `(max(range) - min(range)) / 2 + min(range)` |
+
+These constants can be used directly in expressions:
+
+```lino
+(? true)              # -> 1 in [0,1], 1 in [-1,1]
+(? false)             # -> 0 in [0,1], -1 in [-1,1]
+(? unknown)           # -> 0.5 in [0,1], 0 in [-1,1]
+(? (not true))        # -> 0 in [0,1], -1 in [-1,1]
+(? (true and false))  # -> 0.5 (avg), 0 (avg in [-1,1])
+```
+
+Truth constants can be **redefined** to custom values:
+
+```lino
+(true: 0.8)           # Redefine true to 0.8
+(false: 0.2)          # Redefine false to 0.2
+(? true)              # -> 0.8
+(? false)             # -> 0.2
+```
+
+When the range changes (via `(range: ...)`), truth constants are automatically re-initialized to their defaults for the new range.
 
 ### Operator Redefinitions
 
@@ -288,7 +321,7 @@ In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Pr
 
 ## Testing
 
-Both implementations have 93 matching tests:
+Both implementations have 122 matching tests:
 
 ```bash
 # JavaScript
@@ -303,6 +336,7 @@ The test suites cover:
 - Evaluation logic and operator aggregators
 - Many-valued logics: unary, binary (Boolean), ternary (Kleene), quaternary, quinary, higher N-valued, and continuous (fuzzy)
 - Both `[0, 1]` and `[-1, 1]` ranges
+- Truth constants (`true`, `false`, `unknown`, `undefined`): defaults, redefinition, range changes, use in expressions, quantization
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
 

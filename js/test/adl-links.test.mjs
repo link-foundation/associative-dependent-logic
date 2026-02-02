@@ -928,3 +928,260 @@ describe('Decimal arithmetic operators', () => {
     assert.strictEqual(results[0], 1);
   });
 });
+
+// =============================================================================
+// Truth constants: true, false, unknown, undefined
+// These are predefined symbol probabilities based on the current range.
+// By default: (false: min(range)), (true: max(range)),
+//             (unknown: mid(range)), (undefined: mid(range))
+// They can be redefined by the user via (true: <value>), (false: <value>), etc.
+// See: https://github.com/link-foundation/associative-dependent-logic/issues/11
+// =============================================================================
+describe('Truth constants: default values in [0,1] range', () => {
+  it('true should default to 1 (max of range)', () => {
+    const results = run('(? true)');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('false should default to 0 (min of range)', () => {
+    const results = run('(? false)');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('unknown should default to 0.5 (mid of range)', () => {
+    const results = run('(? unknown)');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('undefined should default to 0.5 (mid of range)', () => {
+    const results = run('(? undefined)');
+    assert.strictEqual(results[0], 0.5);
+  });
+});
+
+describe('Truth constants: default values in [-1,1] range', () => {
+  it('true should default to 1 (max of range)', () => {
+    const results = run('(range: -1 1)\n(? true)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('false should default to -1 (min of range)', () => {
+    const results = run('(range: -1 1)\n(? false)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], -1);
+  });
+
+  it('unknown should default to 0 (mid of range)', () => {
+    const results = run('(range: -1 1)\n(? unknown)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('undefined should default to 0 (mid of range)', () => {
+    const results = run('(range: -1 1)\n(? undefined)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+  });
+});
+
+describe('Truth constants: redefinition via (true: value)', () => {
+  it('should allow redefining true', () => {
+    const results = run(`
+(true: 0.8)
+(? true)
+`);
+    assert.strictEqual(results[0], 0.8);
+  });
+
+  it('should allow redefining false', () => {
+    const results = run(`
+(false: 0.2)
+(? false)
+`);
+    assert.strictEqual(results[0], 0.2);
+  });
+
+  it('should allow redefining unknown', () => {
+    const results = run(`
+(unknown: 0.3)
+(? unknown)
+`);
+    assert.strictEqual(results[0], 0.3);
+  });
+
+  it('should allow redefining undefined', () => {
+    const results = run(`
+(undefined: 0.7)
+(? undefined)
+`);
+    assert.strictEqual(results[0], 0.7);
+  });
+
+  it('should allow redefining true and false in [-1,1] range', () => {
+    const results = run(`
+(range: -1 1)
+(true: 0.5)
+(false: -0.5)
+(? true)
+(? false)
+`, { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], -0.5);
+  });
+});
+
+describe('Truth constants: range change re-initializes defaults', () => {
+  it('should update truth constants when range changes', () => {
+    const results = run(`
+(? true)
+(? false)
+(range: -1 1)
+(? true)
+(? false)
+(? unknown)
+`);
+    assert.strictEqual(results.length, 5);
+    assert.strictEqual(results[0], 1);    // true in [0,1]
+    assert.strictEqual(results[1], 0);    // false in [0,1]
+    assert.strictEqual(results[2], 1);    // true in [-1,1]
+    assert.strictEqual(results[3], -1);   // false in [-1,1]
+    assert.strictEqual(results[4], 0);    // unknown in [-1,1]
+  });
+});
+
+describe('Truth constants: use in expressions', () => {
+  it('(not true) should equal false', () => {
+    const results = run('(? (not true))');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('(not false) should equal true', () => {
+    const results = run('(? (not false))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('(not unknown) should equal unknown (fixed point of negation)', () => {
+    const results = run('(? (not unknown))');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('(true and false) should equal 0.5 with avg aggregator', () => {
+    const results = run('(? (true and false))');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('(true or false) should equal 1 with max aggregator', () => {
+    const results = run('(? (true or false))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('(true and false) should equal 0 with min aggregator', () => {
+    const results = run(`
+(and: min)
+(? (true and false))
+`);
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('truth constants in [-1,1] range with not', () => {
+    const results = run(`
+(range: -1 1)
+(? (not true))
+(? (not false))
+(? (not unknown))
+`, { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], -1);   // not(1) = -1
+    assert.strictEqual(results[1], 1);    // not(-1) = 1
+    assert.strictEqual(results[2], 0);    // not(0) = 0
+  });
+});
+
+describe('Truth constants: with quantization (valence)', () => {
+  it('truth constants should work with binary valence', () => {
+    const results = run(`
+(valence: 2)
+(? true)
+(? false)
+(? unknown)
+`);
+    assert.strictEqual(results[0], 1);    // true = 1, quantized to 1
+    assert.strictEqual(results[1], 0);    // false = 0, quantized to 0
+    assert.strictEqual(results[2], 1);    // unknown = 0.5, quantized to 1 (round up)
+  });
+
+  it('truth constants should work with ternary valence', () => {
+    const results = run(`
+(valence: 3)
+(? true)
+(? false)
+(? unknown)
+`);
+    assert.strictEqual(results[0], 1);    // true = 1, quantized to 1
+    assert.strictEqual(results[1], 0);    // false = 0, quantized to 0
+    assert.strictEqual(results[2], 0.5);  // unknown = 0.5, quantized to 0.5
+  });
+
+  it('truth constants should work with ternary valence in [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(valence: 3)
+(? true)
+(? false)
+(? unknown)
+`, { lo: -1, hi: 1, valence: 3 });
+    assert.strictEqual(results[0], 1);    // true = 1
+    assert.strictEqual(results[1], -1);   // false = -1
+    assert.strictEqual(results[2], 0);    // unknown = 0
+  });
+});
+
+describe('Truth constants: Env API', () => {
+  it('Env should have truth constants initialized', () => {
+    const env = new Env();
+    assert.strictEqual(env.getSymbolProb('true'), 1);
+    assert.strictEqual(env.getSymbolProb('false'), 0);
+    assert.strictEqual(env.getSymbolProb('unknown'), 0.5);
+    assert.strictEqual(env.getSymbolProb('undefined'), 0.5);
+  });
+
+  it('Env with [-1,1] range should have correct truth constants', () => {
+    const env = new Env({ lo: -1, hi: 1 });
+    assert.strictEqual(env.getSymbolProb('true'), 1);
+    assert.strictEqual(env.getSymbolProb('false'), -1);
+    assert.strictEqual(env.getSymbolProb('unknown'), 0);
+    assert.strictEqual(env.getSymbolProb('undefined'), 0);
+  });
+
+  it('truth constants should survive operator redefinition', () => {
+    const results = run(`
+(and: min)
+(or: max)
+(? true)
+(? false)
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 0);
+  });
+});
+
+describe('Truth constants: liar paradox using truth constants', () => {
+  it('liar paradox with true/false constants in [0,1]', () => {
+    // "This statement is false" — the classic liar paradox
+    // Using the symbolic constant 'false' instead of numeric 0
+    const results = run(`
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('liar paradox with truth constants in [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+`, { lo: -1, hi: 1, valence: 3 });
+    assert.strictEqual(results[0], 0);
+  });
+});
