@@ -1531,3 +1531,66 @@ describe('Type System: backward compatibility', () => {
     assert.strictEqual(results[2], 1);
   });
 });
+
+describe('Type System: prefix type notation — (name: Type name)', () => {
+  it('(zero: Nat zero) declares zero has type Nat', () => {
+    const env = new Env();
+    run('(Nat : (Type 0))');
+    const results = run(`
+(Nat : (Type 0))
+(zero: Nat zero)
+(? (zero type-of Nat))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('(boolean: Type boolean) declares boolean has type Type', () => {
+    const results = run(`
+(Type 0)
+(Boolean: (Type 0) Boolean)
+(? (Boolean type-of (Type 0)))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('prefix notation with simple type names', () => {
+    const results = run(`
+(Nat : (Type 0))
+(Bool : (Type 0))
+(zero: Nat zero)
+(true-val: Bool true-val)
+(? (zero type-of Nat))
+(? (true-val type-of Bool))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('prefix notation coexists with colon notation', () => {
+    const results = run(`
+(Nat : (Type 0))
+(zero: Nat zero)
+(succ : Nat)
+(? (zero type-of Nat))
+(? (succ type-of Nat))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('type hierarchy: (type: type type), (boolean: type boolean)', () => {
+    const results = run(`
+(Type 0)
+(Type: (Type 0) Type)
+(Boolean: Type Boolean)
+(True: Boolean True)
+(False: Boolean False)
+(? (Boolean type-of Type))
+(? (True type-of Boolean))
+(? (False type-of Boolean))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+  });
+});

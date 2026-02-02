@@ -11,15 +11,18 @@
 
 # === Define Types as Links ===
 # Types are just links with type annotations
+# Colon notation: (Name: TypeExpr)
 (Nat: (Type 0))
 (Bool: (Type 0))
 
-# === Constructors ===
-# Constructors are links with Pi-types
-(zero: Nat)
+# === Constructors using Prefix Type Notation ===
+# (name: TypeName name) — the LiNo-native way to declare typed terms
+(zero: Nat zero)
+(true-val: Bool true-val)
+(false-val: Bool false-val)
+
+# Pi-types for function constructors
 (succ: (Pi (n: Nat) Nat))
-(true-val: Bool)
-(false-val: Bool)
 
 # === Type Checking via Queries ===
 # "Is zero of type Nat?" — querying the link network

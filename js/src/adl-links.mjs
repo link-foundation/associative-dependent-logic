@@ -501,6 +501,27 @@ function defineForm(head, rhs, env){
     return 1;
   }
 
+  // Prefix type notation: (name: TypeName name) → typed self-referential declaration
+  // e.g. (zero: Nat zero), (boolean: Type boolean), (true: Boolean true)
+  if (rhs.length === 2 && typeof rhs[0] === 'string' && typeof rhs[1] === 'string' && rhs[1] === head) {
+    const typeName = rhs[0];
+    // Only if typeName starts with uppercase (type convention) and is not an operator
+    if (/^[A-Z]/.test(typeName)) {
+      env.terms.add(head);
+      env.setType(head, typeName);
+      return 1;
+    }
+  }
+
+  // Prefix type notation with complex type: (name: (Type 0) name) → typed self-referential declaration
+  if (rhs.length === 2 && Array.isArray(rhs[0]) && typeof rhs[1] === 'string' && rhs[1] === head) {
+    const typeExpr = rhs[0];
+    env.terms.add(head);
+    env.setType(head, typeExpr);
+    evalNode(typeExpr, env);
+    return 1;
+  }
+
   // Typed variable/type declaration: (x : A) where A is not numeric
   // This sets the type of x to A, e.g. (x : Nat), (Nat : (Type 0))
   if (rhs.length === 1 && !isNum(typeof rhs[0] === 'string' ? rhs[0] : '')) {

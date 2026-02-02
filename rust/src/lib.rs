@@ -1061,6 +1061,30 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         }
     }
 
+    // Prefix type notation: (name: TypeName name) → typed self-referential declaration
+    // e.g. (zero: Nat zero), (boolean: Type boolean), (true: Boolean true)
+    if rhs.len() == 2 {
+        if let Node::Leaf(ref last) = rhs[1] {
+            if last == head {
+                match &rhs[0] {
+                    Node::Leaf(ref type_name) if type_name.starts_with(|c: char| c.is_uppercase()) => {
+                        env.terms.insert(head.to_string());
+                        env.types.insert(head.to_string(), type_name.clone());
+                        return EvalResult::Value(1.0);
+                    }
+                    Node::List(_) => {
+                        env.terms.insert(head.to_string());
+                        let type_key = key_of(&rhs[0]);
+                        env.types.insert(head.to_string(), type_key);
+                        eval_node(&rhs[0], env);
+                        return EvalResult::Value(1.0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     // Range configuration: (range: lo hi)
     if head == "range" && rhs.len() == 2 {
         if let (Node::Leaf(ref lo_s), Node::Leaf(ref hi_s)) = (&rhs[0], &rhs[1]) {
@@ -3396,6 +3420,87 @@ mod tests {
             None,
         );
         assert_eq!(results.len(), 3);
+        assert_eq!(results[0], 1.0);
+        assert_eq!(results[1], 1.0);
+        assert_eq!(results[2], 1.0);
+    }
+
+    // -------- Prefix type notation tests --------
+
+    #[test]
+    fn prefix_type_zero_nat() {
+        let results = run(
+            r#"
+(Nat : (Type 0))
+(zero: Nat zero)
+(? (zero type-of Nat))
+"#,
+            None,
+        );
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn prefix_type_complex_type() {
+        let results = run(
+            r#"
+(Type 0)
+(Boolean: (Type 0) Boolean)
+(? (Boolean type-of (Type 0)))
+"#,
+            None,
+        );
+        assert_eq!(results[0], 1.0);
+    }
+
+    #[test]
+    fn prefix_type_multiple_constructors() {
+        let results = run(
+            r#"
+(Nat : (Type 0))
+(Bool : (Type 0))
+(zero: Nat zero)
+(true-val: Bool true-val)
+(? (zero type-of Nat))
+(? (true-val type-of Bool))
+"#,
+            None,
+        );
+        assert_eq!(results[0], 1.0);
+        assert_eq!(results[1], 1.0);
+    }
+
+    #[test]
+    fn prefix_type_coexists_with_colon() {
+        let results = run(
+            r#"
+(Nat : (Type 0))
+(zero: Nat zero)
+(succ : Nat)
+(? (zero type-of Nat))
+(? (succ type-of Nat))
+"#,
+            None,
+        );
+        assert_eq!(results[0], 1.0);
+        assert_eq!(results[1], 1.0);
+    }
+
+    #[test]
+    fn prefix_type_hierarchy() {
+        let results = run(
+            r#"
+(Type 0)
+(Type: (Type 0) Type)
+(Boolean: Type Boolean)
+(True: Boolean True)
+(False: Boolean False)
+(? (Boolean type-of Type))
+(? (True type-of Boolean))
+(? (False type-of Boolean))
+"#,
+            None,
+        );
         assert_eq!(results[0], 1.0);
         assert_eq!(results[1], 1.0);
         assert_eq!(results[2], 1.0);
