@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound } from '../src/adl-links.mjs';
+import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute } from '../src/adl-links.mjs';
 
 const approx = (actual, expected, epsilon = 1e-9) =>
   assert.ok(Math.abs(actual - expected) < epsilon,
@@ -1183,5 +1183,351 @@ describe('Truth constants: liar paradox using truth constants', () => {
 (? (s = false))
 `, { lo: -1, hi: 1, valence: 3 });
     assert.strictEqual(results[0], 0);
+  });
+});
+
+// =============================================================================
+// Type System — "everything is a link"
+// Dependent types as links: types are stored as associations in the link network.
+// See: https://github.com/link-foundation/associative-dependent-logic/issues/13
+// =============================================================================
+
+describe('Type System: substitute (beta-reduction helper)', () => {
+  it('should substitute a variable in a string', () => {
+    assert.strictEqual(substitute('x', 'x', 'y'), 'y');
+  });
+
+  it('should not substitute a different variable', () => {
+    assert.strictEqual(substitute('y', 'x', 'z'), 'y');
+  });
+
+  it('should substitute in arrays', () => {
+    assert.deepStrictEqual(
+      substitute(['x', '+', '1'], 'x', '5'),
+      ['5', '+', '1']
+    );
+  });
+
+  it('should substitute recursively in nested arrays', () => {
+    assert.deepStrictEqual(
+      substitute(['+', 'x', ['+', 'x', '1']], 'x', '5'),
+      ['+', '5', ['+', '5', '1']]
+    );
+  });
+
+  it('should not substitute inside shadowing lambda bindings', () => {
+    const expr = ['lam', ['x', ':', 'Nat'], 'x'];
+    assert.deepStrictEqual(substitute(expr, 'x', '5'), expr);
+  });
+
+  it('should not substitute inside shadowing Pi bindings', () => {
+    const expr = ['Pi', ['x', ':', 'Nat'], 'x'];
+    assert.deepStrictEqual(substitute(expr, 'x', 'Bool'), expr);
+  });
+
+  it('should substitute free variables in lambda body', () => {
+    const expr = ['lam', ['y', ':', 'Nat'], 'x'];
+    assert.deepStrictEqual(
+      substitute(expr, 'x', '5'),
+      ['lam', ['y', ':', 'Nat'], '5']
+    );
+  });
+});
+
+describe('Type System: universe sorts — (Type N)', () => {
+  it('should evaluate (Type 0) as a valid expression', () => {
+    const env = new Env();
+    const result = evalNode(['Type', '0'], env);
+    assert.strictEqual(result, 1);
+  });
+
+  it('should store type of (Type 0) as (Type 1)', () => {
+    const env = new Env();
+    evalNode(['Type', '0'], env);
+    assert.strictEqual(env.getType(['Type', '0']), '(Type 1)');
+  });
+
+  it('should store type of (Type 1) as (Type 2)', () => {
+    const env = new Env();
+    evalNode(['Type', '1'], env);
+    assert.strictEqual(env.getType(['Type', '1']), '(Type 2)');
+  });
+
+  it('(Type 0) via run should work', () => {
+    const results = run('(? (Type 0))');
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+describe('Type System: typed variable declarations — (x : A)', () => {
+  it('should declare a typed variable', () => {
+    const results = run(`
+(x : Nat)
+(? (x type-of Nat))
+`);
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('should return false for wrong type', () => {
+    const results = run(`
+(x : Nat)
+(? (x type-of Bool))
+`);
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('should support multiple typed declarations', () => {
+    const results = run(`
+(x : Nat)
+(y : Bool)
+(? (x type-of Nat))
+(? (y type-of Bool))
+(? (x type-of Bool))
+`);
+    assert.strictEqual(results.length, 3);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 0);
+  });
+});
+
+describe('Type System: Pi-types — (Pi (x : A) B)', () => {
+  it('should evaluate a Pi-type as valid', () => {
+    const results = run('(? (Pi (x : Nat) Nat))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('should register Pi-type in the type environment', () => {
+    const env = new Env();
+    evalNode(['Pi', ['x', ':', 'Nat'], 'Nat'], env);
+    const typeOfPi = env.getType(['Pi', ['x', ':', 'Nat'], 'Nat']);
+    assert.ok(typeOfPi !== null);
+  });
+
+  it('should register the parameter type from Pi', () => {
+    const env = new Env();
+    evalNode(['Pi', ['n', ':', 'Nat'], ['Vec', 'n', 'Bool']], env);
+    assert.ok(env.terms.has('n'));
+    assert.strictEqual(env.getType('n'), 'Nat');
+  });
+
+  it('non-dependent function type: (Pi (_ : Nat) Bool)', () => {
+    const results = run('(? (Pi (_ : Nat) Bool))');
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+describe('Type System: lambda abstraction — (lam (x : A) body)', () => {
+  it('should evaluate a lambda as valid', () => {
+    const results = run('(? (lam (x : Nat) x))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('should store lambda type as a Pi-type', () => {
+    const env = new Env();
+    evalNode(['lam', ['x', ':', 'Nat'], 'x'], env);
+    const t = env.getType(['lam', ['x', ':', 'Nat'], 'x']);
+    assert.ok(t !== null);
+    assert.ok(t.includes('Pi'));
+  });
+});
+
+describe('Type System: application — (app f x) with beta-reduction', () => {
+  it('should beta-reduce (app (lam (x : Nat) x) 0.5) to 0.5', () => {
+    const results = run('(? (app (lam (x : Nat) x) 0.5))');
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('should beta-reduce with arithmetic in body', () => {
+    const results = run('(? (app (lam (x : Nat) (x + 0.1)) 0.2))');
+    assert.strictEqual(results[0], 0.3);
+  });
+
+  it('should apply named lambda via (app name arg)', () => {
+    const results = run(`
+(id: lam (x : Nat) x)
+(? (app id 0.7))
+`);
+    assert.strictEqual(results[0], 0.7);
+  });
+
+  it('should apply named lambda via prefix form (name arg)', () => {
+    const results = run(`
+(id: lam (x : Nat) x)
+(? (id 0.7))
+`);
+    assert.strictEqual(results[0], 0.7);
+  });
+
+  it('should apply const function', () => {
+    const results = run('(? (app (lam (x : Nat) 0.5) 0.9))');
+    assert.strictEqual(results[0], 0.5);
+  });
+});
+
+describe('Type System: type-of query — (expr type-of Type)', () => {
+  it('should confirm type with type-of link', () => {
+    const results = run(`
+(x : Nat)
+(? (x type-of Nat))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('should reject wrong type', () => {
+    const results = run(`
+(x : Nat)
+(? (x type-of Bool))
+`);
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('should work with universe types', () => {
+    const results = run(`
+(Type 0)
+(? ((Type 0) type-of (Type 1)))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+describe('Type System: ?type query — type inference', () => {
+  it('should infer type of a typed variable', () => {
+    const results = run(`
+(x : Nat)
+(?type x)
+`);
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0], 'Nat');
+  });
+
+  it('should return unknown for untyped expressions', () => {
+    const results = run(`
+(a: a is a)
+(?type a)
+`);
+    assert.strictEqual(results[0], 'unknown');
+  });
+});
+
+describe('Type System: encoding Lean/Rocq core concepts as links', () => {
+  it('should define natural number type and constructors', () => {
+    const results = run(`
+(Nat : (Type 0))
+(zero : Nat)
+(succ : (Pi (n : Nat) Nat))
+(? (zero type-of Nat))
+(? (Nat type-of (Type 0)))
+`);
+    assert.strictEqual(results.length, 2);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('should define Bool type and constructors', () => {
+    const results = run(`
+(Bool : (Type 0))
+(true-val : Bool)
+(false-val : Bool)
+(? (true-val type-of Bool))
+(? (false-val type-of Bool))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('should define identity function with type', () => {
+    const results = run(`
+(Nat : (Type 0))
+(id : (Pi (x : Nat) Nat))
+(? (id type-of (Pi (x : Nat) Nat)))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('should combine types with probability assignments', () => {
+    const results = run(`
+(Nat : (Type 0))
+(zero : Nat)
+(? (zero type-of Nat))
+((zero = zero) has probability 1)
+(? (zero = zero))
+`);
+    assert.strictEqual(results.length, 2);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('should define and apply identity function', () => {
+    const results = run(`
+(id: lam (x : Nat) x)
+(? (app id 0.5))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+});
+
+describe('Type System: backward compatibility', () => {
+  it('existing term definitions still work', () => {
+    const results = run(`
+(a: a is a)
+(? (a = a))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('existing probability assignments still work', () => {
+    const results = run(`
+(a: a is a)
+((a = a) has probability 0.7)
+(? (a = a))
+`);
+    approx(results[0], 0.7);
+  });
+
+  it('existing operators still work', () => {
+    const results = run(`
+(and: min)
+(or: max)
+(? (0.3 and 0.7))
+(? (0.3 or 0.7))
+`);
+    assert.strictEqual(results[0], 0.3);
+    assert.strictEqual(results[1], 0.7);
+  });
+
+  it('liar paradox still works', () => {
+    const results = run(`
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+`);
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], 0.5);
+  });
+
+  it('arithmetic still works', () => {
+    const results = run('(? (0.1 + 0.2))');
+    assert.strictEqual(results[0], 0.3);
+  });
+
+  it('mixed: types alongside probabilistic logic', () => {
+    const results = run(`
+(a: a is a)
+(Nat : (Type 0))
+(x : Nat)
+((a = a) has probability 1)
+(? (a = a))
+(? (x type-of Nat))
+(? (Type 0))
+`);
+    assert.strictEqual(results.length, 3);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
   });
 });

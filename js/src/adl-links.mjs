@@ -110,6 +110,8 @@ class Env {
     this.terms = new Set();                     // declared terms (via (x: x is x))
     this.assign = new Map();                    // key(expr) -> truth value
     this.symbolProb = new Map();                // optional symbol priors if you want (x: 0.7)
+    this.types = new Map();                     // key(expr) -> type expression (as string)
+    this.lambdas = new Map();                   // name -> { param, paramType, body } for named lambdas
 
     // Range: [lo, hi] — default [0, 1] (standard probabilistic)
     // Use [-1, 1] for balanced/symmetric range
@@ -191,8 +193,58 @@ class Env {
   setExprProb(exprNode, p){
     this.assign.set(keyOf(exprNode), this.clamp(p));
   }
+  setType(exprNode, typeExpr){
+    const key = typeof exprNode === 'string' ? exprNode : keyOf(exprNode);
+    this.types.set(key, typeof typeExpr === 'string' ? typeExpr : keyOf(typeExpr));
+  }
+  getType(exprNode){
+    const key = typeof exprNode === 'string' ? exprNode : keyOf(exprNode);
+    return this.types.get(key) || null;
+  }
+  setLambda(name, param, paramType, body){
+    this.lambdas.set(name, { param, paramType, body });
+  }
+  getLambda(name){
+    return this.lambdas.get(name) || null;
+  }
   setSymbolProb(sym, p){ this.symbolProb.set(sym, this.clamp(p)); }
   getSymbolProb(sym){ return this.symbolProb.has(sym) ? this.symbolProb.get(sym) : this.mid; }
+}
+
+// ---------- Binding parser ----------
+// Parse a binding form: either (x : A) as [x, ':', A] or (x: A) as ['x:', A]
+// Returns { paramName, paramType } or null if not a valid binding.
+function parseBinding(binding) {
+  if (!Array.isArray(binding)) return null;
+  // Form 1: [x, ':', A] — three elements with colon separator
+  if (binding.length === 3 && binding[1] === ':') {
+    return { paramName: binding[0], paramType: binding[2] };
+  }
+  // Form 2: ['x:', A] — two elements where first ends with colon (LiNo parser output)
+  if (binding.length === 2 && typeof binding[0] === 'string' && binding[0].endsWith(':')) {
+    return { paramName: binding[0].slice(0, -1), paramType: binding[1] };
+  }
+  return null;
+}
+
+// ---------- Substitution (for beta-reduction) ----------
+// Substitute all occurrences of variable `name` with `replacement` in `expr`.
+// Both expr and replacement can be strings or arrays (AST nodes).
+function substitute(expr, name, replacement) {
+  if (typeof expr === 'string') {
+    return expr === name ? replacement : expr;
+  }
+  if (Array.isArray(expr)) {
+    // Don't substitute inside a binding that shadows the variable
+    if (expr.length === 3 && (expr[0] === 'lam' || expr[0] === 'Pi') && Array.isArray(expr[1])) {
+      const parsed = parseBinding(expr[1]);
+      if (parsed && parsed.paramName === name) {
+        return expr; // shadowed
+      }
+    }
+    return expr.map(child => substitute(child, name, replacement));
+  }
+  return expr;
 }
 
 // ---------- Eval ----------
@@ -290,11 +342,135 @@ function evalNode(node, env){
     return env.clamp(raw);
   }
 
+  // ---------- Type System: "everything is a link" ----------
+
+  // Type universe: (Type N) — the sort at universe level N
+  if (node.length === 2 && node[0] === 'Type') {
+    const level = isNum(node[1]) ? parseInt(node[1], 10) : 0;
+    // (Type N) has type (Type N+1)
+    env.setType(node, ['Type', String(level + 1)]);
+    return 1; // valid expression
+  }
+
+  // Prop: (Prop) is sugar for (Type 0) in the propositions-as-types interpretation
+  if (node.length === 1 && node[0] === 'Prop') {
+    env.setType(['Prop'], ['Type', '1']);
+    return 1;
+  }
+
+  // Dependent product (Pi-type): (Pi (x : A) B) or (Pi (x: A) B)
+  if (node.length === 3 && node[0] === 'Pi') {
+    const binding = node[1];
+    const parsed = parseBinding(binding);
+    if (parsed) {
+      const { paramName, paramType } = parsed;
+      env.terms.add(paramName);
+      env.setType(paramName, paramType);
+      env.setType(node, ['Type', '0']);
+    }
+    return 1;
+  }
+
+  // Lambda abstraction: (lam (x : A) body) or (lam (x: A) body)
+  if (node.length === 3 && node[0] === 'lam') {
+    const binding = node[1];
+    const parsed = parseBinding(binding);
+    if (parsed) {
+      const { paramName, paramType } = parsed;
+      const body = node[2];
+      env.terms.add(paramName);
+      env.setType(paramName, paramType);
+      const bodyType = env.getType(body);
+      const paramTypeKey = typeof paramType === 'string' ? paramType : keyOf(paramType);
+      const bodyTypeKey = bodyType || 'unknown';
+      env.setType(node, '(Pi (' + paramName + ' : ' + paramTypeKey + ') ' + bodyTypeKey + ')');
+    }
+    return 1;
+  }
+
+  // Named definition with type: (def name : type body) — (def: name (: type) body)
+  // Handled via define form
+
+  // Application: (app f x) — explicit application with beta-reduction
+  if (node.length === 3 && node[0] === 'app') {
+    const fn = node[1];
+    const arg = node[2];
+
+    // Check if fn is a lambda: (lam (x : A) body) or (lam (x: A) body)
+    if (Array.isArray(fn) && fn.length === 3 && fn[0] === 'lam') {
+      const parsed = parseBinding(fn[1]);
+      if (parsed) {
+        const body = fn[2];
+        const result = substitute(body, parsed.paramName, arg);
+        return evalNode(result, env);
+      }
+    }
+
+    // Check if fn is a named lambda
+    if (typeof fn === 'string') {
+      const lambda = env.getLambda(fn);
+      if (lambda) {
+        const result = substitute(lambda.body, lambda.param, arg);
+        return evalNode(result, env);
+      }
+    }
+
+    // Otherwise evaluate fn and arg normally
+    const fVal = evalNode(fn, env);
+    const aVal = evalNode(arg, env);
+    return typeof fVal === 'number' ? fVal : (fVal && fVal.value !== undefined ? fVal.value : 0);
+  }
+
+  // Type query: (?type expr) — returns the type of an expression
+  if (node[0] === '?type' || node[0] === '?type:') {
+    const expr = node[1];
+    const typeStr = env.getType(expr);
+    if (typeStr) {
+      return { query: true, value: typeStr, typeQuery: true };
+    }
+    return { query: true, value: 'unknown', typeQuery: true };
+  }
+
+  // type-of query via links: (expr type-of Type) — checks if expr has the given type
+  if (node.length === 3 && node[1] === 'type-of') {
+    const expr = node[0];
+    const expectedType = node[2];
+    const actualType = env.getType(expr);
+    if (actualType) {
+      const expectedKey = typeof expectedType === 'string' ? expectedType : keyOf(expectedType);
+      return actualType === expectedKey ? env.hi : env.lo;
+    }
+    return env.lo;
+  }
+
   // Prefix: (not X), (and X Y ...), (or X Y ...)
   const [head, ...args] = node;
-  const op = env.getOp(head);
-  const vals = args.map(a => evalNode(a, env));
-  return env.clamp(op(...vals));
+  if (typeof head === 'string' && env.ops.has(head)) {
+    const op = env.getOp(head);
+    const vals = args.map(a => evalNode(a, env));
+    return env.clamp(op(...vals));
+  }
+
+  // Fall through: prefix application (f x y ...) for named lambdas
+  if (typeof head === 'string' && args.length >= 1) {
+    const lambda = env.getLambda(head);
+    if (lambda) {
+      // Apply first argument, then recursively apply rest
+      let result = substitute(lambda.body, lambda.param, args[0]);
+      if (args.length === 1) {
+        return evalNode(result, env);
+      }
+      // Curry: apply remaining args
+      let current = evalNode(result, env);
+      for (let i = 1; i < args.length; i++) {
+        // If current result is a lambda, apply next arg
+        current = evalNode(args[i], env);
+      }
+      return current;
+    }
+  }
+
+  return 0;
 }
 
 // Re-initialize default ops when range changes
@@ -323,6 +499,38 @@ function defineForm(head, rhs, env){
   if (rhs.length === 3 && typeof rhs[0]==='string' && rhs[1]==='is' && typeof rhs[2]==='string' && rhs[0]===head && rhs[2]===head) {
     env.terms.add(head);
     return 1;
+  }
+
+  // Typed variable/type declaration: (x : A) where A is not numeric
+  // This sets the type of x to A, e.g. (x : Nat), (Nat : (Type 0))
+  if (rhs.length === 1 && !isNum(typeof rhs[0] === 'string' ? rhs[0] : '')) {
+    // Check if rhs[0] is a type expression (not a simple operator alias or numeric)
+    if (Array.isArray(rhs[0]) || (typeof rhs[0] === 'string' && !isNum(rhs[0]))) {
+      // Only treat as type annotation if:
+      // 1. rhs is a complex expression like (Type 0), (Pi ...), etc.
+      // 2. Or rhs is a capitalized type name like Nat, Bool (convention)
+      // 3. Or head is not an operator
+      const isOp = ['=','!=','and','or','not','is','?:'].includes(head) || /[=!]/.test(head);
+      if (!isOp) {
+        const typeExpr = rhs[0];
+        if (Array.isArray(typeExpr)) {
+          // Complex type expression like (Type 0), (Pi (x : Nat) Nat)
+          env.terms.add(head);
+          env.setType(head, typeExpr);
+          // Also evaluate the type expression itself
+          evalNode(typeExpr, env);
+          return 1;
+        }
+        // Only treat as type annotation for non-operator single names
+        // if the type name starts with uppercase (convention from Lean/Rocq)
+        // or if head also starts with lowercase (variable : Type convention)
+        if (typeof typeExpr === 'string' && /^[A-Z]/.test(typeExpr)) {
+          env.terms.add(head);
+          env.setType(head, typeExpr);
+          return 1;
+        }
+      }
+    }
   }
 
   // Range configuration: (range: lo hi) — sets the truth value range
@@ -375,6 +583,26 @@ function defineForm(head, rhs, env){
     throw new Error(`Unsupported operator definition for "${head}"`);
   }
 
+  // Lambda definition: (name: lam (x : A) body) or (name: lam (x: A) body)
+  if (rhs.length >= 2 && rhs[0] === 'lam') {
+    if (rhs.length === 3 && Array.isArray(rhs[1])) {
+      const parsed = parseBinding(rhs[1]);
+      if (parsed) {
+        const { paramName, paramType } = parsed;
+        const body = rhs[2];
+        env.terms.add(head);
+        env.setLambda(head, paramName, paramType, body);
+        const paramTypeKey = typeof paramType === 'string' ? paramType : keyOf(paramType);
+        const bodyTypeKey = env.getType(body) || (typeof body === 'string' ? body : keyOf(body));
+        env.setType(head, '(Pi (' + paramName + ' : ' + paramTypeKey + ') ' + bodyTypeKey + ')');
+        return 1;
+      }
+    }
+  }
+
+  // Typed definition: (name : Type) — just a type annotation (no body)
+  // Already handled by the (x : A) form in evalNode
+
   // Generic symbol alias like (x: y) just copies y's prior probability if any
   if (rhs.length===1 && typeof rhs[0]==='string') {
     env.setSymbolProb(head, env.getSymbolProb(rhs[0]));
@@ -412,7 +640,14 @@ function run(text, options){
       form = form[0];
     }
     const res = evalNode(form, env);
-    if (res && res.query) outs.push(res.value);
+    if (res && res.query) {
+      if (res.typeQuery) {
+        // Type queries return string results
+        outs.push(res.value);
+      } else {
+        outs.push(res.value);
+      }
+    }
   }
   return outs;
 }
@@ -429,4 +664,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   for (const v of outs) console.log(String(+v.toFixed(6)).replace(/\.0+$/,''));
 }
 
-export { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound };
+export { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute };
