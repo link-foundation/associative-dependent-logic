@@ -19,10 +19,20 @@ use std::fmt;
 
 /// Parse LiNo text into a vector of link strings (each a top-level parenthesized expression).
 pub fn parse_lino(text: &str) -> Vec<String> {
+    // Strip line comments (# ...) before parsing — LiNo parser doesn't handle them
+    let stripped: String = text
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') { "" } else { line }
+        })
+        .collect::<Vec<&str>>()
+        .join("\n");
+
     // The links-notation crate treats blank lines as group separators,
     // so we split the input by blank lines and parse each segment separately.
     let mut all_links = Vec::new();
-    for segment in text.split("\n\n") {
+    for segment in stripped.split("\n\n") {
         let trimmed = segment.trim();
         if trimmed.is_empty() {
             continue;

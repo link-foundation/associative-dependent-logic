@@ -1,0 +1,44 @@
+# Dependent Types in Links Notation
+# Demonstrating how types are just links — "everything is a link"
+#
+# This example shows how the core of dependent type systems like
+# Lean 4 and Rocq (Coq) can be expressed in LiNo.
+
+# === Universe Hierarchy ===
+# (Type 0) : (Type 1) : (Type 2) : ...
+(Type 0)
+(Type 1)
+
+# === Define Types as Links ===
+# Types are just links with type annotations
+(Nat: (Type 0))
+(Bool: (Type 0))
+
+# === Constructors ===
+# Constructors are links with Pi-types
+(zero: Nat)
+(succ: (Pi (n: Nat) Nat))
+(true-val: Bool)
+(false-val: Bool)
+
+# === Type Checking via Queries ===
+# "Is zero of type Nat?" — querying the link network
+(? (zero type-of Nat))
+(? (Nat type-of (Type 0)))
+
+# === Functions as Links ===
+# Define identity function: id(x) = x
+(id: lam (x: Nat) x)
+
+# Apply identity function
+(? (app id 0.7))
+
+# === Combining Types with Probabilistic Logic ===
+# The type system coexists with the probabilistic logic
+((zero = zero) has probability 1)
+(? (zero = zero))
+
+# The liar paradox still works alongside types
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))

@@ -616,7 +616,9 @@ function defineForm(head, rhs, env){
 // ---------- Runner ----------
 function run(text, options){
   const parser = new Parser();
-  const links = parser.parse(text);
+  // Strip line comments (# ...) before parsing — LiNo parser doesn't handle them
+  const stripped = text.replace(/^[ \t]*#.*$/gm, '').replace(/\n{3,}/g, '\n\n');
+  const links = parser.parse(stripped);
 
   // Convert each top-level LiNo link to an AST by re-tokenizing that link only.
   // Filter out comment-only links (starting with #)
@@ -661,7 +663,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   const text = fs.readFileSync(file, 'utf8');
   const outs = run(text);
-  for (const v of outs) console.log(String(+v.toFixed(6)).replace(/\.0+$/,''));
+  for (const v of outs) {
+    if (typeof v === 'string') {
+      console.log(v);
+    } else {
+      console.log(String(+v.toFixed(6)).replace(/\.0+$/,''));
+    }
+  }
 }
 
 export { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute };
