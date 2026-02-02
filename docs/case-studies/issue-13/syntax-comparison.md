@@ -1,18 +1,18 @@
-# Syntax Comparison: Lean 4 / Rocq / LiNo (Proposed)
+# Syntax Comparison: Lean 4 / Rocq / LiNo
 
-This document shows how core dependent type theory constructs would look in Lean 4, Rocq, and our proposed LiNo encoding.
+This document shows how core dependent type theory constructs look in Lean 4, Rocq, and our LiNo encoding. Items marked ✅ are implemented in v0.7.0; items marked 📋 are proposed for future phases.
 
 ## Core Constructs
 
-### 1. Universe Sorts
+### 1. Universe Sorts ✅
 
-| Concept | Lean 4 | Rocq | LiNo (Proposed) |
-|---------|--------|------|-----------------|
+| Concept | Lean 4 | Rocq | LiNo |
+|---------|--------|------|------|
 | Type of small types | `Type` or `Type 0` | `Set` or `Type` | `(Type 0)` |
 | Type of types | `Type 1` | `Type` | `(Type 1)` |
 | Propositions | `Prop` | `Prop` | `(Prop)` or `(Type 0)` |
 
-### 2. Variable Declarations
+### 2. Variable Declarations ✅
 
 ```lean
 -- Lean 4
@@ -25,11 +25,11 @@ Variable x : nat.
 ```
 
 ```lino
-# LiNo (Proposed)
-(x : Nat)
+# LiNo (Implemented)
+(x: Nat)
 ```
 
-### 3. Function Types (Non-Dependent)
+### 3. Function Types (Non-Dependent) ✅
 
 ```lean
 -- Lean 4
@@ -42,13 +42,11 @@ nat -> bool
 ```
 
 ```lino
-# LiNo (Proposed)
-(Pi (_ : Nat) Bool)
-# or sugar:
-(Nat -> Bool)
+# LiNo (Implemented)
+(Pi (_: Nat) Bool)
 ```
 
-### 4. Dependent Product (Π-Type / Forall)
+### 4. Dependent Product (Π-Type / Forall) ✅
 
 ```lean
 -- Lean 4
@@ -63,13 +61,11 @@ forall (n : nat), Vec n bool
 ```
 
 ```lino
-# LiNo (Proposed)
-(Pi (n : Nat) (Vec n Bool))
-# or:
-(forall (n : Nat) (Vec n Bool))
+# LiNo (Implemented)
+(Pi (n: Nat) (Vec n Bool))
 ```
 
-### 5. Lambda Abstraction
+### 5. Lambda Abstraction ✅
 
 ```lean
 -- Lean 4
@@ -82,13 +78,11 @@ fun (x : nat) => x + 1
 ```
 
 ```lino
-# LiNo (Proposed)
-(lam (x : Nat) (+ x 1))
-# or:
-(fun (x : Nat) (+ x 1))
+# LiNo (Implemented)
+(lam (x: Nat) (+ x 1))
 ```
 
-### 6. Function Application
+### 6. Function Application ✅
 
 ```lean
 -- Lean 4
@@ -103,14 +97,11 @@ f x y z
 ```
 
 ```lino
-# LiNo (Proposed)
-(f x)
-(f x y z)
-# Note: multi-argument application is sugar for nested applications:
-# (f x y z) = (((f x) y) z)
+# LiNo (Implemented)
+(app f x)
 ```
 
-### 7. Let Binding
+### 7. Let Binding 📋
 
 ```lean
 -- Lean 4
@@ -124,10 +115,10 @@ let x : nat := 5 in x + 1
 
 ```lino
 # LiNo (Proposed)
-(let (x : Nat) 5 (+ x 1))
+(let (x: Nat) 5 (+ x 1))
 ```
 
-### 8. Inductive Type Definitions
+### 8. Inductive Type Definitions 📋
 
 ```lean
 -- Lean 4
@@ -150,7 +141,7 @@ Inductive nat : Set :=
   (succ : (Pi (_ : Nat) Nat)))
 ```
 
-### 9. Pattern Matching / Recursion
+### 9. Pattern Matching / Recursion 📋
 
 ```lean
 -- Lean 4
@@ -177,7 +168,7 @@ Fixpoint add (a b : nat) : nat :=
       ((succ n) => (succ (add n b)))))))
 ```
 
-### 10. Propositions and Proofs
+### 10. Propositions and Proofs 📋
 
 ```lean
 -- Lean 4
@@ -207,7 +198,7 @@ Qed.
       ((succ m) => (cong succ (plus_zero m))))))
 ```
 
-### 11. Dependent Sum (Σ-Type / Exists)
+### 11. Dependent Sum (Σ-Type / Exists) 📋
 
 ```lean
 -- Lean 4

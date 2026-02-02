@@ -93,14 +93,14 @@ ADL is a **probabilistic logic framework** built on [Links Notation (LiNo)](http
 | Redefinable operators | Yes | `(and: min)`, `(!=: not =)` |
 | Decimal-precision arithmetic | Yes | `0.1 + 0.2 = 0.3` |
 | Paradox resolution | Yes | Liar paradox → midpoint |
-| **Type annotations** | **No** | No way to say `(x : Nat)` |
-| **Dependent products** | **No** | No `∀ (x : A), B` |
-| **Lambda abstraction** | **No** | No `λ (x : A), e` |
-| **Application** | **Partial** | Prefix operators exist but not general application |
-| **Universe hierarchy** | **No** | No `Type₀ : Type₁ : ...` |
-| **Substitution** | **No** | No β-reduction |
-| **Normalization** | **No** | No reduction to normal form |
-| **Type checking** | **No** | No judgment `Γ ⊢ e : T` |
+| **Type annotations** | **Yes** (v0.7.0) | `(x: Nat)` — typed declarations stored as links |
+| **Dependent products** | **Yes** (v0.7.0) | `(Pi (x: A) B)` — Π-types as links |
+| **Lambda abstraction** | **Yes** (v0.7.0) | `(lam (x: A) e)` — lambdas as links |
+| **Application** | **Yes** (v0.7.0) | `(app f x)` with β-reduction |
+| **Universe hierarchy** | **Yes** (v0.7.0) | `(Type 0)`, `(Type 1)`, ... |
+| **Substitution** | **Yes** (v0.7.0) | Full β-reduction with variable shadowing |
+| **Normalization** | **Partial** | Single-step β-reduction (no full normalization) |
+| **Type checking** | **Partial** | `type-of` queries and `?type` inference |
 
 ### LiNo Syntax Recap
 
@@ -517,20 +517,20 @@ In this approach, the entire type system is encoded as an associative network of
 
 ## Recommended Approach
 
-### Phase 1: Option A (Shallow Embedding) — Start Here
+### Phase 1: Option A (Shallow Embedding) — ✅ Implemented (v0.7.0)
 
-Begin by extending the ADL evaluator to handle the 5 core expression forms of the CoC. This is the minimum viable step:
+The ADL evaluator has been extended with all 5 core expression forms of the CoC:
 
-1. Add `(Type N)` as universe sorts
-2. Add `(Pi (x : A) B)` for dependent products
-3. Add `(lam (x : A) e)` for lambda abstraction
-4. Add `(app f x)` for application (or detect it from list structure)
-5. Implement substitution and β-reduction
-6. Implement basic type checking/inference
+1. ✅ `(Type N)` — universe sorts with automatic hierarchy `(Type 0) : (Type 1) : ...`
+2. ✅ `(Pi (x: A) B)` — dependent products (Π-types)
+3. ✅ `(lam (x: A) e)` — lambda abstraction with typed parameters
+4. ✅ `(app f x)` — application with full β-reduction
+5. ✅ Substitution with variable shadowing support
+6. ✅ Type checking via `type-of` queries and `?type` inference
 
-**Estimated scope:** ~500 lines of new code per implementation (JS + Rust), plus ~100 new tests.
+**Implementation:** ~500 lines of new code in each implementation (JS + Rust), plus 41 new tests each (all backward-compatible with existing 122 tests).
 
-This can be done using [VictorTaelin's CoC implementation](https://github.com/VictorTaelin/calculus-of-constructions) as a reference for the JavaScript side, and the [Typechecker Zoo](https://sdiehl.github.io/typechecker-zoo/coc/calculus-of-constructions.html) for the Rust side.
+**Key design principle:** "Everything is a link" — types are stored as associations in the link network, type-checking is querying the network, and the type system coexists with the probabilistic logic engine.
 
 ### Phase 2: Option C (Probabilistic Extension) — The Novel Contribution
 
