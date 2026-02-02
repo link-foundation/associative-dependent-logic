@@ -554,7 +554,7 @@ function defineForm(head, rhs, env){
   }
 
   // Prefix type notation: (name: TypeName name) → typed self-referential declaration
-  // e.g. (zero: Nat zero), (boolean: Type boolean), (true: Boolean true)
+  // e.g. (zero: Natural zero), (boolean: Type boolean), (true: Boolean true)
   if (rhs.length === 2 && typeof rhs[0] === 'string' && typeof rhs[1] === 'string' && rhs[1] === head) {
     const typeName = rhs[0];
     // Only if typeName starts with uppercase (type convention) and is not an operator
@@ -574,9 +574,9 @@ function defineForm(head, rhs, env){
     return 1;
   }
 
-  // Typed declaration with complex type expression: (Nat: (Type 0)), (succ: (Pi (Natural n) Natural))
+  // Typed declaration with complex type expression: (Natural: (Type 0)), (succ: (Pi (Natural n) Natural))
   // Only complex expressions (arrays) are accepted as type annotations in single-element form.
-  // Simple name type annotations like (x: Nat) are NOT supported — use (x: Nat x) prefix form instead.
+  // Simple name type annotations like (x: Natural) are NOT supported — use (x: Natural x) prefix form instead.
   if (rhs.length === 1 && Array.isArray(rhs[0])) {
     const isOp = ['=','!=','and','or','not','is','?:'].includes(head) || /[=!]/.test(head);
     if (!isOp) {

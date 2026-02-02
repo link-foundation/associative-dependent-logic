@@ -1105,7 +1105,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
     }
 
     // Prefix type notation: (name: TypeName name) → typed self-referential declaration
-    // e.g. (zero: Nat zero), (boolean: Type boolean), (true: Boolean true)
+    // e.g. (zero: Natural zero), (boolean: Type boolean), (true: Boolean true)
     if rhs.len() == 2 {
         if let Node::Leaf(ref last) = rhs[1] {
             if last == head {
@@ -1224,9 +1224,9 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         }
     }
 
-    // Typed declaration with complex type expression: (Nat: (Type 0)), (succ: (Pi (Natural n) Natural))
+    // Typed declaration with complex type expression: (Natural: (Type 0)), (succ: (Pi (Natural n) Natural))
     // Only complex expressions (arrays/lists) are accepted as type annotations in single-element form.
-    // Simple name type annotations like (x: Nat) are NOT supported — use (x: Nat x) prefix form instead.
+    // Simple name type annotations like (x: Natural) are NOT supported — use (x: Natural x) prefix form instead.
     if rhs.len() == 1 {
         let is_op = head == "="
             || head == "!="
