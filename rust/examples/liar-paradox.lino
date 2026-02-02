@@ -1,0 +1,8 @@
+(s: s is s)
+(!=: not =)
+(and: avg)
+(or: max)
+
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))

@@ -2,6 +2,15 @@
 
 A prototype for logic framework that can reason about anything relative to given probability of input statements.
 
+## Implementations
+
+This project provides two equivalent implementations:
+
+- **[JavaScript](./js/)** — Node.js implementation using the official [LiNo parser](https://github.com/linksplatform/protocols-lino)
+- **[Rust](./rust/)** — Rust implementation with a built-in LiNo parser (no external dependencies)
+
+Both implementations pass the same 78 tests and produce identical results.
+
 ## Overview
 
 ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built on top of [LiNo (Links Notation)](https://github.com/linksplatform/protocols-lino). It supports [many-valued logics](https://en.wikipedia.org/wiki/Many-valued_logic) from unary (1-valued) through continuous probabilistic ([fuzzy](https://en.wikipedia.org/wiki/Fuzzy_logic)), allowing you to:
@@ -26,24 +35,21 @@ ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built 
 | N | N-valued | N evenly-spaced levels | N evenly-spaced levels | [Many-valued logic](https://en.wikipedia.org/wiki/Many-valued_logic) |
 | 0/∞ | Continuous / [Fuzzy](https://en.wikipedia.org/wiki/Fuzzy_logic) | Any value in `[0, 1]` | Any value in `[-1, 1]` | [Fuzzy logic](https://en.wikipedia.org/wiki/Fuzzy_logic), [Łukasiewicz ∞-valued](https://en.wikipedia.org/wiki/%C5%81ukasiewicz_logic) |
 
-## Installation
+## Quick Start
+
+### JavaScript
 
 ```bash
+cd js
 npm install
+node src/adl-links.mjs demo.lino
 ```
 
-## Usage
-
-### Running a knowledge base
+### Rust
 
 ```bash
-node src/adl-links.mjs <file.lino>
-```
-
-Or use the npm script:
-
-```bash
-npm run demo
+cd rust
+cargo run -- demo.lino
 ```
 
 ### Example
@@ -66,12 +72,6 @@ Create a file `example.lino`:
 # Query probabilities
 (? ((a = a) and (a != a)))   # -> 0.5
 (? ((a = a) or  (a != a)))   # -> 1
-```
-
-Run it:
-
-```bash
-node src/adl-links.mjs example.lino
 ```
 
 Output:
@@ -173,6 +173,8 @@ Queries are evaluated and their truth value is printed to stdout.
 
 ## Examples
 
+Example `.lino` files are available in both `js/` and `rust/` directories.
+
 ### Standard Logic (with avg semantics)
 
 See `demo.lino`:
@@ -260,42 +262,28 @@ In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Pr
 
 ## Testing
 
-Run the test suite:
+Both implementations have 78 matching tests:
 
 ```bash
-npm test
+# JavaScript
+cd js && npm test
+
+# Rust
+cd rust && cargo test
 ```
 
-The test suite (78 tests) includes:
-- Unit tests for tokenization, parsing, and quantization
-- Unit tests for evaluation logic
-- Integration tests with example knowledge bases
-- Tests for different operator aggregators
-- Tests for many-valued logics: unary, binary (Boolean), ternary (Kleene), quaternary, quinary, higher N-valued, and continuous (fuzzy)
-- Tests for both `[0, 1]` and `[-1, 1]` ranges
-- Tests for liar paradox resolution across logic types
+The test suites cover:
+- Tokenization, parsing, and quantization
+- Evaluation logic and operator aggregators
+- Many-valued logics: unary, binary (Boolean), ternary (Kleene), quaternary, quinary, higher N-valued, and continuous (fuzzy)
+- Both `[0, 1]` and `[-1, 1]` ranges
+- Liar paradox resolution across logic types
 
 ## API
 
-The module exports the following functions for programmatic use:
-
-```javascript
-import { run, tokenizeOne, parseOne, Env, evalNode, quantize } from './src/adl-links.mjs';
-
-// Run a complete LiNo knowledge base
-const results = run(linoText);
-
-// Run with custom range and valence
-const results2 = run(linoText, { lo: -1, hi: 1, valence: 3 });
-
-// Parse and evaluate individual expressions
-const env = new Env({ lo: 0, hi: 1, valence: 3 });
-const ast = parseOne(tokenizeOne('(a = a)'));
-const truthValue = evalNode(ast, env);
-
-// Quantize a value to N discrete levels
-const q = quantize(0.4, 3, 0, 1); // -> 0.5 (nearest ternary level)
-```
+See language-specific documentation:
+- [JavaScript API](./js/README.md#api)
+- [Rust API](./rust/README.md#api)
 
 ## References
 
