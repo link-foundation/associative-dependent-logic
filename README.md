@@ -9,7 +9,9 @@ This project provides two equivalent implementations:
 - **[JavaScript](./js/)** — Node.js implementation using the official [LiNo parser](https://github.com/linksplatform/protocols-lino)
 - **[Rust](./rust/)** — Rust implementation with a built-in LiNo parser (no external dependencies)
 
-Both implementations pass the same 78 tests and produce identical results.
+Both implementations pass the same 93 tests and produce identical results.
+
+For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Overview
 
@@ -21,6 +23,7 @@ ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built 
 - Configure truth value ranges: `[0, 1]` or `[-1, 1]` (balanced/symmetric)
 - Configure logic valence: 2-valued ([Boolean](https://en.wikipedia.org/wiki/Boolean_algebra)), 3-valued ([ternary/Kleene](https://en.wikipedia.org/wiki/Three-valued_logic)), N-valued, or continuous
 - Resolve paradoxical statements (e.g. the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox))
+- Perform decimal-precision arithmetic (`+`, `-`, `*`, `/`) — `0.1 + 0.2 = 0.3`, not `0.30000000000000004`
 - Query the truth value of complex expressions
 
 ## Supported Logic Types
@@ -148,6 +151,25 @@ For `and` and `or` operators, you can choose different aggregators:
 (or: ps)     # Probabilistic sum
 ```
 
+### Arithmetic
+
+```lino
+(<A> + <B>)   # Addition
+(<A> - <B>)   # Subtraction
+(<A> * <B>)   # Multiplication
+(<A> / <B>)   # Division
+```
+
+All arithmetic uses **decimal-precision rounding** (12 significant decimal places) to eliminate IEEE-754 floating-point artefacts:
+
+```lino
+(? (0.1 + 0.2))             # -> 0.3  (not 0.30000000000000004)
+(? ((0.1 + 0.2) = 0.3))     # -> 1    (true)
+(? ((0.3 - 0.1) = 0.2))     # -> 1    (true)
+```
+
+Arithmetic operands are not clamped to the logic range, allowing natural numeric computation. Clamping occurs only when results are used in a logical context (queries, `and`, `or`, etc.).
+
 ### Queries
 
 ```lino
@@ -165,11 +187,15 @@ Queries are evaluated and their truth value is printed to stdout.
 
 ## Built-in Operators
 
-- `=`: Equality (syntactic by default, can be overridden with probability assignments)
+- `=`: Equality (checks assigned probability, then structural equality, then numeric comparison with decimal precision)
 - `!=`: Inequality (defined as `not =` by default)
 - `not`: Logical negation — mirrors around the midpoint of the range (`1 - x` in `[0,1]`; `-x` in `[-1,1]`)
 - `and`: Conjunction (average by default, configurable)
 - `or`: Disjunction (maximum by default, configurable)
+- `+`: Addition (decimal-precision)
+- `-`: Subtraction (decimal-precision)
+- `*`: Multiplication (decimal-precision)
+- `/`: Division (decimal-precision, returns 0 on division by zero)
 
 ## Examples
 
@@ -262,7 +288,7 @@ In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Pr
 
 ## Testing
 
-Both implementations have 78 matching tests:
+Both implementations have 93 matching tests:
 
 ```bash
 # JavaScript
@@ -278,6 +304,7 @@ The test suites cover:
 - Many-valued logics: unary, binary (Boolean), ternary (Kleene), quaternary, quinary, higher N-valued, and continuous (fuzzy)
 - Both `[0, 1]` and `[-1, 1]` ranges
 - Liar paradox resolution across logic types
+- Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
 
 ## API
 

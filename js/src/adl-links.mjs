@@ -68,6 +68,15 @@ function parseOne(tokens) {
 }
 const isNum = s => /^-?(\d+(\.\d+)?|\.\d+)$/.test(s);
 const clamp01 = x => Math.max(0, Math.min(1, x));
+
+// ---------- Decimal-precision arithmetic ----------
+// Round to at most `digits` significant decimal places to eliminate
+// IEEE-754 floating-point artefacts (e.g. 0.1+0.2 → 0.3, not 0.30000000000000004).
+const DECIMAL_PRECISION = 12;
+function decRound(x) {
+  if (!Number.isFinite(x)) return x;
+  return +(Math.round(x + 'e' + DECIMAL_PRECISION) + 'e-' + DECIMAL_PRECISION);
+}
 function keyOf(node) {
   if (Array.isArray(node)) return '(' + node.map(keyOf).join(' ') + ')';
   return String(node);
@@ -133,6 +142,12 @@ class Env {
     }));
     // sugar: "!=" as not of "=" (can be redefined)
     this.defineOp('!=', (...args)=> this.getOp('not')( this.getOp('=')(...args) ));
+
+    // Arithmetic operators (decimal-precision by default)
+    this.defineOp('+', (a,b)=> decRound(a + b));
+    this.defineOp('-', (a,b)=> decRound(a - b));
+    this.defineOp('*', (a,b)=> decRound(a * b));
+    this.defineOp('/', (a,b)=> b === 0 ? 0 : decRound(a / b));
   }
 
   // Clamp and optionally quantize a value to the valid range
@@ -164,6 +179,12 @@ class Env {
 }
 
 // ---------- Eval ----------
+// Evaluate a node in arithmetic context — numeric literals are NOT clamped to the logic range.
+function evalArith(node, env){
+  if (typeof node === 'string' && isNum(node)) return parseFloat(node);
+  return evalNode(node, env);
+}
+
 function evalNode(node, env){
   if (typeof node === 'string') {
     if (isNum(node)) return env.toNum(node);
@@ -211,6 +232,15 @@ function evalNode(node, env){
     return { query:true, value: env.clamp(v) };
   }
 
+  // Infix arithmetic: (A + B), (A - B), (A * B), (A / B)
+  // Arithmetic uses raw numeric values (not clamped to the logic range)
+  if (node.length === 3 && typeof node[1] === 'string' && ['+','-','*','/'].includes(node[1])) {
+    const op = env.getOp(node[1]);
+    const L = evalArith(node[0], env);
+    const R = evalArith(node[2], env);
+    return op(L,R);
+  }
+
   // Infix AND/OR: ((A) and (B))  /  ((A) or (B))
   if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='and' || node[1]==='or')) {
     const op = env.getOp(node[1]);
@@ -222,8 +252,25 @@ function evalNode(node, env){
   // Infix equality/inequality: (L = R), (L != R)
   if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='=' || node[1]==='!=')) {
     const op = env.getOp(node[1]);
-    // Equality gets raw subtrees (so syntactic/assigned equality works)
-    return env.clamp(op(node[0], node[2], keyOf));
+    // Equality checks assigned probability first, then structural equality,
+    // then falls back to numeric comparison of evaluated values (decimal-precision)
+    const raw = op(node[0], node[2], keyOf);
+    // If structural/assigned equality already gave a definitive answer, use it
+    if (raw === env.hi || raw === env.lo) {
+      // Check if there's an explicit assignment — if so, trust it
+      const kPrefix = keyOf(['=',node[0],node[2]]);
+      const kInfix = keyOf([node[0],'=',node[2]]);
+      if (env.assign.has(kPrefix) || env.assign.has(kInfix) || isStructurallySame(node[0], node[2])) {
+        return env.clamp(raw);
+      }
+      // No explicit assignment and not structurally same — try numeric comparison
+      const L = evalNode(node[0], env);
+      const R = evalNode(node[2], env);
+      const numEq = decRound(L) === decRound(R) ? env.hi : env.lo;
+      if (node[1] === '!=') return env.clamp(env.getOp('not')(numEq));
+      return env.clamp(numEq);
+    }
+    return env.clamp(raw);
   }
 
   // Prefix: (not X), (and X Y ...), (or X Y ...)
@@ -246,6 +293,10 @@ function _reinitOps(env) {
     return isStructurallySame(L,R) ? env.hi : env.lo;
   });
   env.ops.set('!=', (...args) => env.getOp('not')( env.getOp('=')(...args) ));
+  env.ops.set('+', (a,b) => decRound(a + b));
+  env.ops.set('-', (a,b) => decRound(a - b));
+  env.ops.set('*', (a,b) => decRound(a * b));
+  env.ops.set('/', (a,b) => b === 0 ? 0 : decRound(a / b));
 }
 
 function defineForm(head, rhs, env){
@@ -359,4 +410,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   for (const v of outs) console.log(String(+v.toFixed(6)).replace(/\.0+$/,''));
 }
 
-export { run, tokenizeOne, parseOne, Env, evalNode, quantize };
+export { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound };
