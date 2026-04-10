@@ -2017,3 +2017,630 @@ describe('Valence coverage: 0 (continuous) through high N', () => {
     approx(results[0], 0.5);
   });
 });
+
+// ===== Truth constants: true, false, unknown, undefined =====
+
+describe('Truth constants', () => {
+  // --- Default values in [0,1] range ---
+
+  it('true defaults to 1 in [0,1]', () => {
+    const results = run('(? true)');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('false defaults to 0 in [0,1]', () => {
+    const results = run('(? false)');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('unknown defaults to 0.5 in [0,1]', () => {
+    const results = run('(? unknown)');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('undefined defaults to 0.5 in [0,1]', () => {
+    const results = run('(? undefined)');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  // --- Default values in [-1,1] range ---
+
+  it('true defaults to 1 in [-1,1]', () => {
+    const results = run('(range: -1 1)\n(? true)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('false defaults to -1 in [-1,1]', () => {
+    const results = run('(range: -1 1)\n(? false)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], -1);
+  });
+
+  it('unknown defaults to 0 in [-1,1]', () => {
+    const results = run('(range: -1 1)\n(? unknown)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('undefined defaults to 0 in [-1,1]', () => {
+    const results = run('(range: -1 1)\n(? undefined)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+  });
+
+  // --- Redefinition ---
+
+  it('redefine true', () => {
+    const results = run('(true: 0.8)\n(? true)');
+    assert.strictEqual(results[0], 0.8);
+  });
+
+  it('redefine false', () => {
+    const results = run('(false: 0.2)\n(? false)');
+    assert.strictEqual(results[0], 0.2);
+  });
+
+  it('redefine unknown', () => {
+    const results = run('(unknown: 0.3)\n(? unknown)');
+    assert.strictEqual(results[0], 0.3);
+  });
+
+  it('redefine undefined', () => {
+    const results = run('(undefined: 0.7)\n(? undefined)');
+    assert.strictEqual(results[0], 0.7);
+  });
+
+  it('redefine in balanced range', () => {
+    const results = run('(range: -1 1)\n(true: 0.5)\n(false: -0.5)\n(? true)\n(? false)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], -0.5);
+  });
+
+  // --- Range change re-initializes defaults ---
+
+  it('range change reinitializes defaults', () => {
+    const results = run('(? true)\n(? false)\n(range: -1 1)\n(? true)\n(? false)\n(? unknown)');
+    assert.strictEqual(results.length, 5);
+    assert.strictEqual(results[0], 1);   // true in [0,1]
+    assert.strictEqual(results[1], 0);   // false in [0,1]
+    assert.strictEqual(results[2], 1);   // true in [-1,1]
+    assert.strictEqual(results[3], -1);  // false in [-1,1]
+    assert.strictEqual(results[4], 0);   // unknown in [-1,1]
+  });
+
+  // --- Use in expressions ---
+
+  it('not true', () => {
+    const results = run('(? (not true))');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('not false', () => {
+    const results = run('(? (not false))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('not unknown', () => {
+    const results = run('(? (not unknown))');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('true and false (avg)', () => {
+    const results = run('(? (true and false))');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('true or false (max)', () => {
+    const results = run('(? (true or false))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('true and false (min)', () => {
+    const results = run('(and: min)\n(? (true and false))');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('balanced not operators', () => {
+    const results = run('(range: -1 1)\n(? (not true))\n(? (not false))\n(? (not unknown))', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], -1);  // not(1) = -1
+    assert.strictEqual(results[1], 1);   // not(-1) = 1
+    assert.strictEqual(results[2], 0);   // not(0) = 0
+  });
+
+  // --- With quantization ---
+
+  it('binary valence', () => {
+    const results = run('(valence: 2)\n(? true)\n(? false)\n(? unknown)');
+    assert.strictEqual(results[0], 1);   // true = 1
+    assert.strictEqual(results[1], 0);   // false = 0
+    assert.strictEqual(results[2], 1);   // unknown = 0.5, quantized to 1
+  });
+
+  it('ternary valence', () => {
+    const results = run('(valence: 3)\n(? true)\n(? false)\n(? unknown)');
+    assert.strictEqual(results[0], 1);   // true = 1
+    assert.strictEqual(results[1], 0);   // false = 0
+    assert.strictEqual(results[2], 0.5); // unknown = 0.5
+  });
+
+  it('ternary balanced', () => {
+    const results = run('(range: -1 1)\n(valence: 3)\n(? true)\n(? false)\n(? unknown)', { lo: -1, hi: 1, valence: 3 });
+    assert.strictEqual(results[0], 1);   // true = 1
+    assert.strictEqual(results[1], -1);  // false = -1
+    assert.strictEqual(results[2], 0);   // unknown = 0
+  });
+
+  // --- Env API ---
+
+  it('Env API [0,1]', () => {
+    const env = new Env();
+    assert.strictEqual(env.getSymbolProb('true'), 1);
+    assert.strictEqual(env.getSymbolProb('false'), 0);
+    assert.strictEqual(env.getSymbolProb('unknown'), 0.5);
+    assert.strictEqual(env.getSymbolProb('undefined'), 0.5);
+  });
+
+  it('Env API [-1,1]', () => {
+    const env = new Env({ lo: -1, hi: 1 });
+    assert.strictEqual(env.getSymbolProb('true'), 1);
+    assert.strictEqual(env.getSymbolProb('false'), -1);
+    assert.strictEqual(env.getSymbolProb('unknown'), 0);
+    assert.strictEqual(env.getSymbolProb('undefined'), 0);
+  });
+
+  it('survive operator redefinition', () => {
+    const results = run('(and: min)\n(or: max)\n(? true)\n(? false)');
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 0);
+  });
+
+  // --- Liar paradox with truth constants ---
+
+  it('liar paradox [0,1]', () => {
+    const results = run(`
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('liar paradox [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+`, { lo: -1, hi: 1, valence: 3 });
+    assert.strictEqual(results[0], 0);
+  });
+});
+
+// ===== Liar paradox resolution across logic types =====
+
+describe('Liar paradox across logic types', () => {
+  it('ternary [0,1]', () => {
+    const results = run(`
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('ternary [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+`, { lo: -1, hi: 1, valence: 3 });
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('continuous [0,1]', () => {
+    const results = run(`
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+`);
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], 0.5);
+  });
+
+  it('continuous [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+(? (not (s = false)))
+`, { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+    assert.strictEqual(results[1], 0);
+  });
+
+  it('5-valued [0,1]', () => {
+    const results = run(`
+(valence: 5)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('5-valued [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(valence: 5)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+`, { lo: -1, hi: 1, valence: 5 });
+    assert.strictEqual(results[0], 0);
+  });
+});
+
+// ===== Additional arithmetic tests =====
+
+describe('Arithmetic equality', () => {
+  it('(0.1 + 0.2) = 0.3', () => {
+    const results = run('(? ((0.1 + 0.2) = 0.3))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('(0.1 + 0.2) != 0.3 is false', () => {
+    const results = run('(? ((0.1 + 0.2) != 0.3))');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('(0.3 - 0.1) = 0.2', () => {
+    const results = run('(? ((0.3 - 0.1) = 0.2))');
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+// ===== Higher N-valued logics =====
+
+describe('Higher N-valued logics', () => {
+  it('7-valued logic', () => {
+    const env = new Env({ valence: 7 });
+    approx(env.clamp(0.0), 0.0);
+    approx(env.clamp(0.5), 0.5);
+    approx(env.clamp(1.0), 1.0);
+  });
+
+  it('10-valued logic', () => {
+    const env = new Env({ valence: 10 });
+    approx(env.clamp(0.0), 0.0);
+    approx(env.clamp(1.0), 1.0);
+    approx(env.clamp(0.5), 5/9);
+  });
+
+  it('100-valued logic', () => {
+    const env = new Env({ valence: 100 });
+    approx(env.clamp(0.0), 0.0);
+    approx(env.clamp(1.0), 1.0);
+    const actual = env.clamp(0.5);
+    assert.ok(Math.abs(actual - 0.5) < 0.02, `100-valued 0.5 should be close to 0.5, got ${actual}`);
+  });
+
+  it('5-valued paradox at 0.5', () => {
+    const results = run(`
+(valence: 5)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+});
+
+// ===== Pi-types =====
+
+describe('Pi-types', () => {
+  it('Pi type evaluation', () => {
+    const results = run('(? (Pi (Natural x) Natural))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('Pi type non-dependent', () => {
+    const results = run('(? (Pi (Natural _) Boolean))');
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+// ===== Lambda abstraction =====
+
+describe('Lambda abstraction', () => {
+  it('lambda evaluates as valid', () => {
+    const results = run('(? (lambda (Natural x) x))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('lambda multi-param', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(? (lambda (Natural x, Natural y) (x + y)))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+// ===== Application with beta-reduction =====
+
+describe('Application (beta-reduction)', () => {
+  it('apply identity', () => {
+    const results = run('(? (apply (lambda (Natural x) x) 0.5))');
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('apply arithmetic', () => {
+    const results = run('(? (apply (lambda (Natural x) (x + 0.1)) 0.2))');
+    assert.strictEqual(results[0], 0.3);
+  });
+
+  it('apply const function', () => {
+    const results = run('(? (apply (lambda (Natural x) 0.5) 0.9))');
+    assert.strictEqual(results[0], 0.5);
+  });
+});
+
+// ===== Prefix type notation =====
+
+describe('Prefix type notation', () => {
+  it('zero of Natural', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(zero: Natural zero)
+(? (zero of Natural))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('complex type', () => {
+    const results = run(`
+(Type 0)
+(Boolean: (Type 0) Boolean)
+(? (Boolean of (Type 0)))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('multiple constructors', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(? (zero of Natural))
+(? (true-val of Boolean))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('with Pi constructor', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(zero: Natural zero)
+(succ: (Pi (Natural n) Natural))
+(? (zero of Natural))
+(? (succ of (Pi (Natural n) Natural)))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('type hierarchy', () => {
+    const results = run(`
+(Type 0)
+(Type: (Type 0) Type)
+(Boolean: Type Boolean)
+(True: Boolean True)
+(False: Boolean False)
+(? (Boolean of Type))
+(? (True of Boolean))
+(? (False of Boolean))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+  });
+});
+
+// ===== Lean/Rocq core concept encoding =====
+
+describe('Lean/Rocq core concepts', () => {
+  it('Natural type constructors', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(zero: Natural zero)
+(succ: (Pi (Natural n) Natural))
+(? (zero of Natural))
+(? (Natural of (Type 0)))
+`);
+    assert.strictEqual(results.length, 2);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('Boolean type constructors', () => {
+    const results = run(`
+(Boolean: (Type 0) Boolean)
+(true-val: Boolean true-val)
+(false-val: Boolean false-val)
+(? (true-val of Boolean))
+(? (false-val of Boolean))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('identity function type', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(identity: (Pi (Natural x) Natural))
+(? (identity of (Pi (Natural x) Natural)))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+// ===== Self-referential (Type: Type Type) =====
+
+describe('Self-referential types', () => {
+  it('Type: Type Type', () => {
+    const results = run(`
+(Type: Type Type)
+(? (Type of Type))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('full hierarchy', () => {
+    const results = run(`
+(Type: Type Type)
+(Natural: Type Natural)
+(Boolean: Type Boolean)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(? (zero of Natural))
+(? (Natural of Type))
+(? (Boolean of Type))
+(? (Type of Type))
+`);
+    assert.strictEqual(results.length, 4);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 1);
+  });
+
+  it('type of query', () => {
+    const results = run(`
+(Type: Type Type)
+(Natural: Type Natural)
+(? (type of Natural))
+(? (type of Type))
+`);
+    assert.strictEqual(results[0], 'Type');
+    assert.strictEqual(results[1], 'Type');
+  });
+
+  it('coexists with universe hierarchy', () => {
+    const results = run(`
+(Type: Type Type)
+(Type 0)
+(Type 1)
+(Natural: (Type 0) Natural)
+(Boolean: Type Boolean)
+(zero: Natural zero)
+(? (Type of Type))
+(? (Natural of (Type 0)))
+(? (Boolean of Type))
+(? (zero of Natural))
+(? ((Type 0) of (Type 1)))
+`);
+    assert.strictEqual(results.length, 5);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 1);
+    assert.strictEqual(results[4], 1);
+  });
+
+  it('liar paradox alongside', () => {
+    const results = run(`
+(Type: Type Type)
+(Natural: Type Natural)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+(? (Natural of Type))
+`);
+    approx(results[0], 0.5);
+    approx(results[1], 0.5);
+    assert.strictEqual(results[2], 1);
+  });
+
+  it('paradox resolution', () => {
+    const results = run(`
+(Type: Type Type)
+(R: R is R)
+((R = R) has probability 0.5)
+(? (R = R))
+(? (not (R = R)))
+`);
+    approx(results[0], 0.5);
+    approx(results[1], 0.5);
+  });
+});
+
+// ===== Self-Reasoning (Meta-Logic) =====
+
+describe('Self-reasoning (meta-logic)', () => {
+  it('logic properties', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(Property: Type Property)
+(RML: Logic RML)
+(supports_many_valued: Property supports_many_valued)
+(((RML supports_many_valued) = true) has probability 1)
+(? ((RML supports_many_valued) = true))
+(? (RML of Logic))
+(? (Logic of Type))
+(? (type of RML))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 'Logic');
+  });
+
+  it('compare logics', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(Classical: Logic Classical)
+(((RML supports_self_reference) = true) has probability 1)
+(((Classical supports_self_reference) = true) has probability 0)
+(? ((RML supports_self_reference) = true))
+(? ((Classical supports_self_reference) = true))
+`);
+    approx(results[0], 1);
+    approx(results[1], 0);
+  });
+
+  it('paradox resolution in meta context', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(liar: liar is liar)
+((liar = false) has probability 0.5)
+(? (liar = false))
+(? (not (liar = false)))
+(? (RML of Logic))
+`);
+    approx(results[0], 0.5);
+    approx(results[1], 0.5);
+    approx(results[2], 1);
+  });
+});
+
+// ===== Backward compatibility =====
+
+describe('Backward compatibility', () => {
+  it('arithmetic still works', () => {
+    const results = run('(? (0.1 + 0.2))');
+    assert.strictEqual(results[0], 0.3);
+  });
+});
