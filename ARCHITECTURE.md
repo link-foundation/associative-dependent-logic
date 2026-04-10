@@ -210,8 +210,8 @@ The `and` and `or` operators can be configured to use different aggregation func
 | `avg` | `sum(xs) / len(xs)` | Default for `and`; average truth value |
 | `min` | `min(xs)` | Kleene AND; pessimistic conjunction |
 | `max` | `max(xs)` | Default for `or`; Kleene OR |
-| `prod` | `∏ xs` | Probabilistic AND (independent events) |
-| `ps` | `1 - ∏(1 - xi)` | Probabilistic sum/OR (independent events) |
+| `product` | `∏ xs` | Probabilistic AND (independent events). Short name: `prod` |
+| `probabilistic_sum` | `1 - ∏(1 - xi)` | Probabilistic sum/OR (independent events). Short name: `ps` |
 
 Operators are redefinable at runtime via LiNo syntax:
 ```lino
