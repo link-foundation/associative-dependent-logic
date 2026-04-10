@@ -6,9 +6,9 @@
 #   - both  = both true and false, contradiction/paradox (0.5)
 #   - neither = neither true nor false, unknown/gap (0)
 #
-# In RML, "both" and "neither" are operators that alter the AND operation:
-#   - "A both B" uses avg semantics: contradiction resolves to the midpoint
-#   - "A neither B" uses product semantics: gap/no info propagates as zero
+# In RML, "both" and "neither" are composite natural language operators:
+#   - "both A and B" uses avg semantics: contradiction resolves to the midpoint
+#   - "neither A nor B" uses product semantics: gap/no info propagates as zero
 # Both operators are redefinable via aggregator selection.
 #
 # This is particularly useful for:
@@ -25,8 +25,8 @@
 # The four truth values via operators
 (? true)                            # -> 1
 (? false)                           # -> 0
-(? (true both false))               # -> 0.5 contradiction
-(? (true neither false))            # -> 0 gap
+(? (both true and false))           # -> 0.5 contradiction
+(? (neither true nor false))        # -> 0 gap
 
 # NOT of standard values
 (? (not true))                      # -> 0 not true = false
@@ -40,11 +40,11 @@
 (? (not (s = false)))               # -> 0.5 negation of paradox = same
 
 # "both" operator: avg semantics
-(? (true both true))                # -> 1 both agree true
-(? (false both false))              # -> 0 both agree false
-(? (true both false))               # -> 0.5 disagree: contradiction
+(? (both true and true))            # -> 1 both agree true
+(? (both false and false))          # -> 0 both agree false
+(? (both true and false))           # -> 0.5 disagree: contradiction
 
 # "neither" operator: product semantics
-(? (true neither true))             # -> 1 both agree true
-(? (false neither false))           # -> 0 both agree false
-(? (true neither false))            # -> 0 disagree: gap, no info
+(? (neither true nor true))         # -> 1 both agree true
+(? (neither false nor false))       # -> 0 both agree false
+(? (neither true nor false))        # -> 0 disagree: gap, no info

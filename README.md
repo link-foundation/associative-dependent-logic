@@ -25,7 +25,7 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 - Configure truth value ranges: `[0, 1]` or `[-1, 1]` (balanced/symmetric)
 - Configure logic valence: 2-valued ([Boolean](https://en.wikipedia.org/wiki/Boolean_algebra)), 3-valued ([ternary/Kleene](https://en.wikipedia.org/wiki/Three-valued_logic)), N-valued, or continuous
 - Use and redefine truth constants: `true`, `false`, `unknown`, `undefined`
-- Use and redefine Belnap operators: `both` (contradiction/avg) and `neither` (gap/product)
+- Use and redefine Belnap operators: `both...and` (contradiction/avg) and `neither...nor` (gap/product)
 - Resolve paradoxical statements (e.g. the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox))
 - Perform decimal-precision arithmetic (`+`, `-`, `*`, `/`) — `0.1 + 0.2 = 0.3`, not `0.30000000000000004`
 - Query the truth value of complex expressions
@@ -166,30 +166,30 @@ All truth constants can be **redefined** to custom values:
 
 ### Belnap Operators: `both` and `neither`
 
-The operators `both` and `neither` come from [Belnap's four-valued logic](https://en.wikipedia.org/wiki/Four-valued_logic#Belnap), where contradictions and gaps are first-class concepts. Unlike truth constants, these are **operators** that alter the AND operation:
+The operators `both` and `neither` come from [Belnap's four-valued logic](https://en.wikipedia.org/wiki/Four-valued_logic#Belnap), where contradictions and gaps are first-class concepts. These are **composite natural language operators** that alter the AND operation:
 
 | Operator | Default Aggregator | Example | Result | Interpretation |
 |----------|-------------------|---------|--------|----------------|
-| `both` | `avg` | `(true both false)` | `0.5` | Both true and false (contradiction) |
-| `neither` | `product` | `(true neither false)` | `0` | Neither true nor false (gap) |
+| `both...and` | `avg` | `(both true and false)` | `0.5` | Both true and false (contradiction) |
+| `neither...nor` | `product` | `(neither true nor false)` | `0` | Neither true nor false (gap) |
 
 ```lino
 # Contradiction: both true and false
-(? (true both false))     # -> 0.5 (avg of 1 and 0)
-(? (true both true))      # -> 1   (both agree: true)
+(? (both true and false))     # -> 0.5 (avg of 1 and 0)
+(? (both true and true))      # -> 1   (both agree: true)
 
 # Gap: neither true nor false
-(? (true neither false))  # -> 0   (product of 1 and 0)
-(? (true neither true))   # -> 1   (both agree: true)
+(? (neither true nor false))  # -> 0   (product of 1 and 0)
+(? (neither true nor true))   # -> 1   (both agree: true)
 ```
 
 Both operators are **redefinable** via aggregator selection, just like `and` and `or`:
 
 ```lino
-(both: min)               # Redefine both to use min
-(? (true both false))     # -> 0
-(neither: max)            # Redefine neither to use max
-(? (true neither false))  # -> 1
+(both: min)                   # Redefine both to use min
+(? (both true and false))     # -> 0
+(neither: max)                # Redefine neither to use max
+(? (neither true nor false))  # -> 1
 ```
 
 This allows paradoxes like the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox) to be expressed naturally:
@@ -198,8 +198,8 @@ This allows paradoxes like the [liar paradox](https://en.wikipedia.org/wiki/Liar
 (a: a is a)
 ((a = a) has probability 1)
 ((a != a) has probability 0)
-(? ((a = a) both (a != a)))     # -> 0.5 (contradiction resolves to midpoint)
-(? ((a = a) neither (a != a)))  # -> 0   (gap: no info propagates)
+(? (both (a = a) and (a != a)))     # -> 0.5 (contradiction resolves to midpoint)
+(? (neither (a = a) nor (a != a)))  # -> 0   (gap: no info propagates)
 ```
 
 When the range changes (via `(range: ...)`), all truth constants are automatically re-initialized to their defaults for the new range.
@@ -466,20 +466,20 @@ In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Pr
 
 ### Belnap's Four-Valued Logic
 
-See `examples/belnap-four-valued.lino` — extends classical logic with `both` (contradiction) and `neither` (gap) **operators** that alter the AND operation. This is the standard framework for reasoning about paradoxes:
+See `examples/belnap-four-valued.lino` — extends classical logic with `both...and` (contradiction) and `neither...nor` (gap) **composite natural language operators** that alter the AND operation. This is the standard framework for reasoning about paradoxes:
 
 ```lino
 (and: min)
 (or: max)
 
-(? (true both false))     # -> 0.5  (contradiction: avg of 1 and 0)
-(? (true neither false))  # -> 0    (gap: product of 1 and 0)
-(? (true both true))      # -> 1    (agree: avg of 1 and 1)
+(? (both true and false))     # -> 0.5  (contradiction: avg of 1 and 0)
+(? (neither true nor false))  # -> 0    (gap: product of 1 and 0)
+(? (both true and true))      # -> 1    (agree: avg of 1 and 1)
 
 # The liar paradox resolves naturally via "both"
 (s: s is s)
 ((s = false) has probability 0.5)
-(? (s = false))           # -> 0.5
+(? (s = false))               # -> 0.5
 ```
 
 See: [Belnap's four-valued logic](https://en.wikipedia.org/wiki/Four-valued_logic#Belnap)
@@ -644,7 +644,7 @@ The test suites cover:
 - Many-valued logics: unary, binary (Boolean), ternary (Kleene), quaternary, quinary, higher N-valued, and continuous (fuzzy)
 - Both `[0, 1]` and `[-1, 1]` ranges
 - Truth constants (`true`, `false`, `unknown`, `undefined`): defaults, redefinition, range changes, use in expressions, quantization
-- Belnap operators (`both`, `neither`): default aggregators, redefinition, prefix/infix forms, fuzzy values, range changes
+- Belnap operators (`both...and`, `neither...nor`): default aggregators, redefinition, composite/prefix/infix forms, fuzzy values, range changes
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, type queries, prefix type notation

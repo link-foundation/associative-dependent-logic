@@ -1398,6 +1398,54 @@ describe('Operators: both and neither (Belnap four-valued)', () => {
     assert.strictEqual(results[0], 0);     // product(1, 0) = 0
   });
 
+  it('both should work in composite natural language form: (both A and B)', () => {
+    const results = run(`
+(? (both true and false))
+(? (both true and true))
+(? (both false and false))
+`);
+    assert.strictEqual(results[0], 0.5);   // avg(1, 0) = 0.5
+    assert.strictEqual(results[1], 1);     // avg(1, 1) = 1
+    assert.strictEqual(results[2], 0);     // avg(0, 0) = 0
+  });
+
+  it('neither should work in composite natural language form: (neither A nor B)', () => {
+    const results = run(`
+(? (neither true nor false))
+(? (neither true nor true))
+(? (neither false nor false))
+`);
+    assert.strictEqual(results[0], 0);     // product(1, 0) = 0
+    assert.strictEqual(results[1], 1);     // product(1, 1) = 1
+    assert.strictEqual(results[2], 0);     // product(0, 0) = 0
+  });
+
+  it('composite both should work with variadic form: (both A and B and C)', () => {
+    const results = run('(? (both true and true and false))');
+    assert.ok(Math.abs(results[0] - 0.666666666667) < 0.0001); // avg(1, 1, 0)
+  });
+
+  it('composite neither should work with variadic form: (neither A nor B nor C)', () => {
+    const results = run('(? (neither true nor true nor false))');
+    assert.strictEqual(results[0], 0);     // product(1, 1, 0) = 0
+  });
+
+  it('composite both should be redefinable', () => {
+    const results = run(`
+(both: min)
+(? (both true and false))
+`);
+    assert.strictEqual(results[0], 0);     // min(1, 0) = 0
+  });
+
+  it('composite neither should be redefinable', () => {
+    const results = run(`
+(neither: max)
+(? (neither true nor false))
+`);
+    assert.strictEqual(results[0], 1);     // max(1, 0) = 1
+  });
+
   it('both should update behavior when range changes', () => {
     const results = run(`
 (? (true both false))
@@ -1408,7 +1456,27 @@ describe('Operators: both and neither (Belnap four-valued)', () => {
     assert.strictEqual(results[1], 0);     // avg(1, -1) = 0 in [-1,1] (clamped to range)
   });
 
-  it('issue scenario: (a=a) both (a!=a) gives 0.5', () => {
+  it('issue scenario: both (a=a) and (a!=a) gives 0.5', () => {
+    const results = run(`
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? (both (a = a) and (a != a)))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('issue scenario: neither (a=a) nor (a!=a) gives 0', () => {
+    const results = run(`
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? (neither (a = a) nor (a != a)))
+`);
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('issue scenario: infix backward compat (a=a) both (a!=a) gives 0.5', () => {
     const results = run(`
 (a: a is a)
 ((a = a) has probability 1)
@@ -1416,16 +1484,6 @@ describe('Operators: both and neither (Belnap four-valued)', () => {
 (? ((a = a) both (a != a)))
 `);
     assert.strictEqual(results[0], 0.5);
-  });
-
-  it('issue scenario: (a=a) neither (a!=a) gives 0', () => {
-    const results = run(`
-(a: a is a)
-((a = a) has probability 1)
-((a != a) has probability 0)
-(? ((a = a) neither (a != a)))
-`);
-    assert.strictEqual(results[0], 0);
   });
 });
 

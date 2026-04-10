@@ -59,15 +59,17 @@ Added two new operators to both JS and Rust implementations:
 ```
 
 These operators:
-- Work in both infix and prefix form: `(true both false)` or `(both true false)`
+- Use composite natural language syntax: `(both A and B)`, `(neither A nor B)`
+- Also support prefix form: `(both true false)` and infix form: `(true both false)` for backward compatibility
+- Support variadic form: `(both A and B and C)`, `(neither A nor B nor C)`
 - Default to `avg` (both) and `product` (neither) aggregators
 - Are redefinable like `and` and `or`: `(both: min)`, `(neither: max)`
 - Auto-update when the range changes via `reinit_ops`
 - Support all aggregator types: avg, min, max, product, probabilistic_sum
 
 Key semantic difference from the AND operator:
-- `(true both false) = 0.5` — contradiction (avg: (1+0)/2)
-- `(true neither false) = 0` — gap (product: 1*0)
+- `(both true and false) = 0.5` — contradiction (avg: (1+0)/2)
+- `(neither true nor false) = 0` — gap (product: 1*0)
 - `(true and false) = 0.5` — default AND uses avg too, but `both`/`neither` provide explicit Belnap semantics
 
 ### 2. New Standard Examples

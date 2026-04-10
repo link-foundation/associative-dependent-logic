@@ -1660,6 +1660,100 @@ fn operator_neither_prefix_form() {
 }
 
 #[test]
+fn operator_both_composite_natural_language() {
+    let results = run(
+        r#"
+(? (both true and false))
+(? (both true and true))
+(? (both false and false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5); // avg(1, 0) = 0.5
+    assert_eq!(results[1], 1.0); // avg(1, 1) = 1
+    assert_eq!(results[2], 0.0); // avg(0, 0) = 0
+}
+
+#[test]
+fn operator_neither_composite_natural_language() {
+    let results = run(
+        r#"
+(? (neither true nor false))
+(? (neither true nor true))
+(? (neither false nor false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.0); // product(1, 0) = 0
+    assert_eq!(results[1], 1.0); // product(1, 1) = 1
+    assert_eq!(results[2], 0.0); // product(0, 0) = 0
+}
+
+#[test]
+fn operator_both_composite_variadic() {
+    let results = run("(? (both true and true and false))", None);
+    assert!((results[0] - 0.666666666667).abs() < 0.0001); // avg(1, 1, 0)
+}
+
+#[test]
+fn operator_neither_composite_variadic() {
+    let results = run("(? (neither true nor true nor false))", None);
+    assert_eq!(results[0], 0.0); // product(1, 1, 0) = 0
+}
+
+#[test]
+fn operator_both_composite_redefinable() {
+    let results = run(
+        r#"
+(both: min)
+(? (both true and false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.0); // min(1, 0) = 0
+}
+
+#[test]
+fn operator_neither_composite_redefinable() {
+    let results = run(
+        r#"
+(neither: max)
+(? (neither true nor false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 1.0); // max(1, 0) = 1
+}
+
+#[test]
+fn operator_both_composite_issue_scenario() {
+    let results = run(
+        r#"
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? (both (a = a) and (a != a)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5);
+}
+
+#[test]
+fn operator_neither_composite_issue_scenario() {
+    let results = run(
+        r#"
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? (neither (a = a) nor (a != a)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.0);
+}
+
+#[test]
 fn operator_both_range_change() {
     let results = run(
         r#"

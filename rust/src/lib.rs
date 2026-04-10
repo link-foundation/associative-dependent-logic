@@ -828,6 +828,28 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 }
             }
 
+            // Composite natural language operators: (both A and B [and C ...]), (neither A nor B [nor C ...])
+            if children.len() >= 4 && children.len() % 2 == 0 {
+                if let Node::Leaf(ref head) = children[0] {
+                    if head == "both" || head == "neither" {
+                        let sep = if head == "both" { "and" } else { "nor" };
+                        let mut valid = true;
+                        for i in (2..children.len()).step_by(2) {
+                            if let Node::Leaf(ref s) = children[i] {
+                                if s != sep { valid = false; break; }
+                            } else { valid = false; break; }
+                        }
+                        if valid {
+                            let head_str = head.clone();
+                            let vals: Vec<f64> = (1..children.len()).step_by(2)
+                                .map(|i| eval_node(&children[i], env).as_f64())
+                                .collect();
+                            return EvalResult::Value(env.clamp(env.apply_op(&head_str, &vals)));
+                        }
+                    }
+                }
+            }
+
             // Infix equality/inequality: (L = R), (L != R)
             if children.len() == 3 {
                 if let Node::Leaf(ref op_name) = children[1] {

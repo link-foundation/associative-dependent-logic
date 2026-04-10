@@ -377,6 +377,26 @@ function evalNode(node, env){
     return env.clamp(op(L,R));
   }
 
+  // Composite natural language operators: (both A and B [and C ...]), (neither A nor B [nor C ...])
+  if (node.length >= 4 && typeof node[0] === 'string' && (node[0]==='both' || node[0]==='neither')) {
+    const sep = node[0]==='both' ? 'and' : 'nor';
+    // Validate pattern: operator, value, sep, value [, sep, value ...]
+    let valid = node.length % 2 === 0; // both + (n values) + (n-1 seps) = 1 + n + (n-1) = 2n, always even
+    if (valid) {
+      for (let i = 2; i < node.length; i += 2) {
+        if (node[i] !== sep) { valid = false; break; }
+      }
+    }
+    if (valid) {
+      const op = env.getOp(node[0]);
+      const vals = [];
+      for (let i = 1; i < node.length; i += 2) {
+        vals.push(evalNode(node[i], env));
+      }
+      return env.clamp(op(...vals));
+    }
+  }
+
   // Infix equality/inequality: (L = R), (L != R)
   if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='=' || node[1]==='!=')) {
     const op = env.getOp(node[1]);
