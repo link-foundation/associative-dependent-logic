@@ -2644,3 +2644,63 @@ describe('Backward compatibility', () => {
     assert.strictEqual(results[0], 0.3);
   });
 });
+
+// ===== Markov Chains with Dependent Probabilities =====
+
+describe('Markov chains', () => {
+  it('one-step transition: sunny', () => {
+    // P(Sunny at t+1) = P(S→S)*P(S) + P(R→S)*P(R) = 0.8*0.7 + 0.4*0.3
+    const results = run('(? ((0.8 * 0.7) + (0.4 * 0.3)))');
+    approx(results[0], 0.68);
+  });
+
+  it('one-step transition: rainy', () => {
+    // P(Rainy at t+1) = P(S→R)*P(S) + P(R→R)*P(R) = 0.2*0.7 + 0.6*0.3
+    const results = run('(? ((0.2 * 0.7) + (0.6 * 0.3)))');
+    approx(results[0], 0.32);
+  });
+
+  it('two-step transition', () => {
+    const results = run(`
+(? ((0.8 * 0.68) + (0.4 * 0.32)))
+(? ((0.2 * 0.68) + (0.6 * 0.32)))
+`);
+    approx(results[0], 0.672);
+    approx(results[1], 0.328);
+  });
+
+  it('joint probability', () => {
+    // P(Sunny_t, Sunny_t+1) = P(S→S) * P(S_t) = 0.8 * 0.7
+    const results = run(`
+(and: prod)
+(? (0.8 and 0.7))
+`);
+    approx(results[0], 0.56);
+  });
+
+  it('stationary distribution', () => {
+    // Stationary: pi(S) = 2/3, pi(R) = 1/3
+    const results = run(`
+(? ((0.8 * 0.666667) + (0.4 * 0.333333)))
+(? ((0.2 * 0.666667) + (0.6 * 0.333333)))
+`);
+    assert.ok(Math.abs(results[0] - 2/3) < 1e-4);
+    assert.ok(Math.abs(results[1] - 1/3) < 1e-4);
+  });
+
+  it('conditional transitions with links', () => {
+    const results = run(`
+(and: prod)
+(or: ps)
+(sunny: sunny is sunny)
+(rainy: rainy is rainy)
+(((sunny) = true) has probability 0.7)
+(((rainy) = true) has probability 0.3)
+
+(? (((sunny) = true) and ((rainy) = true)))
+(? (((sunny) = true) or ((rainy) = true)))
+`);
+    approx(results[0], 0.21);
+    approx(results[1], 0.79);
+  });
+});

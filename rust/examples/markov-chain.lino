@@ -1,0 +1,33 @@
+# Markov Chain with Dependent Probabilities
+# Models a simple weather system where tomorrow's weather depends on today's.
+#
+# Transition matrix:
+#   P(Sunny→Sunny) = 0.8,  P(Sunny→Rainy) = 0.2
+#   P(Rainy→Sunny) = 0.4,  P(Rainy→Rainy) = 0.6
+#
+# Initial state: P(Sunny) = 0.7, P(Rainy) = 0.3
+#
+# After one step (law of total probability):
+#   P(Sunny at t+1) = P(Sunny→Sunny)*P(Sunny) + P(Rainy→Sunny)*P(Rainy)
+#                    = 0.8*0.7 + 0.4*0.3 = 0.68
+#   P(Rainy at t+1) = P(Sunny→Rainy)*P(Sunny) + P(Rainy→Rainy)*P(Rainy)
+#                    = 0.2*0.7 + 0.6*0.3 = 0.32
+#
+# Stationary distribution (solve pi*P = pi):
+#   pi(Sunny) = 2/3 ≈ 0.666667
+#   pi(Rainy) = 1/3 ≈ 0.333333
+
+# One-step transition
+(? ((0.8 * 0.7) + (0.4 * 0.3)))
+(? ((0.2 * 0.7) + (0.6 * 0.3)))
+
+# Two-step: apply transition again to t+1 state
+# P(Sunny at t+2) = 0.8*0.68 + 0.4*0.32 = 0.672
+# P(Rainy at t+2) = 0.2*0.68 + 0.6*0.32 = 0.328
+(? ((0.8 * 0.68) + (0.4 * 0.32)))
+(? ((0.2 * 0.68) + (0.6 * 0.32)))
+
+# Joint probability of being Sunny at t and Sunny at t+1
+# P(Sunny_t, Sunny_t+1) = P(Sunny→Sunny) * P(Sunny_t) = 0.8 * 0.7 = 0.56
+(and: prod)
+(? (0.8 and 0.7))

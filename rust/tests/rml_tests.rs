@@ -2697,3 +2697,87 @@ fn valence_3_ternary_with_bayesian_prod() {
     );
     approx(results[0], 0.5);
 }
+
+// ──────────────────────────────────────────────────────────────
+// Markov Chains with Dependent Probabilities
+// ──────────────────────────────────────────────────────────────
+
+#[test]
+fn markov_chain_one_step_sunny() {
+    // P(Sunny at t+1) = P(S→S)*P(S) + P(R→S)*P(R) = 0.8*0.7 + 0.4*0.3
+    let results = run("(? ((0.8 * 0.7) + (0.4 * 0.3)))", None);
+    approx(results[0], 0.68);
+}
+
+#[test]
+fn markov_chain_one_step_rainy() {
+    // P(Rainy at t+1) = P(S→R)*P(S) + P(R→R)*P(R) = 0.2*0.7 + 0.6*0.3
+    let results = run("(? ((0.2 * 0.7) + (0.6 * 0.3)))", None);
+    approx(results[0], 0.32);
+}
+
+#[test]
+fn markov_chain_two_step() {
+    // Two-step transition
+    let results = run(
+        r#"
+(? ((0.8 * 0.68) + (0.4 * 0.32)))
+(? ((0.2 * 0.68) + (0.6 * 0.32)))
+"#,
+        None,
+    );
+    approx(results[0], 0.672);
+    approx(results[1], 0.328);
+}
+
+#[test]
+fn markov_chain_joint_probability() {
+    // P(Sunny_t, Sunny_t+1) = P(S→S) * P(S_t) = 0.8 * 0.7
+    let results = run(
+        r#"
+(and: prod)
+(? (0.8 and 0.7))
+"#,
+        None,
+    );
+    approx(results[0], 0.56);
+}
+
+#[test]
+fn markov_chain_stationary_distribution() {
+    // Stationary: pi(S) = 2/3, pi(R) = 1/3
+    // Verify: pi(S)*P(S→S) + pi(R)*P(R→S) = pi(S)
+    let results = run(
+        r#"
+(? ((0.8 * 0.666667) + (0.4 * 0.333333)))
+(? ((0.2 * 0.666667) + (0.6 * 0.333333)))
+"#,
+        None,
+    );
+    assert!((results[0] - 2.0 / 3.0).abs() < 1e-4);
+    assert!((results[1] - 1.0 / 3.0).abs() < 1e-4);
+}
+
+#[test]
+fn markov_chain_conditional_transitions_with_links() {
+    // Model transitions using linked probabilities
+    let results = run(
+        r#"
+(and: prod)
+(or: ps)
+(sunny: sunny is sunny)
+(rainy: rainy is rainy)
+(((sunny) = true) has probability 0.7)
+(((rainy) = true) has probability 0.3)
+
+# Joint: P(sunny AND rainy) should be 0.7*0.3 = 0.21
+(? (((sunny) = true) and ((rainy) = true)))
+
+# Union: P(sunny OR rainy) = 1-(1-0.7)*(1-0.3) = 0.79
+(? (((sunny) = true) or ((rainy) = true)))
+"#,
+        None,
+    );
+    approx(results[0], 0.21);
+    approx(results[1], 0.79);
+}

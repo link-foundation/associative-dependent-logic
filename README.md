@@ -468,6 +468,25 @@ See `examples/bayesian-network.lino` — a [Bayesian network](https://en.wikiped
 (? (((cloudy) = true) or ((rain) = true)))    # -> 0.75 (union)
 ```
 
+### Markov Chains with Dependent Probabilities
+
+RML can model [Markov chains](https://en.wikipedia.org/wiki/Markov_chain) where transition probabilities depend on the current state. Using arithmetic and the [law of total probability](https://en.wikipedia.org/wiki/Law_of_total_probability), multi-step state evolution is computed naturally.
+
+See `examples/markov-chain.lino` — a weather model with dependent transitions:
+
+```lino
+# Transition matrix: P(Sunny→Sunny)=0.8, P(Rainy→Sunny)=0.4
+# Initial: P(Sunny)=0.7, P(Rainy)=0.3
+
+# One-step: P(Sunny at t+1) = P(S→S)*P(S) + P(R→S)*P(R)
+(? ((0.8 * 0.7) + (0.4 * 0.3)))   # -> 0.68
+(? ((0.2 * 0.7) + (0.6 * 0.3)))   # -> 0.32
+
+# Joint probability using prod aggregator
+(and: prod)
+(? (0.8 and 0.7))                  # -> 0.56
+```
+
 ### Self-Reasoning (Meta-Logic)
 
 As a meta-logic, RML can reason about its own logic system and compare it with other logics.
@@ -510,6 +529,7 @@ The test suites cover:
 - Bayesian inference: Bayes' theorem, law of total probability, conditional probability, complement rule
 - Bayesian networks: joint probability (prod), probabilistic sum (ps), multi-node networks, chain rule decomposition
 - Self-reasoning: meta-logic properties, comparing logic systems, paradox resolution in meta context
+- Markov chains: one-step and multi-step transitions, joint probability, stationary distribution, conditional transitions with links
 - Comprehensive valence coverage: 0 (continuous), 1 (unary), 2–10, 100, 1000, with both ranges
 
 ## API
@@ -531,6 +551,8 @@ See language-specific documentation:
 - [Bayesian inference](https://en.wikipedia.org/wiki/Bayesian_inference) — updating beliefs based on evidence
 - [Bayesian network](https://en.wikipedia.org/wiki/Bayesian_network) — probabilistic graphical models
 - [Bayes' theorem](https://en.wikipedia.org/wiki/Bayes%27_theorem) — relating conditional and marginal probabilities
+- [Markov chain](https://en.wikipedia.org/wiki/Markov_chain) — stochastic model with state-dependent transitions
+- [Law of total probability](https://en.wikipedia.org/wiki/Law_of_total_probability) — computing marginal probabilities from conditionals
 
 ## License
 
