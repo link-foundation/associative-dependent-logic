@@ -31,6 +31,8 @@ ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built 
 
 ## Supported Logic Types
 
+![F0C5A9A4-B56E-4B64-8B7E-CC3A650EDAF7_1_201_a](https://github.com/user-attachments/assets/b54e3aaa-8645-4067-8051-6299745a2a3b)
+
 | Valence | Name | Truth Values (in `[0, 1]`) | Truth Values (in `[-1, 1]`) | Reference |
 |---------|------|---------------------------|----------------------------|-----------|
 | 1 | Unary (trivial) | `{any}` (no quantization) | `{any}` (no quantization) | [Many-valued logic](https://en.wikipedia.org/wiki/Many-valued_logic) |
@@ -40,8 +42,6 @@ ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built 
 | 5 | Quinary | `{0, 0.25, 0.5, 0.75, 1}` | `{-1, -0.5, 0, 0.5, 1}` | [Many-valued logic](https://en.wikipedia.org/wiki/Many-valued_logic) |
 | N | N-valued | N evenly-spaced levels | N evenly-spaced levels | [Many-valued logic](https://en.wikipedia.org/wiki/Many-valued_logic) |
 | 0/∞ | Continuous / [Fuzzy](https://en.wikipedia.org/wiki/Fuzzy_logic) | Any value in `[0, 1]` | Any value in `[-1, 1]` | [Fuzzy logic](https://en.wikipedia.org/wiki/Fuzzy_logic), [Łukasiewicz ∞-valued](https://en.wikipedia.org/wiki/%C5%81ukasiewicz_logic) |
-
-![F0C5A9A4-B56E-4B64-8B7E-CC3A650EDAF7_1_201_a](https://github.com/user-attachments/assets/b54e3aaa-8645-4067-8051-6299745a2a3b)
 
 ## Quick Start
 
