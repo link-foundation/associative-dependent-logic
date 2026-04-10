@@ -3,6 +3,9 @@
 # Demonstrates Bayes' theorem using RML arithmetic:
 #   P(Disease | Positive) = P(Positive | Disease) * P(Disease) / P(Positive)
 #
+# Directional dependency: Disease → Test Result
+# The test result depends on the disease state (directed causality).
+#
 # Given:
 #   P(Disease)                = 0.01   (1% prevalence)
 #   P(Positive | Disease)     = 0.95   (95% sensitivity)

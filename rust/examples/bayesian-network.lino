@@ -1,16 +1,19 @@
-# Bayesian Network — Sprinkler Example
+# Bayesian Network — Sprinkler Example (Directed Acyclic Graph)
 #
-# Classic sprinkler network encoded as links:
+# Classic sprinkler network encoded as directional links:
 #
 #        Cloudy
-#       /      \
+#       ↓      ↓
 #   Sprinkler  Rain
-#       \      /
+#       ↓      ↓
 #      Wet Grass
+#
+# This is a directed acyclic graph (DAG) — edges flow from causes to effects,
+# and no directed path leads back to the same node.
 #
 # Links notation natively describes networks of any complexity.
 # Each node's probability is a link, and joint/marginal probabilities
-# are computed using prod (product) and ps (probabilistic sum) aggregators.
+# are computed using product and probabilistic_sum aggregators.
 
 # Define network nodes as terms
 (cloudy: cloudy is cloudy)
@@ -19,13 +22,19 @@
 (wet_grass: wet_grass is wet_grass)
 
 # Configure probabilistic operators
-(and: prod)   # P(A ∩ B) = P(A) * P(B) for independent events
-(or: ps)      # P(A ∪ B) = 1 - (1-P(A))*(1-P(B))
+(and: product)              # P(A ∩ B) = P(A) * P(B) for independent events
+(or: probabilistic_sum)     # P(A ∪ B) = 1 - (1-P(A))*(1-P(B))
 
 # Assign marginal probabilities
 ((cloudy = true) has probability 0.5)
 ((sprinkler = true) has probability 0.3)
 ((rain = true) has probability 0.5)
+
+# Directed conditional dependencies (cause → effect):
+# cloudy → sprinkler: P(Sprinkler | Cloudy)
+# cloudy → rain:      P(Rain | Cloudy)
+# sprinkler → wet_grass: P(WetGrass | Sprinkler)
+# rain → wet_grass:      P(WetGrass | Rain)
 
 # Query marginal probabilities
 (? (cloudy = true))                          # -> 0.5

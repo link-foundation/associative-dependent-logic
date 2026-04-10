@@ -193,7 +193,17 @@ describe('run', () => {
     assert.strictEqual(results[0], 0);
   });
 
-  it('should handle product aggregator', () => {
+  it('should handle product aggregator (full name)', () => {
+    const text = `
+(and: product)
+(? (0.5 and 0.5))
+`;
+    const results = run(text);
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0], 0.25);
+  });
+
+  it('should handle product aggregator (short name backward compatible)', () => {
     const text = `
 (and: prod)
 (? (0.5 and 0.5))
@@ -203,7 +213,17 @@ describe('run', () => {
     assert.strictEqual(results[0], 0.25);
   });
 
-  it('should handle probabilistic sum aggregator', () => {
+  it('should handle probabilistic_sum aggregator (full name)', () => {
+    const text = `
+(or: probabilistic_sum)
+(? (0.5 or 0.5))
+`;
+    const results = run(text);
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0], 0.75);
+  });
+
+  it('should handle probabilistic sum aggregator (short name backward compatible)', () => {
     const text = `
 (or: ps)
 (? (0.5 or 0.5))
@@ -1721,9 +1741,9 @@ describe('Bayesian Inference', () => {
     approx(results[2], 0.161017, 1e-6);
   });
 
-  it('probabilistic AND (prod): P(A ∩ B) = P(A)*P(B)', () => {
+  it('probabilistic AND (product): P(A ∩ B) = P(A)*P(B)', () => {
     const results = run(`
-(and: prod)
+(and: product)
 (a: a is a)
 (b: b is b)
 (((a) = true) has probability 0.3)
@@ -1733,9 +1753,9 @@ describe('Bayesian Inference', () => {
     approx(results[0], 0.21);
   });
 
-  it('probabilistic OR (ps): P(A ∪ B) = 1-(1-P(A))*(1-P(B))', () => {
+  it('probabilistic OR (probabilistic_sum): P(A ∪ B) = 1-(1-P(A))*(1-P(B))', () => {
     const results = run(`
-(or: ps)
+(or: probabilistic_sum)
 (a: a is a)
 (b: b is b)
 (((a) = true) has probability 0.3)
@@ -1745,10 +1765,10 @@ describe('Bayesian Inference', () => {
     approx(results[0], 0.79);
   });
 
-  it('joint probability with prod and ps together', () => {
+  it('joint probability with product and probabilistic_sum together', () => {
     const results = run(`
-(and: prod)
-(or: ps)
+(and: product)
+(or: probabilistic_sum)
 (a: a is a)
 (b: b is b)
 (c: c is c)
@@ -1795,7 +1815,7 @@ describe('Bayesian Inference', () => {
 
   it('independent events: P(A ∩ B) = P(A)*P(B)', () => {
     const results = run(`
-(and: prod)
+(and: product)
 (coin1: coin1 is coin1)
 (coin2: coin2 is coin2)
 (((coin1) = heads) has probability 0.5)
@@ -1818,7 +1838,7 @@ describe('Bayesian Inference', () => {
 
   it('multi-node network with prefix AND', () => {
     const results = run(`
-(and: prod)
+(and: product)
 (a: a is a)
 (b: b is b)
 (c: c is c)
@@ -1986,11 +2006,11 @@ describe('Valence coverage: 0 (continuous) through high N', () => {
     approx(results[0], 0.2);  // 0.15 → nearest 0.2
   });
 
-  it('valence 2: binary with prod AND and ps OR', () => {
+  it('valence 2: binary with product AND and probabilistic_sum OR', () => {
     const results = run(`
 (valence: 2)
-(and: prod)
-(or: ps)
+(and: product)
+(or: probabilistic_sum)
 (a: a is a)
 (b: b is b)
 (((a) = true) has probability 0.8)
@@ -1998,22 +2018,22 @@ describe('Valence coverage: 0 (continuous) through high N', () => {
 (? (((a) = true) and ((b) = true)))
 (? (((a) = true) or ((b) = true)))
 `);
-    // In binary: 0.8 → 1, 0.6 → 1, so prod(1,1)=1, ps(1,1)=1
+    // In binary: 0.8 → 1, 0.6 → 1, so product(1,1)=1, probabilistic_sum(1,1)=1
     approx(results[0], 1);
     approx(results[1], 1);
   });
 
-  it('valence 3: ternary with Bayesian prod AND', () => {
+  it('valence 3: ternary with Bayesian product AND', () => {
     const results = run(`
 (valence: 3)
-(and: prod)
+(and: product)
 (a: a is a)
 (b: b is b)
 (((a) = true) has probability 0.5)
 (((b) = true) has probability 0.5)
 (? (((a) = true) and ((b) = true)))
 `);
-    // In ternary: 0.5 stays 0.5, prod(0.5,0.5)=0.25 → quantized to 0.5
+    // In ternary: 0.5 stays 0.5, product(0.5,0.5)=0.25 → quantized to 0.5
     approx(results[0], 0.5);
   });
 });
@@ -2672,7 +2692,7 @@ describe('Markov chains', () => {
   it('joint probability', () => {
     // P(Sunny_t, Sunny_t+1) = P(S→S) * P(S_t) = 0.8 * 0.7
     const results = run(`
-(and: prod)
+(and: product)
 (? (0.8 and 0.7))
 `);
     approx(results[0], 0.56);
@@ -2690,8 +2710,8 @@ describe('Markov chains', () => {
 
   it('conditional transitions with links', () => {
     const results = run(`
-(and: prod)
-(or: ps)
+(and: product)
+(or: probabilistic_sum)
 (sunny: sunny is sunny)
 (rainy: rainy is rainy)
 (((sunny) = true) has probability 0.7)
@@ -2702,5 +2722,68 @@ describe('Markov chains', () => {
 `);
     approx(results[0], 0.21);
     approx(results[1], 0.79);
+  });
+});
+
+// ===== Cyclic Markov Networks =====
+
+describe('Markov networks (cyclic)', () => {
+  it('pairwise joint probability in cyclic network', () => {
+    // Three nodes forming a cycle: Alice—Bob—Carol—Alice
+    const results = run(`
+(and: product)
+(alice: alice is alice)
+(bob: bob is bob)
+(carol: carol is carol)
+(((alice) = agree) has probability 0.7)
+(((bob) = agree) has probability 0.5)
+(((carol) = agree) has probability 0.6)
+(? (((alice) = agree) and ((bob) = agree)))
+(? (((bob) = agree) and ((carol) = agree)))
+(? (((carol) = agree) and ((alice) = agree)))
+`);
+    approx(results[0], 0.35);
+    approx(results[1], 0.3);
+    approx(results[2], 0.42);
+  });
+
+  it('three-way clique in cyclic network', () => {
+    const results = run(`
+(and: product)
+(alice: alice is alice)
+(bob: bob is bob)
+(carol: carol is carol)
+(((alice) = agree) has probability 0.7)
+(((bob) = agree) has probability 0.5)
+(((carol) = agree) has probability 0.6)
+(? (and ((alice) = agree) ((bob) = agree) ((carol) = agree)))
+`);
+    approx(results[0], 0.21);
+  });
+
+  it('union in cyclic network', () => {
+    const results = run(`
+(or: probabilistic_sum)
+(alice: alice is alice)
+(bob: bob is bob)
+(carol: carol is carol)
+(((alice) = agree) has probability 0.7)
+(((bob) = agree) has probability 0.5)
+(((carol) = agree) has probability 0.6)
+(? (or ((alice) = agree) ((bob) = agree) ((carol) = agree)))
+`);
+    approx(results[0], 0.94);
+  });
+
+  it('unnormalized clique potential product', () => {
+    // φ(A,B) * φ(B,C) * φ(C,A) = 0.8 * 0.7 * 0.6
+    const results = run('(? ((0.8 * 0.7) * 0.6))');
+    approx(results[0], 0.336);
+  });
+
+  it('normalized probability via partition function', () => {
+    // P(config) = unnormalized / Z = 0.336 / 2.5
+    const results = run('(? (0.336 / 2.5))');
+    approx(results[0], 0.1344);
   });
 });
