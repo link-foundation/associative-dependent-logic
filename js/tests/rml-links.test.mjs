@@ -258,6 +258,140 @@ describe('run', () => {
 });
 
 // =============================================================================
+// Standard logic examples — testing the example files
+// =============================================================================
+describe('Example: classical-logic.lino', () => {
+  it('should produce correct results for classical Boolean logic', () => {
+    const results = run(`
+(valence: 2)
+(and: min)
+(or: max)
+(p: p is p)
+(q: q is q)
+((p = true) has probability 1)
+((q = true) has probability 0)
+(? (p = true))
+(? (q = true))
+(? (not (p = true)))
+(? (not (q = true)))
+(? ((p = true) and (q = true)))
+(? ((p = true) or (q = true)))
+(? ((p = true) or (not (p = true))))
+(? ((p = true) and (not (p = true))))
+(? (not (not (p = true))))
+`);
+    assert.strictEqual(results.length, 9);
+    assert.strictEqual(results[0], 1);    // p = true
+    assert.strictEqual(results[1], 0);    // q = false
+    assert.strictEqual(results[2], 0);    // not p = false
+    assert.strictEqual(results[3], 1);    // not q = true
+    assert.strictEqual(results[4], 0);    // p AND q = false
+    assert.strictEqual(results[5], 1);    // p OR q = true
+    assert.strictEqual(results[6], 1);    // excluded middle
+    assert.strictEqual(results[7], 0);    // non-contradiction
+    assert.strictEqual(results[8], 1);    // double negation
+  });
+});
+
+describe('Example: propositional-logic.lino', () => {
+  it('should produce correct results for probabilistic propositional logic', () => {
+    const results = run(`
+(and: product)
+(or: probabilistic_sum)
+(rain: rain is rain)
+(umbrella: umbrella is umbrella)
+(wet: wet is wet)
+((rain = true) has probability 0.3)
+((umbrella = true) has probability 0.6)
+((wet = true) has probability 0.4)
+(? (rain = true))
+(? (umbrella = true))
+(? ((rain = true) and (umbrella = true)))
+(? ((rain = true) or (umbrella = true)))
+(? (not (rain = true)))
+(? (and (rain = true) (umbrella = true) (wet = true)))
+(? (or (rain = true) (umbrella = true) (wet = true)))
+`);
+    assert.strictEqual(results.length, 7);
+    approx(results[0], 0.3);
+    approx(results[1], 0.6);
+    approx(results[2], 0.18);
+    approx(results[3], 0.72);
+    approx(results[4], 0.7);
+    approx(results[5], 0.072);
+    approx(results[6], 0.832);
+  });
+});
+
+describe('Example: fuzzy-logic.lino', () => {
+  it('should produce correct results for fuzzy logic (Zadeh)', () => {
+    const results = run(`
+(and: min)
+(or: max)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.3)
+((c = tall) has probability 0.6)
+(? (a = tall))
+(? (b = tall))
+(? ((a = tall) and (b = tall)))
+(? ((a = tall) or (b = tall)))
+(? (not (a = tall)))
+(? ((a = tall) and ((b = tall) or (c = tall))))
+`);
+    assert.strictEqual(results.length, 6);
+    approx(results[0], 0.8);
+    approx(results[1], 0.3);
+    approx(results[2], 0.3);   // min(0.8, 0.3)
+    approx(results[3], 0.8);   // max(0.8, 0.3)
+    approx(results[4], 0.2);   // 1 - 0.8
+    approx(results[5], 0.6);   // min(0.8, max(0.3, 0.6))
+  });
+});
+
+describe('Example: belnap-four-valued.lino', () => {
+  it('should produce correct results for Belnap four-valued logic', () => {
+    const results = run(`
+(and: min)
+(or: max)
+(? true)
+(? false)
+(? both)
+(? neither)
+(? (not true))
+(? (not false))
+(? (not both))
+(? (not neither))
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+(? (true and both))
+(? (false or both))
+(? (true or both))
+(? (false and both))
+`);
+    assert.strictEqual(results.length, 14);
+    assert.strictEqual(results[0], 1);      // true
+    assert.strictEqual(results[1], 0);      // false
+    assert.strictEqual(results[2], 0.5);    // both
+    assert.strictEqual(results[3], 0.5);    // neither
+    assert.strictEqual(results[4], 0);      // not true
+    assert.strictEqual(results[5], 1);      // not false
+    assert.strictEqual(results[6], 0.5);    // not both = both
+    assert.strictEqual(results[7], 0.5);    // not neither = neither
+    assert.strictEqual(results[8], 0.5);    // liar paradox
+    assert.strictEqual(results[9], 0.5);    // not liar paradox
+    assert.strictEqual(results[10], 0.5);   // true AND both
+    assert.strictEqual(results[11], 0.5);   // false OR both
+    assert.strictEqual(results[12], 1);     // true OR both
+    assert.strictEqual(results[13], 0);     // false AND both
+  });
+});
+
+// =============================================================================
 // Quantization helper
 // See: https://en.wikipedia.org/wiki/Many-valued_logic
 // =============================================================================
