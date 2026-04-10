@@ -20,7 +20,7 @@
 
 The question is whether the ADL (Associative-Dependent Logic) system, built on Links Notation (LiNo), can serve as a **meta-theory** capable of defining the very core of dependent type systems like Lean 4 and Rocq (formerly Coq). The answer is **yes, in principle**, but it requires extending ADL with several new capabilities. This document analyzes the gap, proposes concrete implementation options with LiNo syntax, and identifies existing libraries that can help.
 
-The key insight from [Links Theory](https://github.com/link-foundation/deep-theory) is that a **link** is a universal unit of meaning — it can represent types, terms, proofs, and propositions uniformly. This is analogous to how the Calculus of Constructions (CoC) unifies terms and types into a single syntactic category. The "associative" in ADL and the "dependent" in dependent types can be bridged through this shared principle of **self-reference and unification**.
+The key insight from [Links Theory](https://github.com/link-foundation/meta-theory) is that a **link** is a universal unit of meaning — it can represent types, terms, proofs, and propositions uniformly. This is analogous to how the Calculus of Constructions (CoC) unifies terms and types into a single syntactic category. The "associative" in ADL and the "dependent" in dependent types can be bridged through this shared principle of **self-reference and unification**.
 
 ---
 
@@ -177,7 +177,7 @@ For the full Calculus of Inductive Constructions:
 
 ## Key Insight: Links as a Meta-Theory
 
-The [Links Theory](https://github.com/link-foundation/deep-theory) (Deep Theory) establishes that:
+The [Links Theory](https://github.com/link-foundation/meta-theory) (Deep Theory) establishes that:
 
 1. A **link** is the universal unit of meaning — it can represent anything
 2. **Doublets** (2-tuples) and **triplets** (3-tuples) can represent any data structure
@@ -578,7 +578,7 @@ This achieves the original goal: the system becomes a meta-theory that can descr
 - [A Probabilistic Dependent Type System (arXiv)](https://arxiv.org/abs/1602.06420)
 
 ### Links Theory and Associative Models
-- [Links Theory — GitHub](https://github.com/link-foundation/deep-theory)
+- [Links Theory — GitHub](https://github.com/link-foundation/meta-theory)
 - [Math introduction to Deep Theory (Habr)](https://habr.com/en/companies/deepfoundation/articles/658705/)
 - [Associative Links (DEV Community)](https://dev.to/deepfoundation/associative-links-4cda)
 - [Associative Links Explained (HackerNoon)](https://hackernoon.com/associative-links-explained)

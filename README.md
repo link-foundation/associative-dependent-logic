@@ -1,6 +1,8 @@
-# associative-dependent-logic
+# relative-meta-logic
 
 A prototype for logic framework that can reason about anything relative to given probability of input statements.
+
+> **Note on naming:** This project was previously called *Associative-Dependent Logic (ADL)*. The name *Associative Dependent Meta Logic* is also valid, as in [dependent types](https://en.wikipedia.org/wiki/Dependent_type), but *relative* is closer to the concept of a [link](https://github.com/link-foundation/meta-theory), and actually all statements are relative to other statements. The name *meta-logic* reflects that this system can reason about all possible logic systems, including itself.
 
 ## Implementations
 
@@ -9,13 +11,13 @@ This project provides two equivalent implementations:
 - **[JavaScript](./js/)** — Node.js implementation using the official [links-notation](https://github.com/link-foundation/links-notation) parser
 - **[Rust](./rust/)** — Rust implementation using the official [links-notation](https://github.com/link-foundation/links-notation) crate
 
-Both implementations pass the same 176 tests and produce identical results.
+Both implementations pass the same 199 tests and produce identical results.
 
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Overview
 
-ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built on top of [LiNo (Links Notation)](https://github.com/link-foundation/links-notation). It supports [many-valued logics](https://en.wikipedia.org/wiki/Many-valued_logic) from unary (1-valued) through continuous probabilistic ([fuzzy](https://en.wikipedia.org/wiki/Fuzzy_logic)), allowing you to:
+RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minimal probabilistic logic system built on top of [LiNo (Links Notation)](https://github.com/link-foundation/links-notation). It supports [many-valued logics](https://en.wikipedia.org/wiki/Many-valued_logic) from unary (1-valued) through continuous probabilistic ([fuzzy](https://en.wikipedia.org/wiki/Fuzzy_logic)), allowing you to:
 
 - Define terms
 - Assign probabilities (truth values) to logical expressions
@@ -50,7 +52,7 @@ ADL (Associative-Dependent Logic) is a minimal probabilistic logic system built 
 ```bash
 cd js
 npm install
-node src/adl-links.mjs demo.lino
+node src/rml-links.mjs demo.lino
 ```
 
 ### Rust
@@ -438,9 +440,73 @@ See `examples/ternary-kleene.lino` — demonstrates [Kleene's strong three-value
 
 In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Priest_logics), the law of excluded middle (`A ∨ ¬A`) is **not** a tautology — this is the key difference from [classical logic](https://en.wikipedia.org/wiki/Classical_logic).
 
+### Bayesian Inference
+
+RML natively supports [Bayesian inference](https://en.wikipedia.org/wiki/Bayesian_inference) and [Bayesian networks](https://en.wikipedia.org/wiki/Bayesian_network). Links notation naturally describes networks of any complexity — each node's probability is a link, and joint/marginal probabilities are computed using the `prod` (product) and `ps` (probabilistic sum) aggregators.
+
+See `examples/bayesian-inference.lino` — [Bayes' theorem](https://en.wikipedia.org/wiki/Bayes%27_theorem) applied to medical diagnosis:
+
+```lino
+# P(Disease) = 0.01, P(Positive|Disease) = 0.95, P(Positive|~Disease) = 0.05
+# Bayes' theorem: P(Disease|Positive) = P(Pos|D)*P(D) / P(Pos)
+
+(? (0.95 * 0.01))                                        # -> 0.0095
+(? ((0.95 * 0.01) + (0.05 * 0.99)))                     # -> 0.059
+(? ((0.95 * 0.01) / ((0.95 * 0.01) + (0.05 * 0.99))))  # -> 0.161017
+```
+
+See `examples/bayesian-network.lino` — a [Bayesian network](https://en.wikipedia.org/wiki/Bayesian_network) with `prod` and `ps` aggregators:
+
+```lino
+(and: prod)   # P(A ∩ B) = P(A) * P(B)
+(or: ps)      # P(A ∪ B) = 1 - (1-P(A))*(1-P(B))
+
+(((cloudy) = true) has probability 0.5)
+(((rain) = true) has probability 0.5)
+
+(? (((cloudy) = true) and ((rain) = true)))   # -> 0.25 (joint)
+(? (((cloudy) = true) or ((rain) = true)))    # -> 0.75 (union)
+```
+
+### Markov Chains with Dependent Probabilities
+
+RML can model [Markov chains](https://en.wikipedia.org/wiki/Markov_chain) where transition probabilities depend on the current state. Using arithmetic and the [law of total probability](https://en.wikipedia.org/wiki/Law_of_total_probability), multi-step state evolution is computed naturally.
+
+See `examples/markov-chain.lino` — a weather model with dependent transitions:
+
+```lino
+# Transition matrix: P(Sunny→Sunny)=0.8, P(Rainy→Sunny)=0.4
+# Initial: P(Sunny)=0.7, P(Rainy)=0.3
+
+# One-step: P(Sunny at t+1) = P(S→S)*P(S) + P(R→S)*P(R)
+(? ((0.8 * 0.7) + (0.4 * 0.3)))   # -> 0.68
+(? ((0.2 * 0.7) + (0.6 * 0.3)))   # -> 0.32
+
+# Joint probability using prod aggregator
+(and: prod)
+(? (0.8 and 0.7))                  # -> 0.56
+```
+
+### Self-Reasoning (Meta-Logic)
+
+As a meta-logic, RML can reason about its own logic system and compare it with other logics.
+
+See `examples/self-reasoning.lino`:
+
+```lino
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+
+(((RML supports_many_valued) = true) has probability 1)
+(? ((RML supports_many_valued) = true))   # -> 1
+(? (RML of Logic))                        # -> 1
+(? (type of RML))                         # -> Logic
+```
+
 ## Testing
 
-Both implementations have 176 matching tests:
+Both implementations have matching tests:
 
 ```bash
 # JavaScript
@@ -460,6 +526,11 @@ The test suites cover:
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, type queries, prefix type notation
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types, coexistence with universe hierarchy
+- Bayesian inference: Bayes' theorem, law of total probability, conditional probability, complement rule
+- Bayesian networks: joint probability (prod), probabilistic sum (ps), multi-node networks, chain rule decomposition
+- Self-reasoning: meta-logic properties, comparing logic systems, paradox resolution in meta context
+- Markov chains: one-step and multi-step transitions, joint probability, stationary distribution, conditional transitions with links
+- Comprehensive valence coverage: 0 (continuous), 1 (unary), 2–10, 100, 1000, with both ranges
 
 ## API
 
@@ -476,6 +547,12 @@ See language-specific documentation:
 - [Fuzzy logic](https://en.wikipedia.org/wiki/Fuzzy_logic) — continuous-valued logic with degrees of truth
 - [Balanced ternary](https://en.wikipedia.org/wiki/Balanced_ternary) — ternary system using {-1, 0, 1}
 - [Liar paradox](https://en.wikipedia.org/wiki/Liar_paradox) — "this statement is false" and its resolution in many-valued logics
+- [Bayesian statistics](https://en.wikipedia.org/wiki/Bayesian_statistics) — probability as a measure of belief
+- [Bayesian inference](https://en.wikipedia.org/wiki/Bayesian_inference) — updating beliefs based on evidence
+- [Bayesian network](https://en.wikipedia.org/wiki/Bayesian_network) — probabilistic graphical models
+- [Bayes' theorem](https://en.wikipedia.org/wiki/Bayes%27_theorem) — relating conditional and marginal probabilities
+- [Markov chain](https://en.wikipedia.org/wiki/Markov_chain) — stochastic model with state-dependent transitions
+- [Law of total probability](https://en.wikipedia.org/wiki/Law_of_total_probability) — computing marginal probabilities from conditionals
 
 ## License
 

@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the internal architecture of **Associative-Dependent Logic (ADL)**, a minimal probabilistic logic framework built on [LiNo (Links Notation)](https://github.com/link-foundation/links-notation).
+This document describes the internal architecture of **Relative Meta-Logic (RML, formerly Associative-Dependent Logic / ADL)**, a minimal probabilistic logic framework built on [LiNo (Links Notation)](https://github.com/link-foundation/links-notation).
 
 ## Project Structure
 
@@ -12,7 +12,7 @@ This document describes the internal architecture of **Associative-Dependent Log
 ├── js/                      # JavaScript implementation
 │   ├── package.json
 │   ├── src/
-│   │   └── adl-links.mjs   # Core implementation (~370 lines)
+│   │   └── rml-links.mjs   # Core implementation (~370 lines)
 │   ├── test/
 │   │   └── adl-links.test.mjs  # 122 tests
 │   ├── demo.lino

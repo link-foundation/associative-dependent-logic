@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute } from '../src/adl-links.mjs';
+import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute } from '../src/rml-links.mjs';
 
 const approx = (actual, expected, epsilon = 1e-9) =>
   assert.ok(Math.abs(actual - expected) < epsilon,
@@ -1701,5 +1701,1006 @@ describe('Type System: self-referential (Type: Type Type) — dynamic axiomatic 
 `);
     assert.strictEqual(results[0], 0.5);
     assert.strictEqual(results[1], 0.5);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────
+// Bayesian Inference and Bayesian Networks
+// ──────────────────────────────────────────────────────────────
+describe('Bayesian Inference', () => {
+  it('Bayes theorem: medical diagnosis P(Disease|Positive)', () => {
+    // P(D)=0.01, P(Pos|D)=0.95, P(Pos|~D)=0.05
+    // P(D|Pos) = P(Pos|D)*P(D) / (P(Pos|D)*P(D)+P(Pos|~D)*P(~D))
+    const results = run(`
+(? (0.95 * 0.01))
+(? ((0.95 * 0.01) + (0.05 * 0.99)))
+(? ((0.95 * 0.01) / ((0.95 * 0.01) + (0.05 * 0.99))))
+`);
+    approx(results[0], 0.0095);
+    approx(results[1], 0.059);
+    approx(results[2], 0.161017, 1e-6);
+  });
+
+  it('probabilistic AND (prod): P(A ∩ B) = P(A)*P(B)', () => {
+    const results = run(`
+(and: prod)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.3)
+(((b) = true) has probability 0.7)
+(? (((a) = true) and ((b) = true)))
+`);
+    approx(results[0], 0.21);
+  });
+
+  it('probabilistic OR (ps): P(A ∪ B) = 1-(1-P(A))*(1-P(B))', () => {
+    const results = run(`
+(or: ps)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.3)
+(((b) = true) has probability 0.7)
+(? (((a) = true) or ((b) = true)))
+`);
+    approx(results[0], 0.79);
+  });
+
+  it('joint probability with prod and ps together', () => {
+    const results = run(`
+(and: prod)
+(or: ps)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+(((a) = true) has probability 0.5)
+(((b) = true) has probability 0.3)
+(((c) = true) has probability 0.5)
+(? (((a) = true) and ((b) = true)))
+(? (((a) = true) or ((b) = true)))
+(? (and ((a) = true) ((b) = true) ((c) = true)))
+`);
+    approx(results[0], 0.15);
+    approx(results[1], 0.65);
+    approx(results[2], 0.075);
+  });
+
+  it('Bayesian network: chain rule decomposition', () => {
+    // P(WetGrass) from conditional probabilities
+    // P(W|S,R)=0.99, P(W|S,~R)=0.9, P(W|~S,R)=0.9, P(W|~S,~R)=0.01
+    // P(S)=0.3, P(R)=0.5
+    const results = run(`
+(? (((0.99 * 0.15) + (0.9 * 0.15)) + ((0.9 * 0.35) + (0.01 * 0.35))))
+`);
+    approx(results[0], 0.602, 1e-6);
+  });
+
+  it('law of total probability', () => {
+    // P(B) = P(B|A)*P(A) + P(B|~A)*P(~A)
+    // P(A)=0.4, P(B|A)=0.8, P(B|~A)=0.3
+    // P(B) = 0.8*0.4 + 0.3*0.6 = 0.32 + 0.18 = 0.5
+    const results = run(`
+(? ((0.8 * 0.4) + (0.3 * 0.6)))
+`);
+    approx(results[0], 0.5);
+  });
+
+  it('conditional probability via Bayes: P(A|B) = P(B|A)*P(A)/P(B)', () => {
+    // P(A)=0.4, P(B|A)=0.8, P(B)=0.5
+    // P(A|B) = 0.8*0.4/0.5 = 0.64
+    const results = run(`
+(? ((0.8 * 0.4) / 0.5))
+`);
+    approx(results[0], 0.64);
+  });
+
+  it('independent events: P(A ∩ B) = P(A)*P(B)', () => {
+    const results = run(`
+(and: prod)
+(coin1: coin1 is coin1)
+(coin2: coin2 is coin2)
+(((coin1) = heads) has probability 0.5)
+(((coin2) = heads) has probability 0.5)
+(? (((coin1) = heads) and ((coin2) = heads)))
+`);
+    approx(results[0], 0.25);
+  });
+
+  it('complement rule: P(~A) = 1 - P(A)', () => {
+    const results = run(`
+(a: a is a)
+(((a) = true) has probability 0.7)
+(? ((a) = true))
+(? (not ((a) = true)))
+`);
+    approx(results[0], 0.7);
+    approx(results[1], 0.3);
+  });
+
+  it('multi-node network with prefix AND', () => {
+    const results = run(`
+(and: prod)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+(d: d is d)
+(((a) = true) has probability 0.9)
+(((b) = true) has probability 0.8)
+(((c) = true) has probability 0.7)
+(((d) = true) has probability 0.6)
+(? (and ((a) = true) ((b) = true) ((c) = true) ((d) = true)))
+`);
+    approx(results[0], 0.3024);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────
+// Self-Reasoning (Meta-Logic)
+// ──────────────────────────────────────────────────────────────
+describe('Self-Reasoning: meta-logic reasoning about itself', () => {
+  it('can define and query properties of logic systems', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(Property: Type Property)
+(RML: Logic RML)
+(supports_many_valued: Property supports_many_valued)
+(((RML supports_many_valued) = true) has probability 1)
+(? ((RML supports_many_valued) = true))
+(? (RML of Logic))
+(? (Logic of Type))
+(? (type of RML))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 'Logic');
+  });
+
+  it('can compare properties of different logic systems', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(Classical: Logic Classical)
+(((RML supports_self_reference) = true) has probability 1)
+(((Classical supports_self_reference) = true) has probability 0)
+(? ((RML supports_self_reference) = true))
+(? ((Classical supports_self_reference) = true))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 0);
+  });
+
+  it('can reason about its own paradox resolution', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(liar: liar is liar)
+((liar = false) has probability 0.5)
+(? (liar = false))
+(? (not (liar = false)))
+(? (RML of Logic))
+`);
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], 0.5);
+    assert.strictEqual(results[2], 1);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────
+// Comprehensive valence coverage (0 to ∞)
+// ──────────────────────────────────────────────────────────────
+describe('Valence coverage: 0 (continuous) through high N', () => {
+  it('valence 0: continuous — no quantization', () => {
+    const results = run(`
+(valence: 0)
+(a: a is a)
+(((a) = true) has probability 0.123456)
+(? ((a) = true))
+`);
+    approx(results[0], 0.123456);
+  });
+
+  it('valence 1: unary — no quantization', () => {
+    const results = run(`
+(valence: 1)
+(a: a is a)
+(((a) = true) has probability 0.7)
+(? ((a) = true))
+`);
+    approx(results[0], 0.7);
+  });
+
+  it('valence 6: six-valued logic', () => {
+    // Levels: {0, 0.2, 0.4, 0.6, 0.8, 1}
+    const results = run(`
+(valence: 6)
+(a: a is a)
+(((a) = true) has probability 0.33)
+(? ((a) = true))
+(((a) = true) has probability 0.71)
+(? ((a) = true))
+`);
+    approx(results[0], 0.4);   // 0.33 → nearest 0.4
+    approx(results[1], 0.8);   // 0.71 → nearest 0.8
+  });
+
+  it('valence 7: seven-valued logic', () => {
+    // Levels: {0, 1/6, 2/6, 3/6, 4/6, 5/6, 1} ≈ {0, 0.1667, 0.3333, 0.5, 0.6667, 0.8333, 1}
+    const results = run(`
+(valence: 7)
+(a: a is a)
+(((a) = true) has probability 0.5)
+(? ((a) = true))
+`);
+    approx(results[0], 0.5);  // 0.5 = 3/6, exact match
+  });
+
+  it('valence 10: ten-valued logic', () => {
+    // Levels: {0, 1/9, 2/9, ..., 1} ≈ {0, 0.111, 0.222, ..., 1}
+    const results = run(`
+(valence: 10)
+(a: a is a)
+(((a) = true) has probability 0.3)
+(? ((a) = true))
+(((a) = true) has probability 0.77)
+(? ((a) = true))
+`);
+    approx(results[0], 1/3, 1e-6);    // 0.3 → nearest 1/3
+    approx(results[1], 7/9, 1e-6);    // 0.77 → nearest 7/9
+  });
+
+  it('valence 100: hundred-valued logic — fine granularity', () => {
+    // Step = 1/99 ≈ 0.010101
+    const results = run(`
+(valence: 100)
+(a: a is a)
+(((a) = true) has probability 0.505)
+(? ((a) = true))
+`);
+    // 0.505 → nearest level: round(0.505*99)/99 = 50/99 ≈ 0.505051
+    approx(results[0], 50/99, 1e-4);
+  });
+
+  it('valence 1000: thousand-valued — near-continuous', () => {
+    const results = run(`
+(valence: 1000)
+(a: a is a)
+(((a) = true) has probability 0.333)
+(? ((a) = true))
+`);
+    // step = 1/999, nearest = round(0.333*999)/999 = 333/999 = 0.333333...
+    approx(results[0], 333/999, 1e-3);
+  });
+
+  it('valence 6, balanced range [-1,1]: six-valued', () => {
+    // Levels: {-1, -0.6, -0.2, 0.2, 0.6, 1}
+    const results = run(`
+(range: -1 1)
+(valence: 6)
+(a: a is a)
+(((a) = true) has probability 0.15)
+(? ((a) = true))
+`);
+    approx(results[0], 0.2);  // 0.15 → nearest 0.2
+  });
+
+  it('valence 2: binary with prod AND and ps OR', () => {
+    const results = run(`
+(valence: 2)
+(and: prod)
+(or: ps)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.8)
+(((b) = true) has probability 0.6)
+(? (((a) = true) and ((b) = true)))
+(? (((a) = true) or ((b) = true)))
+`);
+    // In binary: 0.8 → 1, 0.6 → 1, so prod(1,1)=1, ps(1,1)=1
+    approx(results[0], 1);
+    approx(results[1], 1);
+  });
+
+  it('valence 3: ternary with Bayesian prod AND', () => {
+    const results = run(`
+(valence: 3)
+(and: prod)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.5)
+(((b) = true) has probability 0.5)
+(? (((a) = true) and ((b) = true)))
+`);
+    // In ternary: 0.5 stays 0.5, prod(0.5,0.5)=0.25 → quantized to 0.5
+    approx(results[0], 0.5);
+  });
+});
+
+// ===== Truth constants: true, false, unknown, undefined =====
+
+describe('Truth constants', () => {
+  // --- Default values in [0,1] range ---
+
+  it('true defaults to 1 in [0,1]', () => {
+    const results = run('(? true)');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('false defaults to 0 in [0,1]', () => {
+    const results = run('(? false)');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('unknown defaults to 0.5 in [0,1]', () => {
+    const results = run('(? unknown)');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('undefined defaults to 0.5 in [0,1]', () => {
+    const results = run('(? undefined)');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  // --- Default values in [-1,1] range ---
+
+  it('true defaults to 1 in [-1,1]', () => {
+    const results = run('(range: -1 1)\n(? true)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('false defaults to -1 in [-1,1]', () => {
+    const results = run('(range: -1 1)\n(? false)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], -1);
+  });
+
+  it('unknown defaults to 0 in [-1,1]', () => {
+    const results = run('(range: -1 1)\n(? unknown)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('undefined defaults to 0 in [-1,1]', () => {
+    const results = run('(range: -1 1)\n(? undefined)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+  });
+
+  // --- Redefinition ---
+
+  it('redefine true', () => {
+    const results = run('(true: 0.8)\n(? true)');
+    assert.strictEqual(results[0], 0.8);
+  });
+
+  it('redefine false', () => {
+    const results = run('(false: 0.2)\n(? false)');
+    assert.strictEqual(results[0], 0.2);
+  });
+
+  it('redefine unknown', () => {
+    const results = run('(unknown: 0.3)\n(? unknown)');
+    assert.strictEqual(results[0], 0.3);
+  });
+
+  it('redefine undefined', () => {
+    const results = run('(undefined: 0.7)\n(? undefined)');
+    assert.strictEqual(results[0], 0.7);
+  });
+
+  it('redefine in balanced range', () => {
+    const results = run('(range: -1 1)\n(true: 0.5)\n(false: -0.5)\n(? true)\n(? false)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], -0.5);
+  });
+
+  // --- Range change re-initializes defaults ---
+
+  it('range change reinitializes defaults', () => {
+    const results = run('(? true)\n(? false)\n(range: -1 1)\n(? true)\n(? false)\n(? unknown)');
+    assert.strictEqual(results.length, 5);
+    assert.strictEqual(results[0], 1);   // true in [0,1]
+    assert.strictEqual(results[1], 0);   // false in [0,1]
+    assert.strictEqual(results[2], 1);   // true in [-1,1]
+    assert.strictEqual(results[3], -1);  // false in [-1,1]
+    assert.strictEqual(results[4], 0);   // unknown in [-1,1]
+  });
+
+  // --- Use in expressions ---
+
+  it('not true', () => {
+    const results = run('(? (not true))');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('not false', () => {
+    const results = run('(? (not false))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('not unknown', () => {
+    const results = run('(? (not unknown))');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('true and false (avg)', () => {
+    const results = run('(? (true and false))');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('true or false (max)', () => {
+    const results = run('(? (true or false))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('true and false (min)', () => {
+    const results = run('(and: min)\n(? (true and false))');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('balanced not operators', () => {
+    const results = run('(range: -1 1)\n(? (not true))\n(? (not false))\n(? (not unknown))', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], -1);  // not(1) = -1
+    assert.strictEqual(results[1], 1);   // not(-1) = 1
+    assert.strictEqual(results[2], 0);   // not(0) = 0
+  });
+
+  // --- With quantization ---
+
+  it('binary valence', () => {
+    const results = run('(valence: 2)\n(? true)\n(? false)\n(? unknown)');
+    assert.strictEqual(results[0], 1);   // true = 1
+    assert.strictEqual(results[1], 0);   // false = 0
+    assert.strictEqual(results[2], 1);   // unknown = 0.5, quantized to 1
+  });
+
+  it('ternary valence', () => {
+    const results = run('(valence: 3)\n(? true)\n(? false)\n(? unknown)');
+    assert.strictEqual(results[0], 1);   // true = 1
+    assert.strictEqual(results[1], 0);   // false = 0
+    assert.strictEqual(results[2], 0.5); // unknown = 0.5
+  });
+
+  it('ternary balanced', () => {
+    const results = run('(range: -1 1)\n(valence: 3)\n(? true)\n(? false)\n(? unknown)', { lo: -1, hi: 1, valence: 3 });
+    assert.strictEqual(results[0], 1);   // true = 1
+    assert.strictEqual(results[1], -1);  // false = -1
+    assert.strictEqual(results[2], 0);   // unknown = 0
+  });
+
+  // --- Env API ---
+
+  it('Env API [0,1]', () => {
+    const env = new Env();
+    assert.strictEqual(env.getSymbolProb('true'), 1);
+    assert.strictEqual(env.getSymbolProb('false'), 0);
+    assert.strictEqual(env.getSymbolProb('unknown'), 0.5);
+    assert.strictEqual(env.getSymbolProb('undefined'), 0.5);
+  });
+
+  it('Env API [-1,1]', () => {
+    const env = new Env({ lo: -1, hi: 1 });
+    assert.strictEqual(env.getSymbolProb('true'), 1);
+    assert.strictEqual(env.getSymbolProb('false'), -1);
+    assert.strictEqual(env.getSymbolProb('unknown'), 0);
+    assert.strictEqual(env.getSymbolProb('undefined'), 0);
+  });
+
+  it('survive operator redefinition', () => {
+    const results = run('(and: min)\n(or: max)\n(? true)\n(? false)');
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 0);
+  });
+
+  // --- Liar paradox with truth constants ---
+
+  it('liar paradox [0,1]', () => {
+    const results = run(`
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('liar paradox [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+`, { lo: -1, hi: 1, valence: 3 });
+    assert.strictEqual(results[0], 0);
+  });
+});
+
+// ===== Liar paradox resolution across logic types =====
+
+describe('Liar paradox across logic types', () => {
+  it('ternary [0,1]', () => {
+    const results = run(`
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('ternary [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(valence: 3)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+`, { lo: -1, hi: 1, valence: 3 });
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('continuous [0,1]', () => {
+    const results = run(`
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+`);
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], 0.5);
+  });
+
+  it('continuous [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+(? (not (s = false)))
+`, { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+    assert.strictEqual(results[1], 0);
+  });
+
+  it('5-valued [0,1]', () => {
+    const results = run(`
+(valence: 5)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('5-valued [-1,1]', () => {
+    const results = run(`
+(range: -1 1)
+(valence: 5)
+(s: s is s)
+((s = false) has probability 0)
+(? (s = false))
+`, { lo: -1, hi: 1, valence: 5 });
+    assert.strictEqual(results[0], 0);
+  });
+});
+
+// ===== Additional arithmetic tests =====
+
+describe('Arithmetic equality', () => {
+  it('(0.1 + 0.2) = 0.3', () => {
+    const results = run('(? ((0.1 + 0.2) = 0.3))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('(0.1 + 0.2) != 0.3 is false', () => {
+    const results = run('(? ((0.1 + 0.2) != 0.3))');
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('(0.3 - 0.1) = 0.2', () => {
+    const results = run('(? ((0.3 - 0.1) = 0.2))');
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+// ===== Higher N-valued logics =====
+
+describe('Higher N-valued logics', () => {
+  it('7-valued logic', () => {
+    const env = new Env({ valence: 7 });
+    approx(env.clamp(0.0), 0.0);
+    approx(env.clamp(0.5), 0.5);
+    approx(env.clamp(1.0), 1.0);
+  });
+
+  it('10-valued logic', () => {
+    const env = new Env({ valence: 10 });
+    approx(env.clamp(0.0), 0.0);
+    approx(env.clamp(1.0), 1.0);
+    approx(env.clamp(0.5), 5/9);
+  });
+
+  it('100-valued logic', () => {
+    const env = new Env({ valence: 100 });
+    approx(env.clamp(0.0), 0.0);
+    approx(env.clamp(1.0), 1.0);
+    const actual = env.clamp(0.5);
+    assert.ok(Math.abs(actual - 0.5) < 0.02, `100-valued 0.5 should be close to 0.5, got ${actual}`);
+  });
+
+  it('5-valued paradox at 0.5', () => {
+    const results = run(`
+(valence: 5)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+});
+
+// ===== Pi-types =====
+
+describe('Pi-types', () => {
+  it('Pi type evaluation', () => {
+    const results = run('(? (Pi (Natural x) Natural))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('Pi type non-dependent', () => {
+    const results = run('(? (Pi (Natural _) Boolean))');
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+// ===== Lambda abstraction =====
+
+describe('Lambda abstraction', () => {
+  it('lambda evaluates as valid', () => {
+    const results = run('(? (lambda (Natural x) x))');
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('lambda multi-param', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(? (lambda (Natural x, Natural y) (x + y)))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+// ===== Application with beta-reduction =====
+
+describe('Application (beta-reduction)', () => {
+  it('apply identity', () => {
+    const results = run('(? (apply (lambda (Natural x) x) 0.5))');
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('apply arithmetic', () => {
+    const results = run('(? (apply (lambda (Natural x) (x + 0.1)) 0.2))');
+    assert.strictEqual(results[0], 0.3);
+  });
+
+  it('apply const function', () => {
+    const results = run('(? (apply (lambda (Natural x) 0.5) 0.9))');
+    assert.strictEqual(results[0], 0.5);
+  });
+});
+
+// ===== Prefix type notation =====
+
+describe('Prefix type notation', () => {
+  it('zero of Natural', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(zero: Natural zero)
+(? (zero of Natural))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('complex type', () => {
+    const results = run(`
+(Type 0)
+(Boolean: (Type 0) Boolean)
+(? (Boolean of (Type 0)))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('multiple constructors', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(? (zero of Natural))
+(? (true-val of Boolean))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('with Pi constructor', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(zero: Natural zero)
+(succ: (Pi (Natural n) Natural))
+(? (zero of Natural))
+(? (succ of (Pi (Natural n) Natural)))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('type hierarchy', () => {
+    const results = run(`
+(Type 0)
+(Type: (Type 0) Type)
+(Boolean: Type Boolean)
+(True: Boolean True)
+(False: Boolean False)
+(? (Boolean of Type))
+(? (True of Boolean))
+(? (False of Boolean))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+  });
+});
+
+// ===== Lean/Rocq core concept encoding =====
+
+describe('Lean/Rocq core concepts', () => {
+  it('Natural type constructors', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(zero: Natural zero)
+(succ: (Pi (Natural n) Natural))
+(? (zero of Natural))
+(? (Natural of (Type 0)))
+`);
+    assert.strictEqual(results.length, 2);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('Boolean type constructors', () => {
+    const results = run(`
+(Boolean: (Type 0) Boolean)
+(true-val: Boolean true-val)
+(false-val: Boolean false-val)
+(? (true-val of Boolean))
+(? (false-val of Boolean))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+  });
+
+  it('identity function type', () => {
+    const results = run(`
+(Natural: (Type 0) Natural)
+(identity: (Pi (Natural x) Natural))
+(? (identity of (Pi (Natural x) Natural)))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+});
+
+// ===== Self-referential (Type: Type Type) =====
+
+describe('Self-referential types', () => {
+  it('Type: Type Type', () => {
+    const results = run(`
+(Type: Type Type)
+(? (Type of Type))
+`);
+    assert.strictEqual(results[0], 1);
+  });
+
+  it('full hierarchy', () => {
+    const results = run(`
+(Type: Type Type)
+(Natural: Type Natural)
+(Boolean: Type Boolean)
+(zero: Natural zero)
+(true-val: Boolean true-val)
+(? (zero of Natural))
+(? (Natural of Type))
+(? (Boolean of Type))
+(? (Type of Type))
+`);
+    assert.strictEqual(results.length, 4);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 1);
+  });
+
+  it('type of query', () => {
+    const results = run(`
+(Type: Type Type)
+(Natural: Type Natural)
+(? (type of Natural))
+(? (type of Type))
+`);
+    assert.strictEqual(results[0], 'Type');
+    assert.strictEqual(results[1], 'Type');
+  });
+
+  it('coexists with universe hierarchy', () => {
+    const results = run(`
+(Type: Type Type)
+(Type 0)
+(Type 1)
+(Natural: (Type 0) Natural)
+(Boolean: Type Boolean)
+(zero: Natural zero)
+(? (Type of Type))
+(? (Natural of (Type 0)))
+(? (Boolean of Type))
+(? (zero of Natural))
+(? ((Type 0) of (Type 1)))
+`);
+    assert.strictEqual(results.length, 5);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 1);
+    assert.strictEqual(results[4], 1);
+  });
+
+  it('liar paradox alongside', () => {
+    const results = run(`
+(Type: Type Type)
+(Natural: Type Natural)
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+(? (Natural of Type))
+`);
+    approx(results[0], 0.5);
+    approx(results[1], 0.5);
+    assert.strictEqual(results[2], 1);
+  });
+
+  it('paradox resolution', () => {
+    const results = run(`
+(Type: Type Type)
+(R: R is R)
+((R = R) has probability 0.5)
+(? (R = R))
+(? (not (R = R)))
+`);
+    approx(results[0], 0.5);
+    approx(results[1], 0.5);
+  });
+});
+
+// ===== Self-Reasoning (Meta-Logic) =====
+
+describe('Self-reasoning (meta-logic)', () => {
+  it('logic properties', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(Property: Type Property)
+(RML: Logic RML)
+(supports_many_valued: Property supports_many_valued)
+(((RML supports_many_valued) = true) has probability 1)
+(? ((RML supports_many_valued) = true))
+(? (RML of Logic))
+(? (Logic of Type))
+(? (type of RML))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 'Logic');
+  });
+
+  it('compare logics', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(Classical: Logic Classical)
+(((RML supports_self_reference) = true) has probability 1)
+(((Classical supports_self_reference) = true) has probability 0)
+(? ((RML supports_self_reference) = true))
+(? ((Classical supports_self_reference) = true))
+`);
+    approx(results[0], 1);
+    approx(results[1], 0);
+  });
+
+  it('paradox resolution in meta context', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(liar: liar is liar)
+((liar = false) has probability 0.5)
+(? (liar = false))
+(? (not (liar = false)))
+(? (RML of Logic))
+`);
+    approx(results[0], 0.5);
+    approx(results[1], 0.5);
+    approx(results[2], 1);
+  });
+});
+
+// ===== Backward compatibility =====
+
+describe('Backward compatibility', () => {
+  it('arithmetic still works', () => {
+    const results = run('(? (0.1 + 0.2))');
+    assert.strictEqual(results[0], 0.3);
+  });
+});
+
+// ===== Markov Chains with Dependent Probabilities =====
+
+describe('Markov chains', () => {
+  it('one-step transition: sunny', () => {
+    // P(Sunny at t+1) = P(S→S)*P(S) + P(R→S)*P(R) = 0.8*0.7 + 0.4*0.3
+    const results = run('(? ((0.8 * 0.7) + (0.4 * 0.3)))');
+    approx(results[0], 0.68);
+  });
+
+  it('one-step transition: rainy', () => {
+    // P(Rainy at t+1) = P(S→R)*P(S) + P(R→R)*P(R) = 0.2*0.7 + 0.6*0.3
+    const results = run('(? ((0.2 * 0.7) + (0.6 * 0.3)))');
+    approx(results[0], 0.32);
+  });
+
+  it('two-step transition', () => {
+    const results = run(`
+(? ((0.8 * 0.68) + (0.4 * 0.32)))
+(? ((0.2 * 0.68) + (0.6 * 0.32)))
+`);
+    approx(results[0], 0.672);
+    approx(results[1], 0.328);
+  });
+
+  it('joint probability', () => {
+    // P(Sunny_t, Sunny_t+1) = P(S→S) * P(S_t) = 0.8 * 0.7
+    const results = run(`
+(and: prod)
+(? (0.8 and 0.7))
+`);
+    approx(results[0], 0.56);
+  });
+
+  it('stationary distribution', () => {
+    // Stationary: pi(S) = 2/3, pi(R) = 1/3
+    const results = run(`
+(? ((0.8 * 0.666667) + (0.4 * 0.333333)))
+(? ((0.2 * 0.666667) + (0.6 * 0.333333)))
+`);
+    assert.ok(Math.abs(results[0] - 2/3) < 1e-4);
+    assert.ok(Math.abs(results[1] - 1/3) < 1e-4);
+  });
+
+  it('conditional transitions with links', () => {
+    const results = run(`
+(and: prod)
+(or: ps)
+(sunny: sunny is sunny)
+(rainy: rainy is rainy)
+(((sunny) = true) has probability 0.7)
+(((rainy) = true) has probability 0.3)
+
+(? (((sunny) = true) and ((rainy) = true)))
+(? (((sunny) = true) or ((rainy) = true)))
+`);
+    approx(results[0], 0.21);
+    approx(results[1], 0.79);
   });
 });

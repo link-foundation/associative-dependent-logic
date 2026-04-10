@@ -1,12 +1,12 @@
-// ADL CLI — run a LiNo knowledge base and print query results
-use adl::{run_typed, RunResult};
+// RML CLI — run a LiNo knowledge base and print query results
+use rml::{run_typed, RunResult};
 use std::env;
 use std::fs;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: adl <kb.lino>");
+        eprintln!("Usage: rml <kb.lino>");
         std::process::exit(1);
     }
     let file = &args[1];

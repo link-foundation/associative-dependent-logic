@@ -1,6 +1,6 @@
-# associative-dependent-logic — Rust
+# relative-meta-logic — Rust
 
-Rust implementation of the Associative-Dependent Logic (ADL) framework.
+Rust implementation of the Relative Meta-Logic (RML) framework.
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ cargo run -- <file.lino>
 Or after building:
 
 ```bash
-./target/release/adl <file.lino>
+./target/release/rml <file.lino>
 ```
 
 ### Example
@@ -45,7 +45,7 @@ Or after building:
 ## API
 
 ```rust
-use adl::{run, tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round};
+use rml::{run, tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round};
 
 // Run a complete LiNo knowledge base
 let results = run(lino_text, None);
@@ -69,7 +69,7 @@ let q = quantize(0.4, 3, 0.0, 1.0); // -> 0.5 (nearest ternary level)
 cargo test
 ```
 
-The test suite includes 176 tests covering:
+The test suite includes 199 tests covering:
 - Tokenization, parsing, and quantization
 - Evaluation logic and operator aggregators
 - Many-valued logics: unary, binary (Boolean), ternary (Kleene), quaternary, quinary, higher N-valued, and continuous (fuzzy)

@@ -1,0 +1,50 @@
+# Self-Reasoning — A Meta-Logic Reasoning About Itself
+#
+# This example demonstrates that RML can reason about its own logic system.
+# As a meta-logic, it can define and reason about the properties of logics,
+# including the logic it uses internally.
+
+# Define the meta-logic type hierarchy
+(Type: Type Type)
+(Logic: Type Logic)
+(Property: Type Property)
+
+# Define this system (RML) as a logic
+(RML: Logic RML)
+
+# Define properties that logics can have
+(supports_many_valued: Property supports_many_valued)
+(supports_self_reference: Property supports_self_reference)
+(resolves_paradoxes: Property resolves_paradoxes)
+(is_meta_logic: Property is_meta_logic)
+
+# RML has these properties (with full confidence)
+(((RML supports_many_valued) = true) has probability 1)
+(((RML supports_self_reference) = true) has probability 1)
+(((RML resolves_paradoxes) = true) has probability 1)
+(((RML is_meta_logic) = true) has probability 1)
+
+# Query: Does RML support many-valued logic?
+(? ((RML supports_many_valued) = true))           # -> 1
+
+# Query: Is RML a meta-logic?
+(? ((RML is_meta_logic) = true))                   # -> 1
+
+# Self-reference: RML can reason about itself being a logic
+(? (RML of Logic))                                 # -> 1
+(? (Logic of Type))                                # -> 1
+(? (type of RML))                                  # -> Logic
+
+# Define another logic (Classical) and compare
+(Classical: Logic Classical)
+(((Classical supports_many_valued) = true) has probability 0)
+(((Classical supports_self_reference) = true) has probability 0)
+
+# Compare: does Classical support self-reference?
+(? ((Classical supports_self_reference) = true))   # -> 0
+
+# RML can reason about the liar paradox within its own system
+(liar: liar is liar)
+((liar = false) has probability 0.5)
+(? (liar = false))                                 # -> 0.5 (paradox resolved)
+(? (not (liar = false)))                           # -> 0.5 (fixed point)
