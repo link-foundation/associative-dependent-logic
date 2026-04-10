@@ -1181,6 +1181,96 @@ describe('Truth constants: Env API', () => {
   });
 });
 
+// =============================================================================
+// Belnap's four-valued logic constants: both, neither
+// https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
+// =============================================================================
+describe('Truth constants: both and neither (Belnap four-valued)', () => {
+  it('both should default to 0.5 (mid of [0,1] range)', () => {
+    const results = run('(? both)');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('neither should default to 0.5 (mid of [0,1] range)', () => {
+    const results = run('(? neither)');
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('both should default to 0 (mid of [-1,1] range)', () => {
+    const results = run('(range: -1 1)\n(? both)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('neither should default to 0 (mid of [-1,1] range)', () => {
+    const results = run('(range: -1 1)\n(? neither)', { lo: -1, hi: 1 });
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('both and neither should be redefinable', () => {
+    const results = run(`
+(both: 0.7)
+(neither: 0.3)
+(? both)
+(? neither)
+`);
+    assert.strictEqual(results[0], 0.7);
+    assert.strictEqual(results[1], 0.3);
+  });
+
+  it('Env should have both and neither initialized', () => {
+    const env = new Env();
+    assert.strictEqual(env.getSymbolProb('both'), 0.5);
+    assert.strictEqual(env.getSymbolProb('neither'), 0.5);
+  });
+
+  it('Env with [-1,1] range should have correct both and neither', () => {
+    const env = new Env({ lo: -1, hi: 1 });
+    assert.strictEqual(env.getSymbolProb('both'), 0);
+    assert.strictEqual(env.getSymbolProb('neither'), 0);
+  });
+
+  it('both should work with 4-valued quantization', () => {
+    const results = run(`
+(valence: 4)
+(? both)
+`);
+    approx(results[0], 2/3);  // 0.5 quantized to nearest level in 4-valued: 2/3
+  });
+
+  it('both should work in expressions', () => {
+    const results = run(`
+(and: min)
+(? (true and both))
+(? (false or both))
+`);
+    assert.strictEqual(results[0], 0.5);   // min(1, 0.5)
+    assert.strictEqual(results[1], 0.5);   // max(0, 0.5)
+  });
+
+  it('not both = both, not neither = neither (fixed points)', () => {
+    const results = run(`
+(? (not both))
+(? (not neither))
+`);
+    assert.strictEqual(results[0], 0.5);   // not(0.5) = 0.5
+    assert.strictEqual(results[1], 0.5);   // not(0.5) = 0.5
+  });
+
+  it('both and neither should update when range changes', () => {
+    const results = run(`
+(? both)
+(? neither)
+(range: -1 1)
+(? both)
+(? neither)
+`);
+    assert.strictEqual(results[0], 0.5);   // both in [0,1]
+    assert.strictEqual(results[1], 0.5);   // neither in [0,1]
+    assert.strictEqual(results[2], 0);     // both in [-1,1]
+    assert.strictEqual(results[3], 0);     // neither in [-1,1]
+  });
+});
+
 describe('Truth constants: liar paradox using truth constants', () => {
   it('liar paradox with true/false constants in [0,1]', () => {
     // "This statement is false" — the classic liar paradox

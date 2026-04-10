@@ -394,6 +394,12 @@ impl Env {
         let mid = self.mid();
         self.symbol_prob.insert("unknown".to_string(), mid);
         self.symbol_prob.insert("undefined".to_string(), mid);
+        // Belnap's four-valued logic constants:
+        // "both" = both true and false (contradiction/paradox), maps to midpoint
+        // "neither" = neither true nor false (gap/unknown), maps to midpoint
+        // See: https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
+        self.symbol_prob.insert("both".to_string(), mid);
+        self.symbol_prob.insert("neither".to_string(), mid);
     }
 
     /// Clamp and optionally quantize a value to the valid range.

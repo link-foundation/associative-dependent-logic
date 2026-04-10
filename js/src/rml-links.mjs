@@ -182,6 +182,12 @@ class Env {
     this.symbolProb.set('false', this.lo);
     this.symbolProb.set('unknown', this.mid);
     this.symbolProb.set('undefined', this.mid);
+    // Belnap's four-valued logic constants:
+    // "both" = both true and false (contradiction/paradox), maps to midpoint
+    // "neither" = neither true nor false (gap/unknown), maps to midpoint
+    // See: https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
+    this.symbolProb.set('both', this.mid);
+    this.symbolProb.set('neither', this.mid);
   }
 
   getOp(name){
