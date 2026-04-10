@@ -2,7 +2,7 @@
 
 A prototype for logic framework that can reason about anything relative to given probability of input statements.
 
-> **Note on naming:** This project was previously called *Associative-Dependent Logic (ADL)*. The name *Associative Dependent Meta Logic* is also valid, as in [dependent types](https://en.wikipedia.org/wiki/Dependent_type), but *relative* is closer to the concept of a [link](https://github.com/link-foundation/deep-theory), and actually all statements are relative to other statements. The name *meta-logic* reflects that this system can reason about all possible logic systems, including itself.
+> **Note on naming:** This project was previously called *Associative-Dependent Logic (ADL)*. The name *Associative Dependent Meta Logic* is also valid, as in [dependent types](https://en.wikipedia.org/wiki/Dependent_type), but *relative* is closer to the concept of a [link](https://github.com/link-foundation/meta-theory), and actually all statements are relative to other statements. The name *meta-logic* reflects that this system can reason about all possible logic systems, including itself.
 
 ## Implementations
 
@@ -487,7 +487,7 @@ See `examples/self-reasoning.lino`:
 
 ## Testing
 
-Both implementations have 176 matching tests:
+Both implementations have matching tests:
 
 ```bash
 # JavaScript
