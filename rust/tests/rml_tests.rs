@@ -1545,6 +1545,266 @@ fn truth_const_liar_paradox_balanced() {
     assert_eq!(results[0], 0.0);
 }
 
+// ===== Belnap's four-valued logic constants: both, neither =====
+// https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
+
+#[test]
+fn truth_const_both_default_01() {
+    let results = run("(? both)", None);
+    assert_eq!(results[0], 0.5);
+}
+
+#[test]
+fn truth_const_neither_default_01() {
+    let results = run("(? neither)", None);
+    assert_eq!(results[0], 0.5);
+}
+
+#[test]
+fn truth_const_both_default_balanced() {
+    let results = run(
+        "(range: -1 1)\n(? both)",
+        Some(EnvOptions {
+            lo: -1.0,
+            hi: 1.0,
+            valence: 0,
+        }),
+    );
+    assert_eq!(results[0], 0.0);
+}
+
+#[test]
+fn truth_const_neither_default_balanced() {
+    let results = run(
+        "(range: -1 1)\n(? neither)",
+        Some(EnvOptions {
+            lo: -1.0,
+            hi: 1.0,
+            valence: 0,
+        }),
+    );
+    assert_eq!(results[0], 0.0);
+}
+
+#[test]
+fn truth_const_both_redefine() {
+    let results = run(
+        r#"
+(both: 0.7)
+(neither: 0.3)
+(? both)
+(? neither)
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.7);
+    assert_eq!(results[1], 0.3);
+}
+
+#[test]
+fn truth_const_both_env_api_01() {
+    let env = Env::new(None);
+    assert_eq!(env.get_symbol_prob("both"), 0.5);
+    assert_eq!(env.get_symbol_prob("neither"), 0.5);
+}
+
+#[test]
+fn truth_const_both_env_api_balanced() {
+    let env = Env::new(Some(EnvOptions {
+        lo: -1.0,
+        hi: 1.0,
+        valence: 0,
+    }));
+    assert_eq!(env.get_symbol_prob("both"), 0.0);
+    assert_eq!(env.get_symbol_prob("neither"), 0.0);
+}
+
+#[test]
+fn truth_const_both_in_expressions() {
+    let results = run(
+        r#"
+(and: min)
+(? (true and both))
+(? (false or both))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5); // min(1, 0.5)
+    assert_eq!(results[1], 0.5); // max(0, 0.5)
+}
+
+#[test]
+fn truth_const_not_both_fixed_point() {
+    let results = run(
+        r#"
+(? (not both))
+(? (not neither))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5); // not(0.5) = 0.5
+    assert_eq!(results[1], 0.5); // not(0.5) = 0.5
+}
+
+#[test]
+fn truth_const_both_range_change() {
+    let results = run(
+        r#"
+(? both)
+(? neither)
+(range: -1 1)
+(? both)
+(? neither)
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5); // both in [0,1]
+    assert_eq!(results[1], 0.5); // neither in [0,1]
+    assert_eq!(results[2], 0.0); // both in [-1,1]
+    assert_eq!(results[3], 0.0); // neither in [-1,1]
+}
+
+// ===== Standard logic examples =====
+
+#[test]
+fn example_classical_logic() {
+    let results = run(
+        r#"
+(valence: 2)
+(and: min)
+(or: max)
+(p: p is p)
+(q: q is q)
+((p = true) has probability 1)
+((q = true) has probability 0)
+(? (p = true))
+(? (q = true))
+(? (not (p = true)))
+(? (not (q = true)))
+(? ((p = true) and (q = true)))
+(? ((p = true) or (q = true)))
+(? ((p = true) or (not (p = true))))
+(? ((p = true) and (not (p = true))))
+(? (not (not (p = true))))
+"#,
+        None,
+    );
+    assert_eq!(results.len(), 9);
+    assert_eq!(results[0], 1.0);
+    assert_eq!(results[1], 0.0);
+    assert_eq!(results[2], 0.0);
+    assert_eq!(results[3], 1.0);
+    assert_eq!(results[4], 0.0);
+    assert_eq!(results[5], 1.0);
+    assert_eq!(results[6], 1.0);
+    assert_eq!(results[7], 0.0);
+    assert_eq!(results[8], 1.0);
+}
+
+#[test]
+fn example_propositional_logic() {
+    let results = run(
+        r#"
+(and: product)
+(or: probabilistic_sum)
+(rain: rain is rain)
+(umbrella: umbrella is umbrella)
+(wet: wet is wet)
+((rain = true) has probability 0.3)
+((umbrella = true) has probability 0.6)
+((wet = true) has probability 0.4)
+(? (rain = true))
+(? (umbrella = true))
+(? ((rain = true) and (umbrella = true)))
+(? ((rain = true) or (umbrella = true)))
+(? (not (rain = true)))
+(? (and (rain = true) (umbrella = true) (wet = true)))
+(? (or (rain = true) (umbrella = true) (wet = true)))
+"#,
+        None,
+    );
+    assert_eq!(results.len(), 7);
+    approx(results[0], 0.3);
+    approx(results[1], 0.6);
+    approx(results[2], 0.18);
+    approx(results[3], 0.72);
+    approx(results[4], 0.7);
+    approx(results[5], 0.072);
+    approx(results[6], 0.832);
+}
+
+#[test]
+fn example_fuzzy_logic() {
+    let results = run(
+        r#"
+(and: min)
+(or: max)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.3)
+((c = tall) has probability 0.6)
+(? (a = tall))
+(? (b = tall))
+(? ((a = tall) and (b = tall)))
+(? ((a = tall) or (b = tall)))
+(? (not (a = tall)))
+(? ((a = tall) and ((b = tall) or (c = tall))))
+"#,
+        None,
+    );
+    assert_eq!(results.len(), 6);
+    approx(results[0], 0.8);
+    approx(results[1], 0.3);
+    approx(results[2], 0.3);
+    approx(results[3], 0.8);
+    approx(results[4], 0.2);
+    approx(results[5], 0.6);
+}
+
+#[test]
+fn example_belnap_four_valued() {
+    let results = run(
+        r#"
+(and: min)
+(or: max)
+(? true)
+(? false)
+(? both)
+(? neither)
+(? (not true))
+(? (not false))
+(? (not both))
+(? (not neither))
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+(? (true and both))
+(? (false or both))
+(? (true or both))
+(? (false and both))
+"#,
+        None,
+    );
+    assert_eq!(results.len(), 14);
+    assert_eq!(results[0], 1.0);
+    assert_eq!(results[1], 0.0);
+    assert_eq!(results[2], 0.5);
+    assert_eq!(results[3], 0.5);
+    assert_eq!(results[4], 0.0);
+    assert_eq!(results[5], 1.0);
+    assert_eq!(results[6], 0.5);
+    assert_eq!(results[7], 0.5);
+    assert_eq!(results[8], 0.5);
+    assert_eq!(results[9], 0.5);
+    assert_eq!(results[10], 0.5);
+    assert_eq!(results[11], 0.5);
+    assert_eq!(results[12], 1.0);
+    assert_eq!(results[13], 0.0);
+}
+
 // ===== Type System: "everything is a link" =====
 // Dependent types as links: types are stored as associations in the link network.
 // See: https://github.com/link-foundation/associative-dependent-logic/issues/13
