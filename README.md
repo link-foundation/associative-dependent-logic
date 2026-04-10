@@ -2,6 +2,8 @@
 
 A prototype for logic framework that can reason about anything relative to given probability of input statements.
 
+![F0C5A9A4-B56E-4B64-8B7E-CC3A650EDAF7_1_201_a](https://github.com/user-attachments/assets/b54e3aaa-8645-4067-8051-6299745a2a3b)
+
 ## Implementations
 
 This project provides two equivalent implementations:
