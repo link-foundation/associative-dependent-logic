@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute } from '../src/adl-links.mjs';
+import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute } from '../src/rml-links.mjs';
 
 const approx = (actual, expected, epsilon = 1e-9) =>
   assert.ok(Math.abs(actual - expected) < epsilon,

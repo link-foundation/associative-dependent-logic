@@ -1,16 +1,16 @@
 [package]
-name = "associative-dependent-logic"
-version = "0.7.0"
+name = "relative-meta-logic"
+version = "0.8.0"
 edition = "2021"
 description = "A prototype for logic framework that can reason about anything relative to given probability of input statements"
 license = "Unlicense"
 
 [[bin]]
-name = "adl"
+name = "rml"
 path = "src/main.rs"
 
 [lib]
-name = "adl"
+name = "rml"
 path = "src/lib.rs"
 
 [dependencies]

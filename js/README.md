@@ -1,6 +1,6 @@
-# associative-dependent-logic — JavaScript
+# relative-meta-logic — JavaScript
 
-JavaScript implementation of the Associative-Dependent Logic (ADL) framework.
+JavaScript implementation of the Relative Meta-Logic (RML) framework.
 
 ## Prerequisites
 
@@ -18,7 +18,7 @@ npm install
 ### Running a knowledge base
 
 ```bash
-node src/adl-links.mjs <file.lino>
+node src/rml-links.mjs <file.lino>
 ```
 
 Or use the npm script:
@@ -45,7 +45,7 @@ npm run demo
 ## API
 
 ```javascript
-import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound } from './src/adl-links.mjs';
+import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound } from './src/rml-links.mjs';
 
 // Run a complete LiNo knowledge base
 const results = run(linoText);

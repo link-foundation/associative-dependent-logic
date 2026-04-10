@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ADL — minimal associative-dependent logic over LiNo (Links Notation)
+// RML — minimal relative meta-logic over LiNo (Links Notation)
 // Supports many-valued logics from unary (1-valued) through continuous probabilistic (∞-valued).
 // See: https://en.wikipedia.org/wiki/Many-valued_logic
 //
@@ -713,7 +713,7 @@ function run(text, options){
 if (import.meta.url === `file://${process.argv[1]}`) {
   const file = process.argv[2];
   if (!file) {
-    console.error('Usage: node src/adl-links.mjs <kb.lino>');
+    console.error('Usage: node src/rml-links.mjs <kb.lino>');
     process.exit(1);
   }
   const text = fs.readFileSync(file, 'utf8');

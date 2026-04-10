@@ -1,18 +1,19 @@
 {
-  "name": "associative-dependent-logic",
-  "version": "0.7.0",
+  "name": "relative-meta-logic",
+  "version": "0.8.0",
   "description": "A prototype for logic framework that can reason about anything relative to given probability of input statements",
   "type": "module",
-  "main": "src/adl-links.mjs",
+  "main": "src/rml-links.mjs",
   "scripts": {
     "test": "node --test",
-    "demo": "node src/adl-links.mjs demo.lino"
+    "demo": "node src/rml-links.mjs demo.lino"
   },
   "keywords": [
     "logic",
     "probability",
     "reasoning",
-    "associative",
+    "relative",
+    "meta",
     "lino"
   ],
   "author": "",

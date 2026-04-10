@@ -1,4 +1,4 @@
-// ADL — minimal associative-dependent logic over LiNo (Links Notation)
+// RML — minimal relative meta-logic over LiNo (Links Notation)
 // Supports many-valued logics from unary (1-valued) through continuous probabilistic (∞-valued).
 // See: https://en.wikipedia.org/wiki/Many-valued_logic
 //
