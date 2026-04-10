@@ -177,17 +177,17 @@ Example: `(!=: not =)` defines `!=` as the negation of `=`.
 For `and` and `or` operators, you can choose different aggregators:
 
 ```lino
-(and: avg)   # Average (default)
-(and: min)   # Minimum (Kleene/Łukasiewicz AND)
-(and: max)   # Maximum
-(and: prod)  # Product
-(and: ps)    # Probabilistic sum: 1 - (1-p1)*(1-p2)*...
+(and: avg)               # Average (default)
+(and: min)               # Minimum (Kleene/Łukasiewicz AND)
+(and: max)               # Maximum
+(and: product)           # Product (also: prod)
+(and: probabilistic_sum) # Probabilistic sum: 1 - (1-p1)*(1-p2)*... (also: ps)
 
-(or: max)    # Maximum (default, Kleene/Łukasiewicz OR)
-(or: avg)    # Average
-(or: min)    # Minimum
-(or: prod)   # Product
-(or: ps)     # Probabilistic sum
+(or: max)                # Maximum (default, Kleene/Łukasiewicz OR)
+(or: avg)                # Average
+(or: min)                # Minimum
+(or: product)            # Product (also: prod)
+(or: probabilistic_sum)  # Probabilistic sum (also: ps)
 ```
 
 ### Arithmetic
@@ -442,9 +442,9 @@ In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Pr
 
 ### Bayesian Inference
 
-RML natively supports [Bayesian inference](https://en.wikipedia.org/wiki/Bayesian_inference) and [Bayesian networks](https://en.wikipedia.org/wiki/Bayesian_network). Links notation naturally describes networks of any complexity — each node's probability is a link, and joint/marginal probabilities are computed using the `prod` (product) and `ps` (probabilistic sum) aggregators.
+RML natively supports [Bayesian inference](https://en.wikipedia.org/wiki/Bayesian_inference) and [Bayesian networks](https://en.wikipedia.org/wiki/Bayesian_network). Links notation naturally describes networks of any complexity — each node's probability is a link, and joint/marginal probabilities are computed using the `product` and `probabilistic_sum` aggregators.
 
-See `examples/bayesian-inference.lino` — [Bayes' theorem](https://en.wikipedia.org/wiki/Bayes%27_theorem) applied to medical diagnosis:
+See `examples/bayesian-inference.lino` — [Bayes' theorem](https://en.wikipedia.org/wiki/Bayes%27_theorem) applied to medical diagnosis (directed: Disease → Test Result):
 
 ```lino
 # P(Disease) = 0.01, P(Positive|Disease) = 0.95, P(Positive|~Disease) = 0.05
@@ -455,11 +455,11 @@ See `examples/bayesian-inference.lino` — [Bayes' theorem](https://en.wikipedia
 (? ((0.95 * 0.01) / ((0.95 * 0.01) + (0.05 * 0.99))))  # -> 0.161017
 ```
 
-See `examples/bayesian-network.lino` — a [Bayesian network](https://en.wikipedia.org/wiki/Bayesian_network) with `prod` and `ps` aggregators:
+See `examples/bayesian-network.lino` — a directed acyclic [Bayesian network](https://en.wikipedia.org/wiki/Bayesian_network) (DAG) with `product` and `probabilistic_sum` aggregators:
 
 ```lino
-(and: prod)   # P(A ∩ B) = P(A) * P(B)
-(or: ps)      # P(A ∪ B) = 1 - (1-P(A))*(1-P(B))
+(and: product)              # P(A ∩ B) = P(A) * P(B)
+(or: probabilistic_sum)     # P(A ∪ B) = 1 - (1-P(A))*(1-P(B))
 
 (((cloudy) = true) has probability 0.5)
 (((rain) = true) has probability 0.5)
@@ -472,7 +472,7 @@ See `examples/bayesian-network.lino` — a [Bayesian network](https://en.wikiped
 
 RML can model [Markov chains](https://en.wikipedia.org/wiki/Markov_chain) where transition probabilities depend on the current state. Using arithmetic and the [law of total probability](https://en.wikipedia.org/wiki/Law_of_total_probability), multi-step state evolution is computed naturally.
 
-See `examples/markov-chain.lino` — a weather model with dependent transitions:
+See `examples/markov-chain.lino` — a weather model with directed transitions (today → tomorrow):
 
 ```lino
 # Transition matrix: P(Sunny→Sunny)=0.8, P(Rainy→Sunny)=0.4
@@ -482,9 +482,31 @@ See `examples/markov-chain.lino` — a weather model with dependent transitions:
 (? ((0.8 * 0.7) + (0.4 * 0.3)))   # -> 0.68
 (? ((0.2 * 0.7) + (0.6 * 0.3)))   # -> 0.32
 
-# Joint probability using prod aggregator
-(and: prod)
+# Joint probability using product aggregator
+(and: product)
 (? (0.8 and 0.7))                  # -> 0.56
+```
+
+### Markov Networks (Cyclic Graphs)
+
+As the structural opposite of acyclic Bayesian networks, RML can also model [Markov networks](https://en.wikipedia.org/wiki/Markov_random_field) (Markov random fields) — undirected graphs where cycles are allowed. In links notation, undirected edges are represented as bidirectional link pairs, preserving the fundamental directionality of links.
+
+See `examples/markov-network.lino` — a cyclic social influence model (Alice—Bob—Carol—Alice):
+
+```lino
+(and: product)
+(or: probabilistic_sum)
+
+(((alice) = agree) has probability 0.7)
+(((bob) = agree) has probability 0.5)
+(((carol) = agree) has probability 0.6)
+
+# Pairwise joints (cycle: Alice—Bob—Carol—Alice)
+(? (((alice) = agree) and ((bob) = agree)))          # -> 0.35
+(? (((carol) = agree) and ((alice) = agree)))        # -> 0.42
+
+# Three-way clique
+(? (and ((alice) = agree) ((bob) = agree) ((carol) = agree)))  # -> 0.21
 ```
 
 ### Self-Reasoning (Meta-Logic)
@@ -527,9 +549,10 @@ The test suites cover:
 - Dependent type system: universes, Pi-types, lambdas, application, type queries, prefix type notation
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types, coexistence with universe hierarchy
 - Bayesian inference: Bayes' theorem, law of total probability, conditional probability, complement rule
-- Bayesian networks: joint probability (prod), probabilistic sum (ps), multi-node networks, chain rule decomposition
+- Bayesian networks: joint probability (product), probabilistic sum (probabilistic_sum), multi-node networks, chain rule decomposition
 - Self-reasoning: meta-logic properties, comparing logic systems, paradox resolution in meta context
 - Markov chains: one-step and multi-step transitions, joint probability, stationary distribution, conditional transitions with links
+- Markov networks: cyclic graphs, pairwise joints, three-way cliques, clique potentials, normalization
 - Comprehensive valence coverage: 0 (continuous), 1 (unary), 2–10, 100, 1000, with both ranges
 
 ## API

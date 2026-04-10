@@ -5,7 +5,7 @@
 // - Uses official links-notation crate to parse LiNo text into links
 // - Terms are defined via (x: x is x)
 // - Probabilities are assigned ONLY via: ((<expr>) has probability <p>)
-// - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|prod|ps), (or: ...), (not: ...)
+// - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|product|probabilistic_sum), (or: ...), (not: ...)
 // - Range: (range: 0 1) for [0,1] or (range: -1 1) for [-1,1] (balanced/symmetric)
 // - Valence: (valence: N) to restrict truth values to N discrete levels (N=2 → Boolean, N=3 → ternary, etc.)
 // - Query: (? <expr>)
@@ -275,8 +275,8 @@ impl Aggregator {
             "avg" => Some(Aggregator::Avg),
             "min" => Some(Aggregator::Min),
             "max" => Some(Aggregator::Max),
-            "prod" => Some(Aggregator::Prod),
-            "ps" => Some(Aggregator::Ps),
+            "product" | "prod" => Some(Aggregator::Prod),
+            "probabilistic_sum" | "ps" => Some(Aggregator::Ps),
             _ => None,
         }
     }
@@ -1189,7 +1189,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
             }
         }
 
-        // Aggregator selection: (and: avg|min|max|prod|ps)
+        // Aggregator selection: (and: avg|min|max|product|probabilistic_sum)
         if (head == "and" || head == "or") && rhs.len() == 1 {
             if let Node::Leaf(ref sel) = rhs[0] {
                 if let Some(agg) = Aggregator::from_name(sel) {

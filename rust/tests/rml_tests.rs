@@ -349,7 +349,18 @@ fn run_different_aggregators_for_and() {
 }
 
 #[test]
-fn run_product_aggregator() {
+fn run_product_aggregator_full_name() {
+    let text = r#"
+(and: product)
+(? (0.5 and 0.5))
+"#;
+    let results = run(text, None);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0], 0.25);
+}
+
+#[test]
+fn run_product_aggregator_short_name_backward_compatible() {
     let text = r#"
 (and: prod)
 (? (0.5 and 0.5))
@@ -360,7 +371,18 @@ fn run_product_aggregator() {
 }
 
 #[test]
-fn run_probabilistic_sum_aggregator() {
+fn run_probabilistic_sum_aggregator_full_name() {
+    let text = r#"
+(or: probabilistic_sum)
+(? (0.5 or 0.5))
+"#;
+    let results = run(text, None);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0], 0.75);
+}
+
+#[test]
+fn run_probabilistic_sum_aggregator_short_name_backward_compatible() {
     let text = r#"
 (or: ps)
 (? (0.5 or 0.5))
@@ -2334,10 +2356,10 @@ fn bayesian_bayes_theorem_medical_diagnosis() {
 }
 
 #[test]
-fn bayesian_probabilistic_and_prod() {
+fn bayesian_probabilistic_and_product() {
     let results = run(
         r#"
-(and: prod)
+(and: product)
 (a: a is a)
 (b: b is b)
 (((a) = true) has probability 0.3)
@@ -2350,10 +2372,10 @@ fn bayesian_probabilistic_and_prod() {
 }
 
 #[test]
-fn bayesian_probabilistic_or_ps() {
+fn bayesian_probabilistic_or_probabilistic_sum() {
     let results = run(
         r#"
-(or: ps)
+(or: probabilistic_sum)
 (a: a is a)
 (b: b is b)
 (((a) = true) has probability 0.3)
@@ -2366,11 +2388,11 @@ fn bayesian_probabilistic_or_ps() {
 }
 
 #[test]
-fn bayesian_joint_probability_prod_and_ps() {
+fn bayesian_joint_probability_product_and_probabilistic_sum() {
     let results = run(
         r#"
-(and: prod)
-(or: ps)
+(and: product)
+(or: probabilistic_sum)
 (a: a is a)
 (b: b is b)
 (c: c is c)
@@ -2425,7 +2447,7 @@ fn bayesian_conditional_probability() {
 fn bayesian_independent_events() {
     let results = run(
         r#"
-(and: prod)
+(and: product)
 (coin1: coin1 is coin1)
 (coin2: coin2 is coin2)
 (((coin1) = heads) has probability 0.5)
@@ -2456,7 +2478,7 @@ fn bayesian_complement_rule() {
 fn bayesian_multi_node_prefix_and() {
     let results = run(
         r#"
-(and: prod)
+(and: product)
 (a: a is a)
 (b: b is b)
 (c: c is c)
@@ -2662,12 +2684,12 @@ fn valence_6_balanced_range() {
 }
 
 #[test]
-fn valence_2_binary_with_prod_and_ps() {
+fn valence_2_binary_with_product_and_probabilistic_sum() {
     let results = run(
         r#"
 (valence: 2)
-(and: prod)
-(or: ps)
+(and: product)
+(or: probabilistic_sum)
 (a: a is a)
 (b: b is b)
 (((a) = true) has probability 0.8)
@@ -2682,11 +2704,11 @@ fn valence_2_binary_with_prod_and_ps() {
 }
 
 #[test]
-fn valence_3_ternary_with_bayesian_prod() {
+fn valence_3_ternary_with_bayesian_product() {
     let results = run(
         r#"
 (valence: 3)
-(and: prod)
+(and: product)
 (a: a is a)
 (b: b is b)
 (((a) = true) has probability 0.5)
@@ -2735,7 +2757,7 @@ fn markov_chain_joint_probability() {
     // P(Sunny_t, Sunny_t+1) = P(S→S) * P(S_t) = 0.8 * 0.7
     let results = run(
         r#"
-(and: prod)
+(and: product)
 (? (0.8 and 0.7))
 "#,
         None,
@@ -2763,8 +2785,8 @@ fn markov_chain_conditional_transitions_with_links() {
     // Model transitions using linked probabilities
     let results = run(
         r#"
-(and: prod)
-(or: ps)
+(and: product)
+(or: probabilistic_sum)
 (sunny: sunny is sunny)
 (rainy: rainy is rainy)
 (((sunny) = true) has probability 0.7)
@@ -2780,4 +2802,81 @@ fn markov_chain_conditional_transitions_with_links() {
     );
     approx(results[0], 0.21);
     approx(results[1], 0.79);
+}
+
+// ──────────────────────────────────────────────────────────────
+// Cyclic Markov Networks
+// ──────────────────────────────────────────────────────────────
+
+#[test]
+fn markov_network_pairwise_joint() {
+    // Three nodes forming a cycle: Alice—Bob—Carol—Alice
+    let results = run(
+        r#"
+(and: product)
+(alice: alice is alice)
+(bob: bob is bob)
+(carol: carol is carol)
+(((alice) = agree) has probability 0.7)
+(((bob) = agree) has probability 0.5)
+(((carol) = agree) has probability 0.6)
+(? (((alice) = agree) and ((bob) = agree)))
+(? (((bob) = agree) and ((carol) = agree)))
+(? (((carol) = agree) and ((alice) = agree)))
+"#,
+        None,
+    );
+    approx(results[0], 0.35);
+    approx(results[1], 0.3);
+    approx(results[2], 0.42);
+}
+
+#[test]
+fn markov_network_three_way_clique() {
+    let results = run(
+        r#"
+(and: product)
+(alice: alice is alice)
+(bob: bob is bob)
+(carol: carol is carol)
+(((alice) = agree) has probability 0.7)
+(((bob) = agree) has probability 0.5)
+(((carol) = agree) has probability 0.6)
+(? (and ((alice) = agree) ((bob) = agree) ((carol) = agree)))
+"#,
+        None,
+    );
+    approx(results[0], 0.21);
+}
+
+#[test]
+fn markov_network_union() {
+    let results = run(
+        r#"
+(or: probabilistic_sum)
+(alice: alice is alice)
+(bob: bob is bob)
+(carol: carol is carol)
+(((alice) = agree) has probability 0.7)
+(((bob) = agree) has probability 0.5)
+(((carol) = agree) has probability 0.6)
+(? (or ((alice) = agree) ((bob) = agree) ((carol) = agree)))
+"#,
+        None,
+    );
+    approx(results[0], 0.94);
+}
+
+#[test]
+fn markov_network_unnormalized_clique_potential() {
+    // φ(A,B) * φ(B,C) * φ(C,A) = 0.8 * 0.7 * 0.6
+    let results = run("(? ((0.8 * 0.7) * 0.6))", None);
+    approx(results[0], 0.336);
+}
+
+#[test]
+fn markov_network_normalized_probability() {
+    // P(config) = unnormalized / Z = 0.336 / 2.5
+    let results = run("(? (0.336 / 2.5))", None);
+    approx(results[0], 0.1344);
 }

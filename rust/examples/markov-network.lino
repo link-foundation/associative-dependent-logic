@@ -1,0 +1,66 @@
+# Markov Network — Cyclic Undirected Graph (Markov Random Field)
+#
+# A Markov network (Markov random field) is the structural opposite of a
+# Bayesian network: edges are undirected (bidirectional) and cycles are allowed.
+#
+# This example models social influence in a group of three friends:
+#
+#     Alice ←→ Bob
+#       ↕       ↕
+#      Carol ←→ (Alice)   [cycle: Alice—Bob—Carol—Alice]
+#
+# In links notation, undirected edges are represented as bidirectional link pairs,
+# preserving the fundamental directionality of links while expressing symmetry.
+#
+# Structure comparison:
+#   Bayesian network: directed acyclic graph (DAG), edges = cause → effect
+#   Markov network:   undirected cyclic graph, edges = mutual influence (↔)
+#
+# Potential functions over cliques:
+#   φ(Alice, Bob)   — pairwise compatibility between Alice and Bob
+#   φ(Bob, Carol)   — pairwise compatibility between Bob and Carol
+#   φ(Carol, Alice) — pairwise compatibility between Carol and Alice
+#   φ(Alice, Bob, Carol) — three-way clique potential
+#
+# Joint probability (unnormalized):
+#   P(A, B, C) ∝ φ(A,B) * φ(B,C) * φ(C,A) * φ(A,B,C)
+
+# Define nodes as terms
+(alice: alice is alice)
+(bob: bob is bob)
+(carol: carol is carol)
+
+# Configure product aggregator for joint probability
+(and: product)
+(or: probabilistic_sum)
+
+# Assign marginal probabilities (individual opinions)
+((alice = agree) has probability 0.7)
+((bob = agree) has probability 0.5)
+((carol = agree) has probability 0.6)
+
+# Pairwise joint probabilities (bidirectional links form cycles)
+# P(Alice agrees AND Bob agrees)
+(? ((alice = agree) and (bob = agree)))          # -> 0.35
+
+# P(Bob agrees AND Carol agrees)
+(? ((bob = agree) and (carol = agree)))          # -> 0.3
+
+# P(Carol agrees AND Alice agrees) — completes the cycle
+(? ((carol = agree) and (alice = agree)))        # -> 0.42
+
+# Three-way clique: P(Alice AND Bob AND Carol all agree)
+(? (and (alice = agree) (bob = agree) (carol = agree)))  # -> 0.21
+
+# Union: P(at least one agrees)
+(? (or (alice = agree) (bob = agree) (carol = agree)))   # -> 0.94
+
+# Conditional-style computation via arithmetic:
+# If we know pairwise potentials φ(A,B)=0.8, φ(B,C)=0.7, φ(C,A)=0.6
+# Unnormalized joint: φ(A,B) * φ(B,C) * φ(C,A) = 0.8 * 0.7 * 0.6
+(? ((0.8 * 0.7) * 0.6))                         # -> 0.336
+
+# Normalization example:
+# If Z (partition function) sums over all configurations = 2.5
+# P(all agree) = 0.336 / 2.5
+(? (0.336 / 2.5))                                # -> 0.1344

@@ -6,7 +6,7 @@
 // - Uses official links-notation parser to parse links
 // - Terms are defined via (x: x is x)
 // - Probabilities are assigned ONLY via: ((<expr>) has probability <p>)
-// - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|prod|ps), (or: ...), (not: ...)
+// - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|product|probabilistic_sum), (or: ...), (not: ...)
 // - Range: (range: 0 1) for [0,1] or (range: -1 1) for [-1,1] (balanced/symmetric)
 // - Valence: (valence: N) to restrict truth values to N discrete levels (N=2 → Boolean, N=3 → ternary, etc.)
 // - Query: (? <expr>)
@@ -620,7 +620,7 @@ function defineForm(head, rhs, env){
       return 1;
     }
 
-    // Aggregator selection: (and: avg|min|max|prod|ps)
+    // Aggregator selection: (and: avg|min|max|product|probabilistic_sum)
     if ((head==='and' || head==='or') && rhs.length===1 && typeof rhs[0]==='string') {
       const sel = rhs[0];
       const lo = env.lo;
@@ -628,8 +628,8 @@ function defineForm(head, rhs, env){
         sel==='avg' ? xs=>xs.reduce((a,b)=>a+b,0)/xs.length :
         sel==='min' ? xs=>xs.length? Math.min(...xs) : lo :
         sel==='max' ? xs=>xs.length? Math.max(...xs) : lo :
-        sel==='prod'? xs=>xs.reduce((a,b)=>a*b,1) :
-        sel==='ps'  ? xs=> 1 - xs.reduce((a,b)=>a*(1-b),1) : null;
+        sel==='product' || sel==='prod' ? xs=>xs.reduce((a,b)=>a*b,1) :
+        sel==='probabilistic_sum' || sel==='ps' ? xs=> 1 - xs.reduce((a,b)=>a*(1-b),1) : null;
       if (!agg) throw new Error(`Unknown aggregator "${sel}"`);
       env.defineOp(head, (...xs)=> xs.length? agg(xs) : lo);
       return 1;
