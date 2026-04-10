@@ -11,7 +11,7 @@ This project provides two equivalent implementations:
 - **[JavaScript](./js/)** — Node.js implementation using the official [links-notation](https://github.com/link-foundation/links-notation) parser
 - **[Rust](./rust/)** — Rust implementation using the official [links-notation](https://github.com/link-foundation/links-notation) crate
 
-Both implementations pass the same 199 tests and produce identical results.
+Both implementations pass the same comprehensive test suites and produce identical results.
 
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -24,7 +24,7 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 - Redefine logical operators with different semantics
 - Configure truth value ranges: `[0, 1]` or `[-1, 1]` (balanced/symmetric)
 - Configure logic valence: 2-valued ([Boolean](https://en.wikipedia.org/wiki/Boolean_algebra)), 3-valued ([ternary/Kleene](https://en.wikipedia.org/wiki/Three-valued_logic)), N-valued, or continuous
-- Use and redefine truth constants: `true`, `false`, `unknown`, `undefined`
+- Use and redefine truth constants: `true`, `false`, `unknown`, `undefined`, `both`, `neither`
 - Resolve paradoxical statements (e.g. the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox))
 - Perform decimal-precision arithmetic (`+`, `-`, `*`, `/`) — `0.1 + 0.2 = 0.3`, not `0.30000000000000004`
 - Query the truth value of complex expressions
@@ -67,26 +67,29 @@ cargo run -- demo.lino
 Create a file `example.lino`:
 
 ```lino
-# Define a term
-(a: a is a)
-
-# Set up operators
-(!=: not =)
-(and: avg)
+# Classical Boolean logic
+(valence: 2)
+(and: min)
 (or: max)
 
-# Assign probabilities to axioms
-((a = a) has probability 1)
-((a != a) has probability 0)
+# Define propositions
+(p: p is p)
+(q: q is q)
 
-# Query probabilities
-(? ((a = a) and (a != a)))   # -> 0.5
-(? ((a = a) or  (a != a)))   # -> 1
+# Assign truth values
+((p = true) has probability 1)
+((q = true) has probability 0)
+
+# Query
+(? ((p = true) and (q = true)))          # -> 0 (true AND false = false)
+(? ((p = true) or (q = true)))           # -> 1 (true OR false = true)
+(? ((p = true) or (not (p = true))))     # -> 1 (law of excluded middle)
 ```
 
 Output:
 ```
-0.5
+0
+1
 1
 ```
 
@@ -132,14 +135,18 @@ Sets the number of discrete truth values. Default is `0` (continuous, no quantiz
 
 ### Truth Constants
 
-The symbols `true`, `false`, `unknown`, and `undefined` are predefined with values based on the current range:
+The symbols `true`, `false`, `unknown`, `undefined`, `both`, and `neither` are predefined with values based on the current range:
 
-| Constant | Default in `[0, 1]` | Default in `[-1, 1]` | Definition |
-|----------|---------------------|----------------------|------------|
-| `true`   | `1`                 | `1`                  | `max(range)` |
-| `false`  | `0`                 | `-1`                 | `min(range)` |
-| `unknown` | `0.5`              | `0`                  | `(max(range) - min(range)) / 2 + min(range)` |
-| `undefined` | `0.5`            | `0`                  | `(max(range) - min(range)) / 2 + min(range)` |
+| Constant | Default in `[0, 1]` | Default in `[-1, 1]` | Definition | Interpretation |
+|----------|---------------------|----------------------|------------|----------------|
+| `true`   | `1`                 | `1`                  | `max(range)` | Definitely true |
+| `false`  | `0`                 | `-1`                 | `min(range)` | Definitely false |
+| `unknown` | `0.5`              | `0`                  | `mid(range)` | Truth value not known |
+| `undefined` | `0.5`            | `0`                  | `mid(range)` | Not yet defined |
+| `both`   | `0.5`               | `0`                  | `mid(range)` | Both true and false (contradiction) |
+| `neither` | `0.5`              | `0`                  | `mid(range)` | Neither true nor false (gap) |
+
+The constants `both` and `neither` come from [Belnap's four-valued logic](https://en.wikipedia.org/wiki/Four-valued_logic#Belnap), where contradictions and gaps are first-class truth values. In RML, they map to the midpoint of the range — the same numeric value as `unknown`, but with distinct semantic meaning. This allows paradoxes like the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox) to resolve naturally to 0.5.
 
 These constants can be used directly in expressions:
 
@@ -147,20 +154,25 @@ These constants can be used directly in expressions:
 (? true)              # -> 1 in [0,1], 1 in [-1,1]
 (? false)             # -> 0 in [0,1], -1 in [-1,1]
 (? unknown)           # -> 0.5 in [0,1], 0 in [-1,1]
+(? both)              # -> 0.5 in [0,1], 0 in [-1,1]
+(? neither)           # -> 0.5 in [0,1], 0 in [-1,1]
 (? (not true))        # -> 0 in [0,1], -1 in [-1,1]
+(? (not both))        # -> 0.5 (fixed point of negation)
 (? (true and false))  # -> 0.5 (avg), 0 (avg in [-1,1])
 ```
 
-Truth constants can be **redefined** to custom values:
+All truth constants can be **redefined** to custom values:
 
 ```lino
 (true: 0.8)           # Redefine true to 0.8
 (false: 0.2)          # Redefine false to 0.2
+(both: 0.7)           # Redefine both to 0.7
 (? true)              # -> 0.8
 (? false)             # -> 0.2
+(? both)              # -> 0.7
 ```
 
-When the range changes (via `(range: ...)`), truth constants are automatically re-initialized to their defaults for the new range.
+When the range changes (via `(range: ...)`), all truth constants are automatically re-initialized to their defaults for the new range.
 
 ### Operator Redefinitions
 
@@ -353,41 +365,96 @@ This means ADL can serve as a **meta-theory** for both classical and non-classic
 
 ## Examples
 
-Example `.lino` files are available in both `js/` and `rust/` directories.
+Example `.lino` files are available in both `js/examples/` and `rust/examples/` directories. Examples progress from standard, familiar logic systems to more advanced and non-standard constructions.
 
-### Standard Logic (with avg semantics)
+### Classical Logic (Boolean, 2-valued)
 
-See `demo.lino`:
-
-```lino
-(a: a is a)
-(!=: not =)
-(and: avg)
-(or: max)
-
-((a = a) has probability 1)
-((a != a) has probability 0)
-
-(? ((a = a) and (a != a)))   # -> 0.5
-(? ((a = a) or  (a != a)))   # -> 1
-```
-
-### Flipped Axioms
-
-See `flipped-axioms.lino` — demonstrates that the system can handle arbitrary probability assignments:
+See `examples/classical-logic.lino` — the most familiar logic system where every proposition is either true or false:
 
 ```lino
-(a: a is a)
-(!=: not =)
-(and: avg)
+(valence: 2)
+(and: min)
 (or: max)
 
-((a = a) has probability 0)
-((a != a) has probability 1)
+(p: p is p)
+((p = true) has probability 1)
 
-(? ((a = a) and (a != a)))   # -> 0.5
-(? ((a = a) or  (a != a)))   # -> 1
+(? (p = true))                          # -> 1 (true)
+(? (not (p = true)))                    # -> 0 (false)
+(? ((p = true) or (not (p = true))))    # -> 1 (law of excluded middle)
+(? ((p = true) and (not (p = true))))   # -> 0 (law of non-contradiction)
 ```
+
+### Propositional Logic (Probabilistic)
+
+See `examples/propositional-logic.lino` — multiple propositions with standard probabilistic connectives:
+
+```lino
+(and: product)              # P(A ∩ B) = P(A) * P(B)
+(or: probabilistic_sum)     # P(A ∪ B) = 1 - (1-P(A))*(1-P(B))
+
+((rain = true) has probability 0.3)
+((umbrella = true) has probability 0.6)
+
+(? ((rain = true) and (umbrella = true)))   # -> 0.18
+(? ((rain = true) or (umbrella = true)))    # -> 0.72
+(? (not (rain = true)))                     # -> 0.7
+```
+
+### Fuzzy Logic (Continuous)
+
+See `examples/fuzzy-logic.lino` — standard [Zadeh fuzzy logic](https://en.wikipedia.org/wiki/Fuzzy_logic) where truth values represent degrees of membership:
+
+```lino
+(and: min)
+(or: max)
+
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.3)
+
+(? ((a = tall) and (b = tall)))   # -> 0.3  (min)
+(? ((a = tall) or (b = tall)))    # -> 0.8  (max)
+(? (not (a = tall)))              # -> 0.2  (complement)
+```
+
+### Ternary Kleene Logic (3-valued)
+
+See `examples/ternary-kleene.lino` — [Kleene's strong three-valued logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Priest_logics):
+
+```lino
+(valence: 3)
+(and: min)
+(or: max)
+
+(? (0.5 and 1))          # -> 0.5  (unknown AND true = unknown)
+(? (0.5 and 0))          # -> 0    (unknown AND false = false)
+(? (0.5 or 1))           # -> 1    (unknown OR true = true)
+(? (0.5 or (not 0.5)))   # -> 0.5  (law of excluded middle FAILS!)
+```
+
+In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Priest_logics), the law of excluded middle (`A ∨ ¬A`) is **not** a tautology — this is the key difference from [classical logic](https://en.wikipedia.org/wiki/Classical_logic).
+
+### Belnap's Four-Valued Logic
+
+See `examples/belnap-four-valued.lino` — extends classical logic with `both` (contradiction) and `neither` (gap) truth values. This is the standard framework for reasoning about paradoxes:
+
+```lino
+(and: min)
+(or: max)
+
+(? true)          # -> 1
+(? false)         # -> 0
+(? both)          # -> 0.5  (both true and false — contradiction)
+(? neither)       # -> 0.5  (neither true nor false — gap)
+(? (not both))    # -> 0.5  (fixed point of negation!)
+
+# The liar paradox resolves naturally to "both"
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))   # -> 0.5
+```
+
+See: [Belnap's four-valued logic](https://en.wikipedia.org/wiki/Four-valued_logic#Belnap)
 
 ### Liar Paradox Resolution
 
@@ -397,9 +464,6 @@ See `examples/liar-paradox.lino` — resolution in `[0, 1]` range:
 
 ```lino
 (s: s is s)
-(!=: not =)
-(and: avg)
-(or: max)
 
 ((s = false) has probability 0.5)
 (? (s = false))          # -> 0.5  (50% from 0% to 100%)
@@ -410,35 +474,43 @@ See `examples/liar-paradox-balanced.lino` — resolution in `[-1, 1]` range:
 
 ```lino
 (range: -1 1)
-
 (s: s is s)
-(!=: not =)
-(and: avg)
-(or: max)
 
 ((s = false) has probability 0)
 (? (s = false))          # -> 0   (0% from -100% to 100%)
 (? (not (s = false)))    # -> 0   (fixed point: not(0) = 0)
 ```
 
-### Ternary Kleene Logic
+### Custom Operators (avg semantics)
 
-See `examples/ternary-kleene.lino` — demonstrates [Kleene's strong three-valued logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Priest_logics) where AND=min, OR=max:
+See `demo.lino` — demonstrates the configurable nature of operators with avg-based AND:
 
 ```lino
-(valence: 3)
-(and: min)
+(a: a is a)
+(!=: not =)
+(and: avg)     # non-standard: average instead of min
 (or: max)
 
-(? (0.5 and 1))          # -> 0.5  (unknown AND true = unknown)
-(? (0.5 and 0))          # -> 0    (unknown AND false = false)
-(? (0.5 or 1))           # -> 1    (unknown OR true = true)
-(? (0.5 or 0))           # -> 0.5  (unknown OR false = unknown)
-(? (not 0.5))            # -> 0.5  (NOT unknown = unknown)
-(? (0.5 or (not 0.5)))   # -> 0.5  (law of excluded middle FAILS!)
+((a = a) has probability 1)
+((a != a) has probability 0)
+
+(? ((a = a) and (a != a)))   # -> 0.5
+(? ((a = a) or  (a != a)))   # -> 1
 ```
 
-In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Priest_logics), the law of excluded middle (`A ∨ ¬A`) is **not** a tautology — this is the key difference from [classical logic](https://en.wikipedia.org/wiki/Classical_logic).
+See `flipped-axioms.lino` — demonstrates that the system handles arbitrary probability assignments:
+
+```lino
+(a: a is a)
+(!=: not =)
+(and: avg)
+(or: max)
+
+((a = a) has probability 0)
+((a != a) has probability 1)
+
+(? ((a = a) and (a != a)))   # -> 0.5 (same result — avg is symmetric)
+```
 
 ### Bayesian Inference
 
@@ -543,7 +615,8 @@ The test suites cover:
 - Evaluation logic and operator aggregators
 - Many-valued logics: unary, binary (Boolean), ternary (Kleene), quaternary, quinary, higher N-valued, and continuous (fuzzy)
 - Both `[0, 1]` and `[-1, 1]` ranges
-- Truth constants (`true`, `false`, `unknown`, `undefined`): defaults, redefinition, range changes, use in expressions, quantization
+- Truth constants (`true`, `false`, `unknown`, `undefined`, `both`, `neither`): defaults, redefinition, range changes, use in expressions, quantization
+- Belnap's four-valued logic: `both`/`neither` constants, fixed points, Belnap semantics
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, type queries, prefix type notation
@@ -569,6 +642,7 @@ See language-specific documentation:
 - [Łukasiewicz logic](https://en.wikipedia.org/wiki/%C5%81ukasiewicz_logic) — N-valued and infinite-valued extensions
 - [Fuzzy logic](https://en.wikipedia.org/wiki/Fuzzy_logic) — continuous-valued logic with degrees of truth
 - [Balanced ternary](https://en.wikipedia.org/wiki/Balanced_ternary) — ternary system using {-1, 0, 1}
+- [Four-valued logic (Belnap)](https://en.wikipedia.org/wiki/Four-valued_logic#Belnap) — extends classical logic with "both" (contradiction) and "neither" (gap)
 - [Liar paradox](https://en.wikipedia.org/wiki/Liar_paradox) — "this statement is false" and its resolution in many-valued logics
 - [Bayesian statistics](https://en.wikipedia.org/wiki/Bayesian_statistics) — probability as a measure of belief
 - [Bayesian inference](https://en.wikipedia.org/wiki/Bayesian_inference) — updating beliefs based on evidence
