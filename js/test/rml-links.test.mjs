@@ -1703,3 +1703,317 @@ describe('Type System: self-referential (Type: Type Type) — dynamic axiomatic 
     assert.strictEqual(results[1], 0.5);
   });
 });
+
+// ──────────────────────────────────────────────────────────────
+// Bayesian Inference and Bayesian Networks
+// ──────────────────────────────────────────────────────────────
+describe('Bayesian Inference', () => {
+  it('Bayes theorem: medical diagnosis P(Disease|Positive)', () => {
+    // P(D)=0.01, P(Pos|D)=0.95, P(Pos|~D)=0.05
+    // P(D|Pos) = P(Pos|D)*P(D) / (P(Pos|D)*P(D)+P(Pos|~D)*P(~D))
+    const results = run(`
+(? (0.95 * 0.01))
+(? ((0.95 * 0.01) + (0.05 * 0.99)))
+(? ((0.95 * 0.01) / ((0.95 * 0.01) + (0.05 * 0.99))))
+`);
+    approx(results[0], 0.0095);
+    approx(results[1], 0.059);
+    approx(results[2], 0.161017, 1e-6);
+  });
+
+  it('probabilistic AND (prod): P(A ∩ B) = P(A)*P(B)', () => {
+    const results = run(`
+(and: prod)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.3)
+(((b) = true) has probability 0.7)
+(? (((a) = true) and ((b) = true)))
+`);
+    approx(results[0], 0.21);
+  });
+
+  it('probabilistic OR (ps): P(A ∪ B) = 1-(1-P(A))*(1-P(B))', () => {
+    const results = run(`
+(or: ps)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.3)
+(((b) = true) has probability 0.7)
+(? (((a) = true) or ((b) = true)))
+`);
+    approx(results[0], 0.79);
+  });
+
+  it('joint probability with prod and ps together', () => {
+    const results = run(`
+(and: prod)
+(or: ps)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+(((a) = true) has probability 0.5)
+(((b) = true) has probability 0.3)
+(((c) = true) has probability 0.5)
+(? (((a) = true) and ((b) = true)))
+(? (((a) = true) or ((b) = true)))
+(? (and ((a) = true) ((b) = true) ((c) = true)))
+`);
+    approx(results[0], 0.15);
+    approx(results[1], 0.65);
+    approx(results[2], 0.075);
+  });
+
+  it('Bayesian network: chain rule decomposition', () => {
+    // P(WetGrass) from conditional probabilities
+    // P(W|S,R)=0.99, P(W|S,~R)=0.9, P(W|~S,R)=0.9, P(W|~S,~R)=0.01
+    // P(S)=0.3, P(R)=0.5
+    const results = run(`
+(? (((0.99 * 0.15) + (0.9 * 0.15)) + ((0.9 * 0.35) + (0.01 * 0.35))))
+`);
+    approx(results[0], 0.602, 1e-6);
+  });
+
+  it('law of total probability', () => {
+    // P(B) = P(B|A)*P(A) + P(B|~A)*P(~A)
+    // P(A)=0.4, P(B|A)=0.8, P(B|~A)=0.3
+    // P(B) = 0.8*0.4 + 0.3*0.6 = 0.32 + 0.18 = 0.5
+    const results = run(`
+(? ((0.8 * 0.4) + (0.3 * 0.6)))
+`);
+    approx(results[0], 0.5);
+  });
+
+  it('conditional probability via Bayes: P(A|B) = P(B|A)*P(A)/P(B)', () => {
+    // P(A)=0.4, P(B|A)=0.8, P(B)=0.5
+    // P(A|B) = 0.8*0.4/0.5 = 0.64
+    const results = run(`
+(? ((0.8 * 0.4) / 0.5))
+`);
+    approx(results[0], 0.64);
+  });
+
+  it('independent events: P(A ∩ B) = P(A)*P(B)', () => {
+    const results = run(`
+(and: prod)
+(coin1: coin1 is coin1)
+(coin2: coin2 is coin2)
+(((coin1) = heads) has probability 0.5)
+(((coin2) = heads) has probability 0.5)
+(? (((coin1) = heads) and ((coin2) = heads)))
+`);
+    approx(results[0], 0.25);
+  });
+
+  it('complement rule: P(~A) = 1 - P(A)', () => {
+    const results = run(`
+(a: a is a)
+(((a) = true) has probability 0.7)
+(? ((a) = true))
+(? (not ((a) = true)))
+`);
+    approx(results[0], 0.7);
+    approx(results[1], 0.3);
+  });
+
+  it('multi-node network with prefix AND', () => {
+    const results = run(`
+(and: prod)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+(d: d is d)
+(((a) = true) has probability 0.9)
+(((b) = true) has probability 0.8)
+(((c) = true) has probability 0.7)
+(((d) = true) has probability 0.6)
+(? (and ((a) = true) ((b) = true) ((c) = true) ((d) = true)))
+`);
+    approx(results[0], 0.3024);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────
+// Self-Reasoning (Meta-Logic)
+// ──────────────────────────────────────────────────────────────
+describe('Self-Reasoning: meta-logic reasoning about itself', () => {
+  it('can define and query properties of logic systems', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(Property: Type Property)
+(RML: Logic RML)
+(supports_many_valued: Property supports_many_valued)
+(((RML supports_many_valued) = true) has probability 1)
+(? ((RML supports_many_valued) = true))
+(? (RML of Logic))
+(? (Logic of Type))
+(? (type of RML))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 1);
+    assert.strictEqual(results[2], 1);
+    assert.strictEqual(results[3], 'Logic');
+  });
+
+  it('can compare properties of different logic systems', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(Classical: Logic Classical)
+(((RML supports_self_reference) = true) has probability 1)
+(((Classical supports_self_reference) = true) has probability 0)
+(? ((RML supports_self_reference) = true))
+(? ((Classical supports_self_reference) = true))
+`);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 0);
+  });
+
+  it('can reason about its own paradox resolution', () => {
+    const results = run(`
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(liar: liar is liar)
+((liar = false) has probability 0.5)
+(? (liar = false))
+(? (not (liar = false)))
+(? (RML of Logic))
+`);
+    assert.strictEqual(results[0], 0.5);
+    assert.strictEqual(results[1], 0.5);
+    assert.strictEqual(results[2], 1);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────
+// Comprehensive valence coverage (0 to ∞)
+// ──────────────────────────────────────────────────────────────
+describe('Valence coverage: 0 (continuous) through high N', () => {
+  it('valence 0: continuous — no quantization', () => {
+    const results = run(`
+(valence: 0)
+(a: a is a)
+(((a) = true) has probability 0.123456)
+(? ((a) = true))
+`);
+    approx(results[0], 0.123456);
+  });
+
+  it('valence 1: unary — no quantization', () => {
+    const results = run(`
+(valence: 1)
+(a: a is a)
+(((a) = true) has probability 0.7)
+(? ((a) = true))
+`);
+    approx(results[0], 0.7);
+  });
+
+  it('valence 6: six-valued logic', () => {
+    // Levels: {0, 0.2, 0.4, 0.6, 0.8, 1}
+    const results = run(`
+(valence: 6)
+(a: a is a)
+(((a) = true) has probability 0.33)
+(? ((a) = true))
+(((a) = true) has probability 0.71)
+(? ((a) = true))
+`);
+    approx(results[0], 0.4);   // 0.33 → nearest 0.4
+    approx(results[1], 0.8);   // 0.71 → nearest 0.8
+  });
+
+  it('valence 7: seven-valued logic', () => {
+    // Levels: {0, 1/6, 2/6, 3/6, 4/6, 5/6, 1} ≈ {0, 0.1667, 0.3333, 0.5, 0.6667, 0.8333, 1}
+    const results = run(`
+(valence: 7)
+(a: a is a)
+(((a) = true) has probability 0.5)
+(? ((a) = true))
+`);
+    approx(results[0], 0.5);  // 0.5 = 3/6, exact match
+  });
+
+  it('valence 10: ten-valued logic', () => {
+    // Levels: {0, 1/9, 2/9, ..., 1} ≈ {0, 0.111, 0.222, ..., 1}
+    const results = run(`
+(valence: 10)
+(a: a is a)
+(((a) = true) has probability 0.3)
+(? ((a) = true))
+(((a) = true) has probability 0.77)
+(? ((a) = true))
+`);
+    approx(results[0], 1/3, 1e-6);    // 0.3 → nearest 1/3
+    approx(results[1], 7/9, 1e-6);    // 0.77 → nearest 7/9
+  });
+
+  it('valence 100: hundred-valued logic — fine granularity', () => {
+    // Step = 1/99 ≈ 0.010101
+    const results = run(`
+(valence: 100)
+(a: a is a)
+(((a) = true) has probability 0.505)
+(? ((a) = true))
+`);
+    // 0.505 → nearest level: round(0.505*99)/99 = 50/99 ≈ 0.505051
+    approx(results[0], 50/99, 1e-4);
+  });
+
+  it('valence 1000: thousand-valued — near-continuous', () => {
+    const results = run(`
+(valence: 1000)
+(a: a is a)
+(((a) = true) has probability 0.333)
+(? ((a) = true))
+`);
+    // step = 1/999, nearest = round(0.333*999)/999 = 333/999 = 0.333333...
+    approx(results[0], 333/999, 1e-3);
+  });
+
+  it('valence 6, balanced range [-1,1]: six-valued', () => {
+    // Levels: {-1, -0.6, -0.2, 0.2, 0.6, 1}
+    const results = run(`
+(range: -1 1)
+(valence: 6)
+(a: a is a)
+(((a) = true) has probability 0.15)
+(? ((a) = true))
+`);
+    approx(results[0], 0.2);  // 0.15 → nearest 0.2
+  });
+
+  it('valence 2: binary with prod AND and ps OR', () => {
+    const results = run(`
+(valence: 2)
+(and: prod)
+(or: ps)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.8)
+(((b) = true) has probability 0.6)
+(? (((a) = true) and ((b) = true)))
+(? (((a) = true) or ((b) = true)))
+`);
+    // In binary: 0.8 → 1, 0.6 → 1, so prod(1,1)=1, ps(1,1)=1
+    approx(results[0], 1);
+    approx(results[1], 1);
+  });
+
+  it('valence 3: ternary with Bayesian prod AND', () => {
+    const results = run(`
+(valence: 3)
+(and: prod)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.5)
+(((b) = true) has probability 0.5)
+(? (((a) = true) and ((b) = true)))
+`);
+    // In ternary: 0.5 stays 0.5, prod(0.5,0.5)=0.25 → quantized to 0.5
+    approx(results[0], 0.5);
+  });
+});

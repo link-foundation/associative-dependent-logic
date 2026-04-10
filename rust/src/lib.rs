@@ -3677,4 +3677,388 @@ mod tests {
         approx(results[0], 0.5);
         approx(results[1], 0.5);
     }
+
+    // ──────────────────────────────────────────────────────────────
+    // Bayesian Inference and Bayesian Networks
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn bayesian_bayes_theorem_medical_diagnosis() {
+        let results = run(
+            r#"
+(? (0.95 * 0.01))
+(? ((0.95 * 0.01) + (0.05 * 0.99)))
+(? ((0.95 * 0.01) / ((0.95 * 0.01) + (0.05 * 0.99))))
+"#,
+            None,
+        );
+        approx(results[0], 0.0095);
+        approx(results[1], 0.059);
+        assert!((results[2] - 0.161017).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bayesian_probabilistic_and_prod() {
+        let results = run(
+            r#"
+(and: prod)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.3)
+(((b) = true) has probability 0.7)
+(? (((a) = true) and ((b) = true)))
+"#,
+            None,
+        );
+        approx(results[0], 0.21);
+    }
+
+    #[test]
+    fn bayesian_probabilistic_or_ps() {
+        let results = run(
+            r#"
+(or: ps)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.3)
+(((b) = true) has probability 0.7)
+(? (((a) = true) or ((b) = true)))
+"#,
+            None,
+        );
+        approx(results[0], 0.79);
+    }
+
+    #[test]
+    fn bayesian_joint_probability_prod_and_ps() {
+        let results = run(
+            r#"
+(and: prod)
+(or: ps)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+(((a) = true) has probability 0.5)
+(((b) = true) has probability 0.3)
+(((c) = true) has probability 0.5)
+(? (((a) = true) and ((b) = true)))
+(? (((a) = true) or ((b) = true)))
+(? (and ((a) = true) ((b) = true) ((c) = true)))
+"#,
+            None,
+        );
+        approx(results[0], 0.15);
+        approx(results[1], 0.65);
+        approx(results[2], 0.075);
+    }
+
+    #[test]
+    fn bayesian_network_chain_rule() {
+        let results = run(
+            r#"
+(? (((0.99 * 0.15) + (0.9 * 0.15)) + ((0.9 * 0.35) + (0.01 * 0.35))))
+"#,
+            None,
+        );
+        assert!((results[0] - 0.602).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bayesian_law_of_total_probability() {
+        let results = run(
+            r#"
+(? ((0.8 * 0.4) + (0.3 * 0.6)))
+"#,
+            None,
+        );
+        approx(results[0], 0.5);
+    }
+
+    #[test]
+    fn bayesian_conditional_probability() {
+        let results = run(
+            r#"
+(? ((0.8 * 0.4) / 0.5))
+"#,
+            None,
+        );
+        approx(results[0], 0.64);
+    }
+
+    #[test]
+    fn bayesian_independent_events() {
+        let results = run(
+            r#"
+(and: prod)
+(coin1: coin1 is coin1)
+(coin2: coin2 is coin2)
+(((coin1) = heads) has probability 0.5)
+(((coin2) = heads) has probability 0.5)
+(? (((coin1) = heads) and ((coin2) = heads)))
+"#,
+            None,
+        );
+        approx(results[0], 0.25);
+    }
+
+    #[test]
+    fn bayesian_complement_rule() {
+        let results = run(
+            r#"
+(a: a is a)
+(((a) = true) has probability 0.7)
+(? ((a) = true))
+(? (not ((a) = true)))
+"#,
+            None,
+        );
+        approx(results[0], 0.7);
+        approx(results[1], 0.3);
+    }
+
+    #[test]
+    fn bayesian_multi_node_prefix_and() {
+        let results = run(
+            r#"
+(and: prod)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+(d: d is d)
+(((a) = true) has probability 0.9)
+(((b) = true) has probability 0.8)
+(((c) = true) has probability 0.7)
+(((d) = true) has probability 0.6)
+(? (and ((a) = true) ((b) = true) ((c) = true) ((d) = true)))
+"#,
+            None,
+        );
+        approx(results[0], 0.3024);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Self-Reasoning (Meta-Logic)
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn self_reasoning_logic_properties() {
+        let results = run_typed(
+            r#"
+(Type: Type Type)
+(Logic: Type Logic)
+(Property: Type Property)
+(RML: Logic RML)
+(supports_many_valued: Property supports_many_valued)
+(((RML supports_many_valued) = true) has probability 1)
+(? ((RML supports_many_valued) = true))
+(? (RML of Logic))
+(? (Logic of Type))
+(? (type of RML))
+"#,
+            None,
+        );
+        assert_eq!(results[0], RunResult::Num(1.0));
+        assert_eq!(results[1], RunResult::Num(1.0));
+        assert_eq!(results[2], RunResult::Num(1.0));
+        assert_eq!(results[3], RunResult::Type("Logic".to_string()));
+    }
+
+    #[test]
+    fn self_reasoning_compare_logics() {
+        let results = run(
+            r#"
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(Classical: Logic Classical)
+(((RML supports_self_reference) = true) has probability 1)
+(((Classical supports_self_reference) = true) has probability 0)
+(? ((RML supports_self_reference) = true))
+(? ((Classical supports_self_reference) = true))
+"#,
+            None,
+        );
+        approx(results[0], 1.0);
+        approx(results[1], 0.0);
+    }
+
+    #[test]
+    fn self_reasoning_paradox_resolution() {
+        let results = run(
+            r#"
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+(liar: liar is liar)
+((liar = false) has probability 0.5)
+(? (liar = false))
+(? (not (liar = false)))
+(? (RML of Logic))
+"#,
+            None,
+        );
+        approx(results[0], 0.5);
+        approx(results[1], 0.5);
+        approx(results[2], 1.0);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Comprehensive valence coverage (0 to ∞)
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn valence_0_continuous() {
+        let results = run(
+            r#"
+(valence: 0)
+(a: a is a)
+(((a) = true) has probability 0.123456)
+(? ((a) = true))
+"#,
+            None,
+        );
+        approx(results[0], 0.123456);
+    }
+
+    #[test]
+    fn valence_1_unary() {
+        let results = run(
+            r#"
+(valence: 1)
+(a: a is a)
+(((a) = true) has probability 0.7)
+(? ((a) = true))
+"#,
+            None,
+        );
+        approx(results[0], 0.7);
+    }
+
+    #[test]
+    fn valence_6_six_valued() {
+        let results = run(
+            r#"
+(valence: 6)
+(a: a is a)
+(((a) = true) has probability 0.33)
+(? ((a) = true))
+(((a) = true) has probability 0.71)
+(? ((a) = true))
+"#,
+            None,
+        );
+        approx(results[0], 0.4);
+        approx(results[1], 0.8);
+    }
+
+    #[test]
+    fn valence_7_seven_valued() {
+        let results = run(
+            r#"
+(valence: 7)
+(a: a is a)
+(((a) = true) has probability 0.5)
+(? ((a) = true))
+"#,
+            None,
+        );
+        approx(results[0], 0.5);
+    }
+
+    #[test]
+    fn valence_10_ten_valued() {
+        let results = run(
+            r#"
+(valence: 10)
+(a: a is a)
+(((a) = true) has probability 0.3)
+(? ((a) = true))
+(((a) = true) has probability 0.77)
+(? ((a) = true))
+"#,
+            None,
+        );
+        assert!((results[0] - 1.0/3.0).abs() < 1e-6);
+        assert!((results[1] - 7.0/9.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn valence_100_hundred_valued() {
+        let results = run(
+            r#"
+(valence: 100)
+(a: a is a)
+(((a) = true) has probability 0.505)
+(? ((a) = true))
+"#,
+            None,
+        );
+        assert!((results[0] - 50.0/99.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn valence_1000_thousand_valued() {
+        let results = run(
+            r#"
+(valence: 1000)
+(a: a is a)
+(((a) = true) has probability 0.333)
+(? ((a) = true))
+"#,
+            None,
+        );
+        assert!((results[0] - 333.0/999.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn valence_6_balanced_range() {
+        let results = run(
+            r#"
+(range: -1 1)
+(valence: 6)
+(a: a is a)
+(((a) = true) has probability 0.15)
+(? ((a) = true))
+"#,
+            None,
+        );
+        approx(results[0], 0.2);
+    }
+
+    #[test]
+    fn valence_2_binary_with_prod_and_ps() {
+        let results = run(
+            r#"
+(valence: 2)
+(and: prod)
+(or: ps)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.8)
+(((b) = true) has probability 0.6)
+(? (((a) = true) and ((b) = true)))
+(? (((a) = true) or ((b) = true)))
+"#,
+            None,
+        );
+        approx(results[0], 1.0);
+        approx(results[1], 1.0);
+    }
+
+    #[test]
+    fn valence_3_ternary_with_bayesian_prod() {
+        let results = run(
+            r#"
+(valence: 3)
+(and: prod)
+(a: a is a)
+(b: b is b)
+(((a) = true) has probability 0.5)
+(((b) = true) has probability 0.5)
+(? (((a) = true) and ((b) = true)))
+"#,
+            None,
+        );
+        approx(results[0], 0.5);
+    }
 }

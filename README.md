@@ -11,7 +11,7 @@ This project provides two equivalent implementations:
 - **[JavaScript](./js/)** — Node.js implementation using the official [links-notation](https://github.com/link-foundation/links-notation) parser
 - **[Rust](./rust/)** — Rust implementation using the official [links-notation](https://github.com/link-foundation/links-notation) crate
 
-Both implementations pass the same 176 tests and produce identical results.
+Both implementations pass the same 199 tests and produce identical results.
 
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -440,6 +440,51 @@ See `examples/ternary-kleene.lino` — demonstrates [Kleene's strong three-value
 
 In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Priest_logics), the law of excluded middle (`A ∨ ¬A`) is **not** a tautology — this is the key difference from [classical logic](https://en.wikipedia.org/wiki/Classical_logic).
 
+### Bayesian Inference
+
+RML natively supports [Bayesian inference](https://en.wikipedia.org/wiki/Bayesian_inference) and [Bayesian networks](https://en.wikipedia.org/wiki/Bayesian_network). Links notation naturally describes networks of any complexity — each node's probability is a link, and joint/marginal probabilities are computed using the `prod` (product) and `ps` (probabilistic sum) aggregators.
+
+See `examples/bayesian-inference.lino` — [Bayes' theorem](https://en.wikipedia.org/wiki/Bayes%27_theorem) applied to medical diagnosis:
+
+```lino
+# P(Disease) = 0.01, P(Positive|Disease) = 0.95, P(Positive|~Disease) = 0.05
+# Bayes' theorem: P(Disease|Positive) = P(Pos|D)*P(D) / P(Pos)
+
+(? (0.95 * 0.01))                                        # -> 0.0095
+(? ((0.95 * 0.01) + (0.05 * 0.99)))                     # -> 0.059
+(? ((0.95 * 0.01) / ((0.95 * 0.01) + (0.05 * 0.99))))  # -> 0.161017
+```
+
+See `examples/bayesian-network.lino` — a [Bayesian network](https://en.wikipedia.org/wiki/Bayesian_network) with `prod` and `ps` aggregators:
+
+```lino
+(and: prod)   # P(A ∩ B) = P(A) * P(B)
+(or: ps)      # P(A ∪ B) = 1 - (1-P(A))*(1-P(B))
+
+(((cloudy) = true) has probability 0.5)
+(((rain) = true) has probability 0.5)
+
+(? (((cloudy) = true) and ((rain) = true)))   # -> 0.25 (joint)
+(? (((cloudy) = true) or ((rain) = true)))    # -> 0.75 (union)
+```
+
+### Self-Reasoning (Meta-Logic)
+
+As a meta-logic, RML can reason about its own logic system and compare it with other logics.
+
+See `examples/self-reasoning.lino`:
+
+```lino
+(Type: Type Type)
+(Logic: Type Logic)
+(RML: Logic RML)
+
+(((RML supports_many_valued) = true) has probability 1)
+(? ((RML supports_many_valued) = true))   # -> 1
+(? (RML of Logic))                        # -> 1
+(? (type of RML))                         # -> Logic
+```
+
 ## Testing
 
 Both implementations have 176 matching tests:
@@ -462,6 +507,10 @@ The test suites cover:
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, type queries, prefix type notation
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types, coexistence with universe hierarchy
+- Bayesian inference: Bayes' theorem, law of total probability, conditional probability, complement rule
+- Bayesian networks: joint probability (prod), probabilistic sum (ps), multi-node networks, chain rule decomposition
+- Self-reasoning: meta-logic properties, comparing logic systems, paradox resolution in meta context
+- Comprehensive valence coverage: 0 (continuous), 1 (unary), 2–10, 100, 1000, with both ranges
 
 ## API
 
@@ -478,6 +527,10 @@ See language-specific documentation:
 - [Fuzzy logic](https://en.wikipedia.org/wiki/Fuzzy_logic) — continuous-valued logic with degrees of truth
 - [Balanced ternary](https://en.wikipedia.org/wiki/Balanced_ternary) — ternary system using {-1, 0, 1}
 - [Liar paradox](https://en.wikipedia.org/wiki/Liar_paradox) — "this statement is false" and its resolution in many-valued logics
+- [Bayesian statistics](https://en.wikipedia.org/wiki/Bayesian_statistics) — probability as a measure of belief
+- [Bayesian inference](https://en.wikipedia.org/wiki/Bayesian_inference) — updating beliefs based on evidence
+- [Bayesian network](https://en.wikipedia.org/wiki/Bayesian_network) — probabilistic graphical models
+- [Bayes' theorem](https://en.wikipedia.org/wiki/Bayes%27_theorem) — relating conditional and marginal probabilities
 
 ## License
 
