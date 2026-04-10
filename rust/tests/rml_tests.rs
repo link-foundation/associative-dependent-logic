@@ -1545,6 +1545,393 @@ fn truth_const_liar_paradox_balanced() {
     assert_eq!(results[0], 0.0);
 }
 
+// ===== Belnap's four-valued logic operators: both, neither =====
+// https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
+
+#[test]
+fn operator_both_default_avg() {
+    let results = run("(? (true both false))", None);
+    assert_eq!(results[0], 0.5); // avg(1, 0) = 0.5
+}
+
+#[test]
+fn operator_neither_default_product() {
+    let results = run("(? (true neither false))", None);
+    assert_eq!(results[0], 0.0); // product(1, 0) = 0
+}
+
+#[test]
+fn operator_both_redefine_aggregator() {
+    let results = run(
+        r#"
+(both: min)
+(? (true both false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.0); // min(1, 0) = 0
+}
+
+#[test]
+fn operator_neither_redefine_aggregator() {
+    let results = run(
+        r#"
+(neither: max)
+(? (true neither false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 1.0); // max(1, 0) = 1
+}
+
+#[test]
+fn operator_both_env_has_op() {
+    let env = Env::new(None);
+    assert!(env.ops.contains_key("both"));
+    assert!(env.ops.contains_key("neither"));
+}
+
+#[test]
+fn operator_both_same_values() {
+    let results = run(
+        r#"
+(? (true both true))
+(? (false both false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 1.0); // avg(1, 1) = 1
+    assert_eq!(results[1], 0.0); // avg(0, 0) = 0
+}
+
+#[test]
+fn operator_neither_same_values() {
+    let results = run(
+        r#"
+(? (true neither true))
+(? (false neither false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 1.0); // product(1, 1) = 1
+    assert_eq!(results[1], 0.0); // product(0, 0) = 0
+}
+
+#[test]
+fn operator_both_fuzzy_values() {
+    let results = run(
+        r#"
+(a: a is a)
+(b: b is b)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.4)
+(? ((a = tall) both (b = tall)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.6); // avg(0.8, 0.4) = 0.6
+}
+
+#[test]
+fn operator_neither_fuzzy_values() {
+    let results = run(
+        r#"
+(a: a is a)
+(b: b is b)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.5)
+(? ((a = tall) neither (b = tall)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.4); // product(0.8, 0.5) = 0.4
+}
+
+#[test]
+fn operator_both_prefix_form() {
+    let results = run("(? (both true false))", None);
+    assert_eq!(results[0], 0.5); // avg(1, 0) = 0.5
+}
+
+#[test]
+fn operator_neither_prefix_form() {
+    let results = run("(? (neither true false))", None);
+    assert_eq!(results[0], 0.0); // product(1, 0) = 0
+}
+
+#[test]
+fn operator_both_composite_natural_language() {
+    let results = run(
+        r#"
+(? (both true and false))
+(? (both true and true))
+(? (both false and false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5); // avg(1, 0) = 0.5
+    assert_eq!(results[1], 1.0); // avg(1, 1) = 1
+    assert_eq!(results[2], 0.0); // avg(0, 0) = 0
+}
+
+#[test]
+fn operator_neither_composite_natural_language() {
+    let results = run(
+        r#"
+(? (neither true nor false))
+(? (neither true nor true))
+(? (neither false nor false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.0); // product(1, 0) = 0
+    assert_eq!(results[1], 1.0); // product(1, 1) = 1
+    assert_eq!(results[2], 0.0); // product(0, 0) = 0
+}
+
+#[test]
+fn operator_both_composite_variadic() {
+    let results = run("(? (both true and true and false))", None);
+    assert!((results[0] - 0.666666666667).abs() < 0.0001); // avg(1, 1, 0)
+}
+
+#[test]
+fn operator_neither_composite_variadic() {
+    let results = run("(? (neither true nor true nor false))", None);
+    assert_eq!(results[0], 0.0); // product(1, 1, 0) = 0
+}
+
+#[test]
+fn operator_both_composite_redefinable() {
+    let results = run(
+        r#"
+(both: min)
+(? (both true and false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.0); // min(1, 0) = 0
+}
+
+#[test]
+fn operator_neither_composite_redefinable() {
+    let results = run(
+        r#"
+(neither: max)
+(? (neither true nor false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 1.0); // max(1, 0) = 1
+}
+
+#[test]
+fn operator_both_composite_issue_scenario() {
+    let results = run(
+        r#"
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? (both (a = a) and (a != a)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5);
+}
+
+#[test]
+fn operator_neither_composite_issue_scenario() {
+    let results = run(
+        r#"
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? (neither (a = a) nor (a != a)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.0);
+}
+
+#[test]
+fn operator_both_range_change() {
+    let results = run(
+        r#"
+(? (true both false))
+(range: -1 1)
+(? (true both false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5); // avg(1, 0) = 0.5 in [0,1]
+    assert_eq!(results[1], 0.0); // avg(1, -1) = 0 in [-1,1]
+}
+
+#[test]
+fn operator_both_issue_scenario() {
+    let results = run(
+        r#"
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? ((a = a) both (a != a)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5);
+}
+
+#[test]
+fn operator_neither_issue_scenario() {
+    let results = run(
+        r#"
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? ((a = a) neither (a != a)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.0);
+}
+
+// ===== Standard logic examples =====
+
+#[test]
+fn example_classical_logic() {
+    let results = run(
+        r#"
+(valence: 2)
+(and: min)
+(or: max)
+(p: p is p)
+(q: q is q)
+((p = true) has probability 1)
+((q = true) has probability 0)
+(? (p = true))
+(? (q = true))
+(? (not (p = true)))
+(? (not (q = true)))
+(? ((p = true) and (q = true)))
+(? ((p = true) or (q = true)))
+(? ((p = true) or (not (p = true))))
+(? ((p = true) and (not (p = true))))
+(? (not (not (p = true))))
+"#,
+        None,
+    );
+    assert_eq!(results.len(), 9);
+    assert_eq!(results[0], 1.0);
+    assert_eq!(results[1], 0.0);
+    assert_eq!(results[2], 0.0);
+    assert_eq!(results[3], 1.0);
+    assert_eq!(results[4], 0.0);
+    assert_eq!(results[5], 1.0);
+    assert_eq!(results[6], 1.0);
+    assert_eq!(results[7], 0.0);
+    assert_eq!(results[8], 1.0);
+}
+
+#[test]
+fn example_propositional_logic() {
+    let results = run(
+        r#"
+(and: product)
+(or: probabilistic_sum)
+(rain: rain is rain)
+(umbrella: umbrella is umbrella)
+(wet: wet is wet)
+((rain = true) has probability 0.3)
+((umbrella = true) has probability 0.6)
+((wet = true) has probability 0.4)
+(? (rain = true))
+(? (umbrella = true))
+(? ((rain = true) and (umbrella = true)))
+(? ((rain = true) or (umbrella = true)))
+(? (not (rain = true)))
+(? (and (rain = true) (umbrella = true) (wet = true)))
+(? (or (rain = true) (umbrella = true) (wet = true)))
+"#,
+        None,
+    );
+    assert_eq!(results.len(), 7);
+    approx(results[0], 0.3);
+    approx(results[1], 0.6);
+    approx(results[2], 0.18);
+    approx(results[3], 0.72);
+    approx(results[4], 0.7);
+    approx(results[5], 0.072);
+    approx(results[6], 0.832);
+}
+
+#[test]
+fn example_fuzzy_logic() {
+    let results = run(
+        r#"
+(and: min)
+(or: max)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.3)
+((c = tall) has probability 0.6)
+(? (a = tall))
+(? (b = tall))
+(? ((a = tall) and (b = tall)))
+(? ((a = tall) or (b = tall)))
+(? (not (a = tall)))
+(? ((a = tall) and ((b = tall) or (c = tall))))
+"#,
+        None,
+    );
+    assert_eq!(results.len(), 6);
+    approx(results[0], 0.8);
+    approx(results[1], 0.3);
+    approx(results[2], 0.3);
+    approx(results[3], 0.8);
+    approx(results[4], 0.2);
+    approx(results[5], 0.6);
+}
+
+#[test]
+fn example_belnap_four_valued() {
+    let results = run(
+        r#"
+(and: min)
+(or: max)
+(? true)
+(? false)
+(? (not true))
+(? (not false))
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+(? (true both false))
+(? (true neither false))
+(? (true both true))
+(? (false both false))
+(? (true neither true))
+(? (false neither false))
+"#,
+        None,
+    );
+    assert_eq!(results.len(), 12);
+    assert_eq!(results[0], 1.0);    // true
+    assert_eq!(results[1], 0.0);    // false
+    assert_eq!(results[2], 0.0);    // not true
+    assert_eq!(results[3], 1.0);    // not false
+    assert_eq!(results[4], 0.5);    // liar paradox
+    assert_eq!(results[5], 0.5);    // not liar paradox
+    assert_eq!(results[6], 0.5);    // true both false = 0.5 (contradiction)
+    assert_eq!(results[7], 0.0);    // true neither false = 0 (gap)
+    assert_eq!(results[8], 1.0);    // true both true = 1
+    assert_eq!(results[9], 0.0);    // false both false = 0
+    assert_eq!(results[10], 1.0);   // true neither true = 1
+    assert_eq!(results[11], 0.0);   // false neither false = 0
+}
+
 // ===== Type System: "everything is a link" =====
 // Dependent types as links: types are stored as associations in the link network.
 // See: https://github.com/link-foundation/associative-dependent-logic/issues/13

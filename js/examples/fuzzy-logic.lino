@@ -1,0 +1,43 @@
+# Fuzzy Logic — Continuous truth values in [0, 1]
+#
+# Standard fuzzy logic where truth values represent degrees of membership.
+# Unlike classical logic, propositions can be partially true.
+#
+# Standard fuzzy connectives (Zadeh):
+#   AND = min (degree of conjunction)
+#   OR  = max (degree of disjunction)
+#   NOT = 1 - x (complement)
+#
+# See: https://en.wikipedia.org/wiki/Fuzzy_logic
+#      https://en.wikipedia.org/wiki/Fuzzy_set
+
+(and: min)
+(or: max)
+
+# Define fuzzy propositions with degrees of truth
+(a: a is a)
+(b: b is b)
+(c: c is c)
+
+# "a is tall" with 80% degree of truth
+((a = tall) has probability 0.8)
+# "b is tall" with 30% degree of truth
+((b = tall) has probability 0.3)
+# "c is tall" with 60% degree of truth
+((c = tall) has probability 0.6)
+
+# Query membership degrees
+(? (a = tall))                            # -> 0.8
+(? (b = tall))                            # -> 0.3
+
+# Fuzzy AND (min): "a is tall AND b is tall"
+(? ((a = tall) and (b = tall)))           # -> 0.3
+
+# Fuzzy OR (max): "a is tall OR b is tall"
+(? ((a = tall) or (b = tall)))            # -> 0.8
+
+# Fuzzy NOT: "a is NOT tall"
+(? (not (a = tall)))                      # -> 0.2
+
+# Chained: "a is tall AND (b is tall OR c is tall)"
+(? ((a = tall) and ((b = tall) or (c = tall))))   # -> 0.6

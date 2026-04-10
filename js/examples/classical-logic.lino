@@ -1,0 +1,53 @@
+# Classical Logic — Standard Boolean (2-valued)
+#
+# The most familiar logic system: every proposition is either true or false.
+# This is what most people learn in introductory logic courses.
+#
+# Key properties:
+#   - Two truth values: true (1) and false (0)
+#   - AND = min (conjunction: both must be true)
+#   - OR  = max (disjunction: at least one must be true)
+#   - NOT = 1 - x (negation: flips truth value)
+#
+# Classical laws that hold here:
+#   - Law of excluded middle: A ∨ ¬A = true
+#   - Law of non-contradiction: A ∧ ¬A = false
+#   - Double negation: ¬¬A = A
+#
+# See: https://en.wikipedia.org/wiki/Classical_logic
+#      https://en.wikipedia.org/wiki/Boolean_algebra
+
+(valence: 2)
+(and: min)
+(or: max)
+
+# Define propositions
+(p: p is p)
+(q: q is q)
+
+# Assign truth values
+((p = true) has probability 1)
+((q = true) has probability 0)
+
+# Basic queries
+(? (p = true))                          # -> 1 (true)
+(? (q = true))                          # -> 0 (false)
+
+# Negation
+(? (not (p = true)))                    # -> 0 (not true = false)
+(? (not (q = true)))                    # -> 1 (not false = true)
+
+# Conjunction (AND): both must be true
+(? ((p = true) and (q = true)))         # -> 0 (true AND false = false)
+
+# Disjunction (OR): at least one true
+(? ((p = true) or (q = true)))          # -> 1 (true OR false = true)
+
+# Law of excluded middle: p ∨ ¬p = true
+(? ((p = true) or (not (p = true))))    # -> 1
+
+# Law of non-contradiction: p ∧ ¬p = false
+(? ((p = true) and (not (p = true))))   # -> 0
+
+# Double negation: ¬¬p = p
+(? (not (not (p = true))))              # -> 1

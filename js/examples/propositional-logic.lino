@@ -1,0 +1,40 @@
+# Propositional Logic — Multiple propositions with standard connectives
+#
+# Extends classical logic with multiple propositions to demonstrate
+# standard logical reasoning patterns that every logic textbook covers.
+#
+# Uses product aggregator for AND (standard probabilistic interpretation)
+# and probabilistic_sum for OR (inclusion-exclusion principle).
+#
+# See: https://en.wikipedia.org/wiki/Propositional_calculus
+
+(and: product)
+(or: probabilistic_sum)
+
+# Define propositions with assigned probabilities
+(rain: rain is rain)
+(umbrella: umbrella is umbrella)
+(wet: wet is wet)
+
+((rain = true) has probability 0.3)
+((umbrella = true) has probability 0.6)
+((wet = true) has probability 0.4)
+
+# Query individual probabilities
+(? (rain = true))                                    # -> 0.3
+(? (umbrella = true))                                # -> 0.6
+
+# Joint probability: P(Rain AND Umbrella) = P(Rain) * P(Umbrella)
+(? ((rain = true) and (umbrella = true)))             # -> 0.18
+
+# Union probability: P(Rain OR Umbrella) = 1 - (1-0.3)*(1-0.6)
+(? ((rain = true) or (umbrella = true)))              # -> 0.72
+
+# Complement: P(NOT Rain) = 1 - P(Rain)
+(? (not (rain = true)))                               # -> 0.7
+
+# Three-way joint: P(Rain AND Umbrella AND Wet)
+(? (and (rain = true) (umbrella = true) (wet = true)))   # -> 0.072
+
+# Three-way union: P(Rain OR Umbrella OR Wet)
+(? (or (rain = true) (umbrella = true) (wet = true)))    # -> 0.832

@@ -5,7 +5,7 @@
 // - Uses official links-notation crate to parse LiNo text into links
 // - Terms are defined via (x: x is x)
 // - Probabilities are assigned ONLY via: ((<expr>) has probability <p>)
-// - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|product|probabilistic_sum), (or: ...), (not: ...)
+// - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|product|probabilistic_sum), (or: ...), (not: ...), (both: ...), (neither: ...)
 // - Range: (range: 0 1) for [0,1] or (range: -1 1) for [-1,1] (balanced/symmetric)
 // - Valence: (valence: N) to restrict truth values to N discrete levels (N=2 → Boolean, N=3 → ternary, etc.)
 // - Query: (? <expr>)
@@ -352,6 +352,12 @@ impl Env {
         ops.insert("not".to_string(), Op::Not);
         ops.insert("and".to_string(), Op::Agg(Aggregator::Avg));
         ops.insert("or".to_string(), Op::Agg(Aggregator::Max));
+        // Belnap operators: AND-altering operators for four-valued logic
+        // "both" (gullibility): avg — contradiction resolves to midpoint
+        // "neither" (consensus): product — gap resolves to zero (no info propagates)
+        // See: https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
+        ops.insert("both".to_string(), Op::Agg(Aggregator::Avg));
+        ops.insert("neither".to_string(), Op::Agg(Aggregator::Prod));
         ops.insert("=".to_string(), Op::Eq);
         ops.insert("!=".to_string(), Op::Neq);
         ops.insert("+".to_string(), Op::Add);
@@ -394,6 +400,8 @@ impl Env {
         let mid = self.mid();
         self.symbol_prob.insert("unknown".to_string(), mid);
         self.symbol_prob.insert("undefined".to_string(), mid);
+        // Note: "both" and "neither" are operators (not constants) — see Env::new()
+        // See: https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
     }
 
     /// Clamp and optionally quantize a value to the valid range.
@@ -464,7 +472,7 @@ impl Env {
                     self.hi - (vals[0] - self.lo)
                 }
             }
-            Op::Agg(agg) => agg.apply(vals, self.lo),
+            Op::Agg(agg) => dec_round(agg.apply(vals, self.lo)),
             Op::Eq | Op::Neq => self.lo,
             Op::Compose {
                 ref outer,
@@ -543,6 +551,8 @@ impl Env {
         self.ops.insert("not".to_string(), Op::Not);
         self.ops.insert("and".to_string(), Op::Agg(Aggregator::Avg));
         self.ops.insert("or".to_string(), Op::Agg(Aggregator::Max));
+        self.ops.insert("both".to_string(), Op::Agg(Aggregator::Avg));
+        self.ops.insert("neither".to_string(), Op::Agg(Aggregator::Prod));
         self.ops.insert("=".to_string(), Op::Eq);
         self.ops.insert("!=".to_string(), Op::Neq);
         self.ops.insert("+".to_string(), Op::Add);
@@ -807,13 +817,35 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 }
             }
 
-            // Infix AND/OR: ((A) and (B)) / ((A) or (B))
+            // Infix AND/OR/BOTH/NEITHER: ((A) and (B)) / ((A) or (B)) / ((A) both (B)) / ((A) neither (B))
             if children.len() == 3 {
                 if let Node::Leaf(ref op_name) = children[1] {
-                    if op_name == "and" || op_name == "or" {
+                    if op_name == "and" || op_name == "or" || op_name == "both" || op_name == "neither" {
                         let l = eval_node(&children[0], env).as_f64();
                         let r = eval_node(&children[2], env).as_f64();
                         return EvalResult::Value(env.clamp(env.apply_op(op_name, &[l, r])));
+                    }
+                }
+            }
+
+            // Composite natural language operators: (both A and B [and C ...]), (neither A nor B [nor C ...])
+            if children.len() >= 4 && children.len() % 2 == 0 {
+                if let Node::Leaf(ref head) = children[0] {
+                    if head == "both" || head == "neither" {
+                        let sep = if head == "both" { "and" } else { "nor" };
+                        let mut valid = true;
+                        for i in (2..children.len()).step_by(2) {
+                            if let Node::Leaf(ref s) = children[i] {
+                                if s != sep { valid = false; break; }
+                            } else { valid = false; break; }
+                        }
+                        if valid {
+                            let head_str = head.clone();
+                            let vals: Vec<f64> = (1..children.len()).step_by(2)
+                                .map(|i| eval_node(&children[i], env).as_f64())
+                                .collect();
+                            return EvalResult::Value(env.clamp(env.apply_op(&head_str, &vals)));
+                        }
                     }
                 }
             }
@@ -1166,6 +1198,8 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         || head == "!="
         || head == "and"
         || head == "or"
+        || head == "both"
+        || head == "neither"
         || head == "not"
         || head == "is"
         || head == "?:"
@@ -1190,7 +1224,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         }
 
         // Aggregator selection: (and: avg|min|max|product|probabilistic_sum)
-        if (head == "and" || head == "or") && rhs.len() == 1 {
+        if (head == "and" || head == "or" || head == "both" || head == "neither") && rhs.len() == 1 {
             if let Node::Leaf(ref sel) = rhs[0] {
                 if let Some(agg) = Aggregator::from_name(sel) {
                     env.define_op(head, Op::Agg(agg));
@@ -1232,6 +1266,8 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
             || head == "!="
             || head == "and"
             || head == "or"
+            || head == "both"
+            || head == "neither"
             || head == "not"
             || head == "is"
             || head == "?:"

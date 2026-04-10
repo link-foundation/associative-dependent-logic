@@ -6,7 +6,7 @@
 // - Uses official links-notation parser to parse links
 // - Terms are defined via (x: x is x)
 // - Probabilities are assigned ONLY via: ((<expr>) has probability <p>)
-// - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|product|probabilistic_sum), (or: ...), (not: ...)
+// - Redefinable ops: (=: ...), (!=: not =), (and: avg|min|max|product|probabilistic_sum), (or: ...), (not: ...), (both: ...), (neither: ...)
 // - Range: (range: 0 1) for [0,1] or (range: -1 1) for [-1,1] (balanced/symmetric)
 // - Valence: (valence: N) to restrict truth values to N discrete levels (N=2 → Boolean, N=3 → ternary, etc.)
 // - Query: (? <expr>)
@@ -132,6 +132,11 @@ class Env {
       'not': (x)=> this.hi - (x - this.lo),  // negation: mirrors around midpoint
       'and': (...xs)=> xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : this.lo, // avg
       'or' : (...xs)=> xs.length ? Math.max(...xs) : this.lo,
+      // Belnap operators: AND-altering operators for four-valued logic
+      // "both" (gullibility): avg — contradiction resolves to midpoint
+      'both': (...xs)=> xs.length ? decRound(xs.reduce((a,b)=>a+b,0)/xs.length) : this.lo,
+      // "neither" (consensus): product — gap resolves to zero (no info propagates)
+      'neither': (...xs)=> xs.length ? decRound(xs.reduce((a,b)=>a*b,1)) : this.lo,
       '='  : (L,R,ctx)=> {
         // If assigned explicitly, use that (check both prefix and infix key forms)
         const kPrefix = keyOf(['=',L,R]);
@@ -182,6 +187,14 @@ class Env {
     this.symbolProb.set('false', this.lo);
     this.symbolProb.set('unknown', this.mid);
     this.symbolProb.set('undefined', this.mid);
+    // Belnap's four-valued logic operators:
+    // "both" and "neither" are AND-altering operators (not constants).
+    // "both" = conjunction under contradiction (gullibility) — default: avg
+    //   (true both false) = 0.5 (both true and false → contradiction/paradox)
+    // "neither" = conjunction under gap (consensus) — default: product
+    //   (true neither false) = 0 (neither true nor false → gap/no info)
+    // Both are redefinable via (both: min), (neither: max), etc.
+    // See: https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
   }
 
   getOp(name){
@@ -356,12 +369,32 @@ function evalNode(node, env){
     return op(L,R);
   }
 
-  // Infix AND/OR: ((A) and (B))  /  ((A) or (B))
-  if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='and' || node[1]==='or')) {
+  // Infix AND/OR/BOTH/NEITHER: ((A) and (B))  /  ((A) or (B))  /  ((A) both (B))  /  ((A) neither (B))
+  if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='and' || node[1]==='or' || node[1]==='both' || node[1]==='neither')) {
     const op = env.getOp(node[1]);
     const L = evalNode(node[0], env);
     const R = evalNode(node[2], env);
     return env.clamp(op(L,R));
+  }
+
+  // Composite natural language operators: (both A and B [and C ...]), (neither A nor B [nor C ...])
+  if (node.length >= 4 && typeof node[0] === 'string' && (node[0]==='both' || node[0]==='neither')) {
+    const sep = node[0]==='both' ? 'and' : 'nor';
+    // Validate pattern: operator, value, sep, value [, sep, value ...]
+    let valid = node.length % 2 === 0; // both + (n values) + (n-1 seps) = 1 + n + (n-1) = 2n, always even
+    if (valid) {
+      for (let i = 2; i < node.length; i += 2) {
+        if (node[i] !== sep) { valid = false; break; }
+      }
+    }
+    if (valid) {
+      const op = env.getOp(node[0]);
+      const vals = [];
+      for (let i = 1; i < node.length; i += 2) {
+        vals.push(evalNode(node[i], env));
+      }
+      return env.clamp(op(...vals));
+    }
   }
 
   // Infix equality/inequality: (L = R), (L != R)
@@ -530,6 +563,8 @@ function _reinitOps(env) {
   env.ops.set('not', (x) => env.hi - (x - env.lo));
   env.ops.set('and', (...xs) => xs.length ? xs.reduce((a,b)=>a+b,0)/xs.length : env.lo);
   env.ops.set('or', (...xs) => xs.length ? Math.max(...xs) : env.lo);
+  env.ops.set('both', (...xs) => xs.length ? decRound(xs.reduce((a,b)=>a+b,0)/xs.length) : env.lo);
+  env.ops.set('neither', (...xs) => xs.length ? decRound(xs.reduce((a,b)=>a*b,1)) : env.lo);
   env.ops.set('=', (L,R,ctx) => {
     const kPrefix = keyOf(['=',L,R]);
     if (env.assign.has(kPrefix)) return env.assign.get(kPrefix);
@@ -578,7 +613,7 @@ function defineForm(head, rhs, env){
   // Only complex expressions (arrays) are accepted as type annotations in single-element form.
   // Simple name type annotations like (x: Natural) are NOT supported — use (x: Natural x) prefix form instead.
   if (rhs.length === 1 && Array.isArray(rhs[0])) {
-    const isOp = ['=','!=','and','or','not','is','?:'].includes(head) || /[=!]/.test(head);
+    const isOp = ['=','!=','and','or','not','is','?:','both','neither'].includes(head) || /[=!]/.test(head);
     if (!isOp) {
       const typeExpr = rhs[0];
       env.terms.add(head);
@@ -610,7 +645,7 @@ function defineForm(head, rhs, env){
   }
 
   // Operator redefinitions
-  if (['=','!=','and','or','not','is','?:'].includes(head) || /[=!]/.test(head)) {
+  if (['=','!=','and','or','not','is','?:','both','neither'].includes(head) || /[=!]/.test(head)) {
 
     // Composition like: (!=: not =)   or  (=: =) (no-op)
     if (rhs.length === 2 && typeof rhs[0]==='string' && typeof rhs[1]==='string') {
@@ -621,7 +656,7 @@ function defineForm(head, rhs, env){
     }
 
     // Aggregator selection: (and: avg|min|max|product|probabilistic_sum)
-    if ((head==='and' || head==='or') && rhs.length===1 && typeof rhs[0]==='string') {
+    if ((head==='and' || head==='or' || head==='both' || head==='neither') && rhs.length===1 && typeof rhs[0]==='string') {
       const sel = rhs[0];
       const lo = env.lo;
       const agg =
@@ -671,8 +706,12 @@ function defineForm(head, rhs, env){
 // ---------- Runner ----------
 function run(text, options){
   const parser = new Parser();
-  // Strip line comments (# ...) before parsing — LiNo parser doesn't handle them
-  const stripped = text.replace(/^[ \t]*#.*$/gm, '').replace(/\n{3,}/g, '\n\n');
+  // Strip comments (# ...) before parsing — LiNo parser doesn't handle them
+  // First strip full-line comments, then strip inline comments (# after content)
+  const stripped = text
+    .replace(/^[ \t]*#.*$/gm, '')          // full-line comments
+    .replace(/(\)[ \t]+)#.*$/gm, '$1')     // inline comments after closing paren
+    .replace(/\n{3,}/g, '\n\n');
   const links = parser.parse(stripped);
 
   // Convert each top-level LiNo link to an AST by re-tokenizing that link only.

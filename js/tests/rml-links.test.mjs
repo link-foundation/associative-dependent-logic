@@ -258,6 +258,136 @@ describe('run', () => {
 });
 
 // =============================================================================
+// Standard logic examples — testing the example files
+// =============================================================================
+describe('Example: classical-logic.lino', () => {
+  it('should produce correct results for classical Boolean logic', () => {
+    const results = run(`
+(valence: 2)
+(and: min)
+(or: max)
+(p: p is p)
+(q: q is q)
+((p = true) has probability 1)
+((q = true) has probability 0)
+(? (p = true))
+(? (q = true))
+(? (not (p = true)))
+(? (not (q = true)))
+(? ((p = true) and (q = true)))
+(? ((p = true) or (q = true)))
+(? ((p = true) or (not (p = true))))
+(? ((p = true) and (not (p = true))))
+(? (not (not (p = true))))
+`);
+    assert.strictEqual(results.length, 9);
+    assert.strictEqual(results[0], 1);    // p = true
+    assert.strictEqual(results[1], 0);    // q = false
+    assert.strictEqual(results[2], 0);    // not p = false
+    assert.strictEqual(results[3], 1);    // not q = true
+    assert.strictEqual(results[4], 0);    // p AND q = false
+    assert.strictEqual(results[5], 1);    // p OR q = true
+    assert.strictEqual(results[6], 1);    // excluded middle
+    assert.strictEqual(results[7], 0);    // non-contradiction
+    assert.strictEqual(results[8], 1);    // double negation
+  });
+});
+
+describe('Example: propositional-logic.lino', () => {
+  it('should produce correct results for probabilistic propositional logic', () => {
+    const results = run(`
+(and: product)
+(or: probabilistic_sum)
+(rain: rain is rain)
+(umbrella: umbrella is umbrella)
+(wet: wet is wet)
+((rain = true) has probability 0.3)
+((umbrella = true) has probability 0.6)
+((wet = true) has probability 0.4)
+(? (rain = true))
+(? (umbrella = true))
+(? ((rain = true) and (umbrella = true)))
+(? ((rain = true) or (umbrella = true)))
+(? (not (rain = true)))
+(? (and (rain = true) (umbrella = true) (wet = true)))
+(? (or (rain = true) (umbrella = true) (wet = true)))
+`);
+    assert.strictEqual(results.length, 7);
+    approx(results[0], 0.3);
+    approx(results[1], 0.6);
+    approx(results[2], 0.18);
+    approx(results[3], 0.72);
+    approx(results[4], 0.7);
+    approx(results[5], 0.072);
+    approx(results[6], 0.832);
+  });
+});
+
+describe('Example: fuzzy-logic.lino', () => {
+  it('should produce correct results for fuzzy logic (Zadeh)', () => {
+    const results = run(`
+(and: min)
+(or: max)
+(a: a is a)
+(b: b is b)
+(c: c is c)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.3)
+((c = tall) has probability 0.6)
+(? (a = tall))
+(? (b = tall))
+(? ((a = tall) and (b = tall)))
+(? ((a = tall) or (b = tall)))
+(? (not (a = tall)))
+(? ((a = tall) and ((b = tall) or (c = tall))))
+`);
+    assert.strictEqual(results.length, 6);
+    approx(results[0], 0.8);
+    approx(results[1], 0.3);
+    approx(results[2], 0.3);   // min(0.8, 0.3)
+    approx(results[3], 0.8);   // max(0.8, 0.3)
+    approx(results[4], 0.2);   // 1 - 0.8
+    approx(results[5], 0.6);   // min(0.8, max(0.3, 0.6))
+  });
+});
+
+describe('Example: belnap-four-valued.lino', () => {
+  it('should produce correct results for Belnap four-valued logic', () => {
+    const results = run(`
+(and: min)
+(or: max)
+(? true)
+(? false)
+(? (not true))
+(? (not false))
+(s: s is s)
+((s = false) has probability 0.5)
+(? (s = false))
+(? (not (s = false)))
+(? (true both false))
+(? (true neither false))
+(? (true both true))
+(? (false both false))
+(? (true neither true))
+(? (false neither false))
+`);
+    assert.strictEqual(results.length, 12);
+    assert.strictEqual(results[0], 1);      // true
+    assert.strictEqual(results[1], 0);      // false
+    assert.strictEqual(results[2], 0);      // not true
+    assert.strictEqual(results[3], 1);      // not false
+    assert.strictEqual(results[4], 0.5);    // liar paradox
+    assert.strictEqual(results[5], 0.5);    // not liar paradox
+    assert.strictEqual(results[6], 0.5);    // true both false = 0.5 (contradiction)
+    assert.strictEqual(results[7], 0);      // true neither false = 0 (gap)
+    assert.strictEqual(results[8], 1);      // true both true = 1
+    assert.strictEqual(results[9], 0);      // false both false = 0
+    assert.strictEqual(results[10], 1);     // true neither true = 1
+    assert.strictEqual(results[11], 0);     // false neither false = 0
+  });
+});
+
+// =============================================================================
 // Quantization helper
 // See: https://en.wikipedia.org/wiki/Many-valued_logic
 // =============================================================================
@@ -1178,6 +1308,182 @@ describe('Truth constants: Env API', () => {
 `);
     assert.strictEqual(results[0], 1);
     assert.strictEqual(results[1], 0);
+  });
+});
+
+// =============================================================================
+// Belnap's four-valued logic operators: both, neither
+// https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
+// =============================================================================
+describe('Operators: both and neither (Belnap four-valued)', () => {
+  it('both should compute avg of operands (contradiction)', () => {
+    const results = run('(? (true both false))');
+    assert.strictEqual(results[0], 0.5);   // avg(1, 0) = 0.5
+  });
+
+  it('neither should compute product of operands (gap)', () => {
+    const results = run('(? (true neither false))');
+    assert.strictEqual(results[0], 0);     // product(1, 0) = 0
+  });
+
+  it('both should be redefinable via aggregator', () => {
+    const results = run(`
+(both: min)
+(? (true both false))
+`);
+    assert.strictEqual(results[0], 0);     // min(1, 0) = 0
+  });
+
+  it('neither should be redefinable via aggregator', () => {
+    const results = run(`
+(neither: max)
+(? (true neither false))
+`);
+    assert.strictEqual(results[0], 1);     // max(1, 0) = 1
+  });
+
+  it('Env should have both and neither as operators', () => {
+    const env = new Env();
+    assert.strictEqual(typeof env.ops.get('both'), 'function');
+    assert.strictEqual(typeof env.ops.get('neither'), 'function');
+  });
+
+  it('both with same values should return that value', () => {
+    const results = run(`
+(? (true both true))
+(? (false both false))
+`);
+    assert.strictEqual(results[0], 1);     // avg(1, 1) = 1
+    assert.strictEqual(results[1], 0);     // avg(0, 0) = 0
+  });
+
+  it('neither with same values should return that value', () => {
+    const results = run(`
+(? (true neither true))
+(? (false neither false))
+`);
+    assert.strictEqual(results[0], 1);     // product(1, 1) = 1
+    assert.strictEqual(results[1], 0);     // product(0, 0) = 0
+  });
+
+  it('both with fuzzy values', () => {
+    const results = run(`
+(a: a is a)
+(b: b is b)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.4)
+(? ((a = tall) both (b = tall)))
+`);
+    assert.strictEqual(results[0], 0.6);   // avg(0.8, 0.4) = 0.6
+  });
+
+  it('neither with fuzzy values', () => {
+    const results = run(`
+(a: a is a)
+(b: b is b)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.5)
+(? ((a = tall) neither (b = tall)))
+`);
+    assert.strictEqual(results[0], 0.4);   // product(0.8, 0.5) = 0.4
+  });
+
+  it('both should work in prefix form', () => {
+    const results = run('(? (both true false))');
+    assert.strictEqual(results[0], 0.5);   // avg(1, 0) = 0.5
+  });
+
+  it('neither should work in prefix form', () => {
+    const results = run('(? (neither true false))');
+    assert.strictEqual(results[0], 0);     // product(1, 0) = 0
+  });
+
+  it('both should work in composite natural language form: (both A and B)', () => {
+    const results = run(`
+(? (both true and false))
+(? (both true and true))
+(? (both false and false))
+`);
+    assert.strictEqual(results[0], 0.5);   // avg(1, 0) = 0.5
+    assert.strictEqual(results[1], 1);     // avg(1, 1) = 1
+    assert.strictEqual(results[2], 0);     // avg(0, 0) = 0
+  });
+
+  it('neither should work in composite natural language form: (neither A nor B)', () => {
+    const results = run(`
+(? (neither true nor false))
+(? (neither true nor true))
+(? (neither false nor false))
+`);
+    assert.strictEqual(results[0], 0);     // product(1, 0) = 0
+    assert.strictEqual(results[1], 1);     // product(1, 1) = 1
+    assert.strictEqual(results[2], 0);     // product(0, 0) = 0
+  });
+
+  it('composite both should work with variadic form: (both A and B and C)', () => {
+    const results = run('(? (both true and true and false))');
+    assert.ok(Math.abs(results[0] - 0.666666666667) < 0.0001); // avg(1, 1, 0)
+  });
+
+  it('composite neither should work with variadic form: (neither A nor B nor C)', () => {
+    const results = run('(? (neither true nor true nor false))');
+    assert.strictEqual(results[0], 0);     // product(1, 1, 0) = 0
+  });
+
+  it('composite both should be redefinable', () => {
+    const results = run(`
+(both: min)
+(? (both true and false))
+`);
+    assert.strictEqual(results[0], 0);     // min(1, 0) = 0
+  });
+
+  it('composite neither should be redefinable', () => {
+    const results = run(`
+(neither: max)
+(? (neither true nor false))
+`);
+    assert.strictEqual(results[0], 1);     // max(1, 0) = 1
+  });
+
+  it('both should update behavior when range changes', () => {
+    const results = run(`
+(? (true both false))
+(range: -1 1)
+(? (true both false))
+`);
+    assert.strictEqual(results[0], 0.5);   // avg(1, 0) = 0.5 in [0,1]
+    assert.strictEqual(results[1], 0);     // avg(1, -1) = 0 in [-1,1] (clamped to range)
+  });
+
+  it('issue scenario: both (a=a) and (a!=a) gives 0.5', () => {
+    const results = run(`
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? (both (a = a) and (a != a)))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('issue scenario: neither (a=a) nor (a!=a) gives 0', () => {
+    const results = run(`
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? (neither (a = a) nor (a != a)))
+`);
+    assert.strictEqual(results[0], 0);
+  });
+
+  it('issue scenario: infix backward compat (a=a) both (a!=a) gives 0.5', () => {
+    const results = run(`
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? ((a = a) both (a != a)))
+`);
+    assert.strictEqual(results[0], 0.5);
   });
 });
 
