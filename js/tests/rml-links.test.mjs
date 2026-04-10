@@ -358,36 +358,32 @@ describe('Example: belnap-four-valued.lino', () => {
 (or: max)
 (? true)
 (? false)
-(? both)
-(? neither)
 (? (not true))
 (? (not false))
-(? (not both))
-(? (not neither))
 (s: s is s)
 ((s = false) has probability 0.5)
 (? (s = false))
 (? (not (s = false)))
-(? (true and both))
-(? (false or both))
-(? (true or both))
-(? (false and both))
+(? (true both false))
+(? (true neither false))
+(? (true both true))
+(? (false both false))
+(? (true neither true))
+(? (false neither false))
 `);
-    assert.strictEqual(results.length, 14);
+    assert.strictEqual(results.length, 12);
     assert.strictEqual(results[0], 1);      // true
     assert.strictEqual(results[1], 0);      // false
-    assert.strictEqual(results[2], 0.5);    // both
-    assert.strictEqual(results[3], 0.5);    // neither
-    assert.strictEqual(results[4], 0);      // not true
-    assert.strictEqual(results[5], 1);      // not false
-    assert.strictEqual(results[6], 0.5);    // not both = both
-    assert.strictEqual(results[7], 0.5);    // not neither = neither
-    assert.strictEqual(results[8], 0.5);    // liar paradox
-    assert.strictEqual(results[9], 0.5);    // not liar paradox
-    assert.strictEqual(results[10], 0.5);   // true AND both
-    assert.strictEqual(results[11], 0.5);   // false OR both
-    assert.strictEqual(results[12], 1);     // true OR both
-    assert.strictEqual(results[13], 0);     // false AND both
+    assert.strictEqual(results[2], 0);      // not true
+    assert.strictEqual(results[3], 1);      // not false
+    assert.strictEqual(results[4], 0.5);    // liar paradox
+    assert.strictEqual(results[5], 0.5);    // not liar paradox
+    assert.strictEqual(results[6], 0.5);    // true both false = 0.5 (contradiction)
+    assert.strictEqual(results[7], 0);      // true neither false = 0 (gap)
+    assert.strictEqual(results[8], 1);      // true both true = 1
+    assert.strictEqual(results[9], 0);      // false both false = 0
+    assert.strictEqual(results[10], 1);     // true neither true = 1
+    assert.strictEqual(results[11], 0);     // false neither false = 0
   });
 });
 
@@ -1316,92 +1312,120 @@ describe('Truth constants: Env API', () => {
 });
 
 // =============================================================================
-// Belnap's four-valued logic constants: both, neither
+// Belnap's four-valued logic operators: both, neither
 // https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
 // =============================================================================
-describe('Truth constants: both and neither (Belnap four-valued)', () => {
-  it('both should default to 0.5 (mid of [0,1] range)', () => {
-    const results = run('(? both)');
-    assert.strictEqual(results[0], 0.5);
+describe('Operators: both and neither (Belnap four-valued)', () => {
+  it('both should compute avg of operands (contradiction)', () => {
+    const results = run('(? (true both false))');
+    assert.strictEqual(results[0], 0.5);   // avg(1, 0) = 0.5
   });
 
-  it('neither should default to 0.5 (mid of [0,1] range)', () => {
-    const results = run('(? neither)');
-    assert.strictEqual(results[0], 0.5);
+  it('neither should compute product of operands (gap)', () => {
+    const results = run('(? (true neither false))');
+    assert.strictEqual(results[0], 0);     // product(1, 0) = 0
   });
 
-  it('both should default to 0 (mid of [-1,1] range)', () => {
-    const results = run('(range: -1 1)\n(? both)', { lo: -1, hi: 1 });
-    assert.strictEqual(results[0], 0);
-  });
-
-  it('neither should default to 0 (mid of [-1,1] range)', () => {
-    const results = run('(range: -1 1)\n(? neither)', { lo: -1, hi: 1 });
-    assert.strictEqual(results[0], 0);
-  });
-
-  it('both and neither should be redefinable', () => {
+  it('both should be redefinable via aggregator', () => {
     const results = run(`
-(both: 0.7)
-(neither: 0.3)
-(? both)
-(? neither)
+(both: min)
+(? (true both false))
 `);
-    assert.strictEqual(results[0], 0.7);
-    assert.strictEqual(results[1], 0.3);
+    assert.strictEqual(results[0], 0);     // min(1, 0) = 0
   });
 
-  it('Env should have both and neither initialized', () => {
+  it('neither should be redefinable via aggregator', () => {
+    const results = run(`
+(neither: max)
+(? (true neither false))
+`);
+    assert.strictEqual(results[0], 1);     // max(1, 0) = 1
+  });
+
+  it('Env should have both and neither as operators', () => {
     const env = new Env();
-    assert.strictEqual(env.getSymbolProb('both'), 0.5);
-    assert.strictEqual(env.getSymbolProb('neither'), 0.5);
+    assert.strictEqual(typeof env.ops.get('both'), 'function');
+    assert.strictEqual(typeof env.ops.get('neither'), 'function');
   });
 
-  it('Env with [-1,1] range should have correct both and neither', () => {
-    const env = new Env({ lo: -1, hi: 1 });
-    assert.strictEqual(env.getSymbolProb('both'), 0);
-    assert.strictEqual(env.getSymbolProb('neither'), 0);
-  });
-
-  it('both should work with 4-valued quantization', () => {
+  it('both with same values should return that value', () => {
     const results = run(`
-(valence: 4)
-(? both)
+(? (true both true))
+(? (false both false))
 `);
-    approx(results[0], 2/3);  // 0.5 quantized to nearest level in 4-valued: 2/3
+    assert.strictEqual(results[0], 1);     // avg(1, 1) = 1
+    assert.strictEqual(results[1], 0);     // avg(0, 0) = 0
   });
 
-  it('both should work in expressions', () => {
+  it('neither with same values should return that value', () => {
     const results = run(`
-(and: min)
-(? (true and both))
-(? (false or both))
+(? (true neither true))
+(? (false neither false))
 `);
-    assert.strictEqual(results[0], 0.5);   // min(1, 0.5)
-    assert.strictEqual(results[1], 0.5);   // max(0, 0.5)
+    assert.strictEqual(results[0], 1);     // product(1, 1) = 1
+    assert.strictEqual(results[1], 0);     // product(0, 0) = 0
   });
 
-  it('not both = both, not neither = neither (fixed points)', () => {
+  it('both with fuzzy values', () => {
     const results = run(`
-(? (not both))
-(? (not neither))
+(a: a is a)
+(b: b is b)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.4)
+(? ((a = tall) both (b = tall)))
 `);
-    assert.strictEqual(results[0], 0.5);   // not(0.5) = 0.5
-    assert.strictEqual(results[1], 0.5);   // not(0.5) = 0.5
+    assert.strictEqual(results[0], 0.6);   // avg(0.8, 0.4) = 0.6
   });
 
-  it('both and neither should update when range changes', () => {
+  it('neither with fuzzy values', () => {
     const results = run(`
-(? both)
-(? neither)
+(a: a is a)
+(b: b is b)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.5)
+(? ((a = tall) neither (b = tall)))
+`);
+    assert.strictEqual(results[0], 0.4);   // product(0.8, 0.5) = 0.4
+  });
+
+  it('both should work in prefix form', () => {
+    const results = run('(? (both true false))');
+    assert.strictEqual(results[0], 0.5);   // avg(1, 0) = 0.5
+  });
+
+  it('neither should work in prefix form', () => {
+    const results = run('(? (neither true false))');
+    assert.strictEqual(results[0], 0);     // product(1, 0) = 0
+  });
+
+  it('both should update behavior when range changes', () => {
+    const results = run(`
+(? (true both false))
 (range: -1 1)
-(? both)
-(? neither)
+(? (true both false))
 `);
-    assert.strictEqual(results[0], 0.5);   // both in [0,1]
-    assert.strictEqual(results[1], 0.5);   // neither in [0,1]
-    assert.strictEqual(results[2], 0);     // both in [-1,1]
-    assert.strictEqual(results[3], 0);     // neither in [-1,1]
+    assert.strictEqual(results[0], 0.5);   // avg(1, 0) = 0.5 in [0,1]
+    assert.strictEqual(results[1], 0);     // avg(1, -1) = 0 in [-1,1] (clamped to range)
+  });
+
+  it('issue scenario: (a=a) both (a!=a) gives 0.5', () => {
+    const results = run(`
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? ((a = a) both (a != a)))
+`);
+    assert.strictEqual(results[0], 0.5);
+  });
+
+  it('issue scenario: (a=a) neither (a!=a) gives 0', () => {
+    const results = run(`
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? ((a = a) neither (a != a)))
+`);
+    assert.strictEqual(results[0], 0);
   });
 });
 

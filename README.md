@@ -24,7 +24,8 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 - Redefine logical operators with different semantics
 - Configure truth value ranges: `[0, 1]` or `[-1, 1]` (balanced/symmetric)
 - Configure logic valence: 2-valued ([Boolean](https://en.wikipedia.org/wiki/Boolean_algebra)), 3-valued ([ternary/Kleene](https://en.wikipedia.org/wiki/Three-valued_logic)), N-valued, or continuous
-- Use and redefine truth constants: `true`, `false`, `unknown`, `undefined`, `both`, `neither`
+- Use and redefine truth constants: `true`, `false`, `unknown`, `undefined`
+- Use and redefine Belnap operators: `both` (contradiction/avg) and `neither` (gap/product)
 - Resolve paradoxical statements (e.g. the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox))
 - Perform decimal-precision arithmetic (`+`, `-`, `*`, `/`) — `0.1 + 0.2 = 0.3`, not `0.30000000000000004`
 - Query the truth value of complex expressions
@@ -135,7 +136,7 @@ Sets the number of discrete truth values. Default is `0` (continuous, no quantiz
 
 ### Truth Constants
 
-The symbols `true`, `false`, `unknown`, `undefined`, `both`, and `neither` are predefined with values based on the current range:
+The symbols `true`, `false`, `unknown`, and `undefined` are predefined with values based on the current range:
 
 | Constant | Default in `[0, 1]` | Default in `[-1, 1]` | Definition | Interpretation |
 |----------|---------------------|----------------------|------------|----------------|
@@ -143,10 +144,6 @@ The symbols `true`, `false`, `unknown`, `undefined`, `both`, and `neither` are p
 | `false`  | `0`                 | `-1`                 | `min(range)` | Definitely false |
 | `unknown` | `0.5`              | `0`                  | `mid(range)` | Truth value not known |
 | `undefined` | `0.5`            | `0`                  | `mid(range)` | Not yet defined |
-| `both`   | `0.5`               | `0`                  | `mid(range)` | Both true and false (contradiction) |
-| `neither` | `0.5`              | `0`                  | `mid(range)` | Neither true nor false (gap) |
-
-The constants `both` and `neither` come from [Belnap's four-valued logic](https://en.wikipedia.org/wiki/Four-valued_logic#Belnap), where contradictions and gaps are first-class truth values. In RML, they map to the midpoint of the range — the same numeric value as `unknown`, but with distinct semantic meaning. This allows paradoxes like the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox) to resolve naturally to 0.5.
 
 These constants can be used directly in expressions:
 
@@ -154,10 +151,7 @@ These constants can be used directly in expressions:
 (? true)              # -> 1 in [0,1], 1 in [-1,1]
 (? false)             # -> 0 in [0,1], -1 in [-1,1]
 (? unknown)           # -> 0.5 in [0,1], 0 in [-1,1]
-(? both)              # -> 0.5 in [0,1], 0 in [-1,1]
-(? neither)           # -> 0.5 in [0,1], 0 in [-1,1]
 (? (not true))        # -> 0 in [0,1], -1 in [-1,1]
-(? (not both))        # -> 0.5 (fixed point of negation)
 (? (true and false))  # -> 0.5 (avg), 0 (avg in [-1,1])
 ```
 
@@ -166,10 +160,46 @@ All truth constants can be **redefined** to custom values:
 ```lino
 (true: 0.8)           # Redefine true to 0.8
 (false: 0.2)          # Redefine false to 0.2
-(both: 0.7)           # Redefine both to 0.7
 (? true)              # -> 0.8
 (? false)             # -> 0.2
-(? both)              # -> 0.7
+```
+
+### Belnap Operators: `both` and `neither`
+
+The operators `both` and `neither` come from [Belnap's four-valued logic](https://en.wikipedia.org/wiki/Four-valued_logic#Belnap), where contradictions and gaps are first-class concepts. Unlike truth constants, these are **operators** that alter the AND operation:
+
+| Operator | Default Aggregator | Example | Result | Interpretation |
+|----------|-------------------|---------|--------|----------------|
+| `both` | `avg` | `(true both false)` | `0.5` | Both true and false (contradiction) |
+| `neither` | `product` | `(true neither false)` | `0` | Neither true nor false (gap) |
+
+```lino
+# Contradiction: both true and false
+(? (true both false))     # -> 0.5 (avg of 1 and 0)
+(? (true both true))      # -> 1   (both agree: true)
+
+# Gap: neither true nor false
+(? (true neither false))  # -> 0   (product of 1 and 0)
+(? (true neither true))   # -> 1   (both agree: true)
+```
+
+Both operators are **redefinable** via aggregator selection, just like `and` and `or`:
+
+```lino
+(both: min)               # Redefine both to use min
+(? (true both false))     # -> 0
+(neither: max)            # Redefine neither to use max
+(? (true neither false))  # -> 1
+```
+
+This allows paradoxes like the [liar paradox](https://en.wikipedia.org/wiki/Liar_paradox) to be expressed naturally:
+
+```lino
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? ((a = a) both (a != a)))     # -> 0.5 (contradiction resolves to midpoint)
+(? ((a = a) neither (a != a)))  # -> 0   (gap: no info propagates)
 ```
 
 When the range changes (via `(range: ...)`), all truth constants are automatically re-initialized to their defaults for the new range.
@@ -436,22 +466,20 @@ In [Kleene logic](https://en.wikipedia.org/wiki/Three-valued_logic#Kleene_and_Pr
 
 ### Belnap's Four-Valued Logic
 
-See `examples/belnap-four-valued.lino` — extends classical logic with `both` (contradiction) and `neither` (gap) truth values. This is the standard framework for reasoning about paradoxes:
+See `examples/belnap-four-valued.lino` — extends classical logic with `both` (contradiction) and `neither` (gap) **operators** that alter the AND operation. This is the standard framework for reasoning about paradoxes:
 
 ```lino
 (and: min)
 (or: max)
 
-(? true)          # -> 1
-(? false)         # -> 0
-(? both)          # -> 0.5  (both true and false — contradiction)
-(? neither)       # -> 0.5  (neither true nor false — gap)
-(? (not both))    # -> 0.5  (fixed point of negation!)
+(? (true both false))     # -> 0.5  (contradiction: avg of 1 and 0)
+(? (true neither false))  # -> 0    (gap: product of 1 and 0)
+(? (true both true))      # -> 1    (agree: avg of 1 and 1)
 
-# The liar paradox resolves naturally to "both"
+# The liar paradox resolves naturally via "both"
 (s: s is s)
 ((s = false) has probability 0.5)
-(? (s = false))   # -> 0.5
+(? (s = false))           # -> 0.5
 ```
 
 See: [Belnap's four-valued logic](https://en.wikipedia.org/wiki/Four-valued_logic#Belnap)
@@ -615,8 +643,8 @@ The test suites cover:
 - Evaluation logic and operator aggregators
 - Many-valued logics: unary, binary (Boolean), ternary (Kleene), quaternary, quinary, higher N-valued, and continuous (fuzzy)
 - Both `[0, 1]` and `[-1, 1]` ranges
-- Truth constants (`true`, `false`, `unknown`, `undefined`, `both`, `neither`): defaults, redefinition, range changes, use in expressions, quantization
-- Belnap's four-valued logic: `both`/`neither` constants, fixed points, Belnap semantics
+- Truth constants (`true`, `false`, `unknown`, `undefined`): defaults, redefinition, range changes, use in expressions, quantization
+- Belnap operators (`both`, `neither`): default aggregators, redefinition, prefix/infix forms, fuzzy values, range changes
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, type queries, prefix type notation

@@ -1,18 +1,20 @@
 # Belnap's Four-Valued Logic
 #
 # Belnap's logic extends classical logic with two extra truth values:
-#   - true (1)     — known to be true
-#   - false (0)    — known to be false
-#   - both (0.5)   — both true and false (contradiction/paradox)
-#   - neither (0.5) — neither true nor false (unknown/gap)
+#   - true  = known to be true (1)
+#   - false = known to be false (0)
+#   - both  = both true and false, contradiction/paradox (0.5)
+#   - neither = neither true nor false, unknown/gap (0)
+#
+# In RML, "both" and "neither" are operators that alter the AND operation:
+#   - "A both B" uses avg semantics: contradiction resolves to the midpoint
+#   - "A neither B" uses product semantics: gap/no info propagates as zero
+# Both operators are redefinable via aggregator selection.
 #
 # This is particularly useful for:
 #   - Databases with contradictory information
 #   - Reasoning under incomplete knowledge
-#   - Resolving paradoxes (the liar paradox maps to "both")
-#
-# In RML, "both" and "neither" are predefined truth constants
-# that default to the midpoint of the range (0.5 in [0,1]).
+#   - Resolving paradoxes
 #
 # See: https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
 #      https://en.wikipedia.org/wiki/Relevance_logic
@@ -20,33 +22,29 @@
 (and: min)
 (or: max)
 
-# Query the four truth values
-(? true)                      # -> 1
-(? false)                     # -> 0
-(? both)                      # -> 0.5
-(? neither)                   # -> 0.5
+# The four truth values via operators
+(? true)                            # -> 1
+(? false)                           # -> 0
+(? (true both false))               # -> 0.5 contradiction
+(? (true neither false))            # -> 0 gap
 
-# NOT of each value
-(? (not true))                # -> 0     (not true = false)
-(? (not false))               # -> 1     (not false = true)
-(? (not both))                # -> 0.5   (not both = both — fixed point!)
-(? (not neither))             # -> 0.5   (not neither = neither — fixed point!)
+# NOT of standard values
+(? (not true))                      # -> 0 not true = false
+(? (not false))                     # -> 1 not false = true
 
-# The liar paradox resolves to "both" (0.5)
-# "This statement is false" — it is both true and false
+# The liar paradox resolves via "both"
+# "This statement is false" is both true and false
 (s: s is s)
 ((s = false) has probability 0.5)
-(? (s = false))               # -> 0.5 (the paradox lives at the midpoint)
-(? (not (s = false)))          # -> 0.5 (negation of paradox = same value)
+(? (s = false))                     # -> 0.5 paradox lives at midpoint
+(? (not (s = false)))               # -> 0.5 negation of paradox = same
 
-# Conjunction and disjunction with "both"
-(? (true and both))           # -> 0.5 (true AND contradictory = contradictory)
-(? (false or both))           # -> 0.5 (false OR contradictory = contradictory)
-(? (true or both))            # -> 1   (true OR anything = true)
-(? (false and both))          # -> 0   (false AND anything = false)
+# "both" operator: avg semantics
+(? (true both true))                # -> 1 both agree true
+(? (false both false))              # -> 0 both agree false
+(? (true both false))               # -> 0.5 disagree: contradiction
 
-# === Redefinability ===
-# All truth constants are redefinable — you can customize the system
-# For example, in a custom system where "both" maps to 0.7:
-# (both: 0.7)
-# (? both)    # -> 0.7
+# "neither" operator: product semantics
+(? (true neither true))             # -> 1 both agree true
+(? (false neither false))           # -> 0 both agree false
+(? (true neither false))            # -> 0 disagree: gap, no info

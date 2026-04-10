@@ -1545,123 +1545,160 @@ fn truth_const_liar_paradox_balanced() {
     assert_eq!(results[0], 0.0);
 }
 
-// ===== Belnap's four-valued logic constants: both, neither =====
+// ===== Belnap's four-valued logic operators: both, neither =====
 // https://en.wikipedia.org/wiki/Four-valued_logic#Belnap
 
 #[test]
-fn truth_const_both_default_01() {
-    let results = run("(? both)", None);
-    assert_eq!(results[0], 0.5);
+fn operator_both_default_avg() {
+    let results = run("(? (true both false))", None);
+    assert_eq!(results[0], 0.5); // avg(1, 0) = 0.5
 }
 
 #[test]
-fn truth_const_neither_default_01() {
-    let results = run("(? neither)", None);
-    assert_eq!(results[0], 0.5);
+fn operator_neither_default_product() {
+    let results = run("(? (true neither false))", None);
+    assert_eq!(results[0], 0.0); // product(1, 0) = 0
 }
 
 #[test]
-fn truth_const_both_default_balanced() {
-    let results = run(
-        "(range: -1 1)\n(? both)",
-        Some(EnvOptions {
-            lo: -1.0,
-            hi: 1.0,
-            valence: 0,
-        }),
-    );
-    assert_eq!(results[0], 0.0);
-}
-
-#[test]
-fn truth_const_neither_default_balanced() {
-    let results = run(
-        "(range: -1 1)\n(? neither)",
-        Some(EnvOptions {
-            lo: -1.0,
-            hi: 1.0,
-            valence: 0,
-        }),
-    );
-    assert_eq!(results[0], 0.0);
-}
-
-#[test]
-fn truth_const_both_redefine() {
+fn operator_both_redefine_aggregator() {
     let results = run(
         r#"
-(both: 0.7)
-(neither: 0.3)
-(? both)
-(? neither)
+(both: min)
+(? (true both false))
 "#,
         None,
     );
-    assert_eq!(results[0], 0.7);
-    assert_eq!(results[1], 0.3);
+    assert_eq!(results[0], 0.0); // min(1, 0) = 0
 }
 
 #[test]
-fn truth_const_both_env_api_01() {
+fn operator_neither_redefine_aggregator() {
+    let results = run(
+        r#"
+(neither: max)
+(? (true neither false))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 1.0); // max(1, 0) = 1
+}
+
+#[test]
+fn operator_both_env_has_op() {
     let env = Env::new(None);
-    assert_eq!(env.get_symbol_prob("both"), 0.5);
-    assert_eq!(env.get_symbol_prob("neither"), 0.5);
+    assert!(env.ops.contains_key("both"));
+    assert!(env.ops.contains_key("neither"));
 }
 
 #[test]
-fn truth_const_both_env_api_balanced() {
-    let env = Env::new(Some(EnvOptions {
-        lo: -1.0,
-        hi: 1.0,
-        valence: 0,
-    }));
-    assert_eq!(env.get_symbol_prob("both"), 0.0);
-    assert_eq!(env.get_symbol_prob("neither"), 0.0);
-}
-
-#[test]
-fn truth_const_both_in_expressions() {
+fn operator_both_same_values() {
     let results = run(
         r#"
-(and: min)
-(? (true and both))
-(? (false or both))
+(? (true both true))
+(? (false both false))
 "#,
         None,
     );
-    assert_eq!(results[0], 0.5); // min(1, 0.5)
-    assert_eq!(results[1], 0.5); // max(0, 0.5)
+    assert_eq!(results[0], 1.0); // avg(1, 1) = 1
+    assert_eq!(results[1], 0.0); // avg(0, 0) = 0
 }
 
 #[test]
-fn truth_const_not_both_fixed_point() {
+fn operator_neither_same_values() {
     let results = run(
         r#"
-(? (not both))
-(? (not neither))
+(? (true neither true))
+(? (false neither false))
 "#,
         None,
     );
-    assert_eq!(results[0], 0.5); // not(0.5) = 0.5
-    assert_eq!(results[1], 0.5); // not(0.5) = 0.5
+    assert_eq!(results[0], 1.0); // product(1, 1) = 1
+    assert_eq!(results[1], 0.0); // product(0, 0) = 0
 }
 
 #[test]
-fn truth_const_both_range_change() {
+fn operator_both_fuzzy_values() {
     let results = run(
         r#"
-(? both)
-(? neither)
+(a: a is a)
+(b: b is b)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.4)
+(? ((a = tall) both (b = tall)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.6); // avg(0.8, 0.4) = 0.6
+}
+
+#[test]
+fn operator_neither_fuzzy_values() {
+    let results = run(
+        r#"
+(a: a is a)
+(b: b is b)
+((a = tall) has probability 0.8)
+((b = tall) has probability 0.5)
+(? ((a = tall) neither (b = tall)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.4); // product(0.8, 0.5) = 0.4
+}
+
+#[test]
+fn operator_both_prefix_form() {
+    let results = run("(? (both true false))", None);
+    assert_eq!(results[0], 0.5); // avg(1, 0) = 0.5
+}
+
+#[test]
+fn operator_neither_prefix_form() {
+    let results = run("(? (neither true false))", None);
+    assert_eq!(results[0], 0.0); // product(1, 0) = 0
+}
+
+#[test]
+fn operator_both_range_change() {
+    let results = run(
+        r#"
+(? (true both false))
 (range: -1 1)
-(? both)
-(? neither)
+(? (true both false))
 "#,
         None,
     );
-    assert_eq!(results[0], 0.5); // both in [0,1]
-    assert_eq!(results[1], 0.5); // neither in [0,1]
-    assert_eq!(results[2], 0.0); // both in [-1,1]
-    assert_eq!(results[3], 0.0); // neither in [-1,1]
+    assert_eq!(results[0], 0.5); // avg(1, 0) = 0.5 in [0,1]
+    assert_eq!(results[1], 0.0); // avg(1, -1) = 0 in [-1,1]
+}
+
+#[test]
+fn operator_both_issue_scenario() {
+    let results = run(
+        r#"
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? ((a = a) both (a != a)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.5);
+}
+
+#[test]
+fn operator_neither_issue_scenario() {
+    let results = run(
+        r#"
+(a: a is a)
+((a = a) has probability 1)
+((a != a) has probability 0)
+(? ((a = a) neither (a != a)))
+"#,
+        None,
+    );
+    assert_eq!(results[0], 0.0);
 }
 
 // ===== Standard logic examples =====
@@ -1771,38 +1808,34 @@ fn example_belnap_four_valued() {
 (or: max)
 (? true)
 (? false)
-(? both)
-(? neither)
 (? (not true))
 (? (not false))
-(? (not both))
-(? (not neither))
 (s: s is s)
 ((s = false) has probability 0.5)
 (? (s = false))
 (? (not (s = false)))
-(? (true and both))
-(? (false or both))
-(? (true or both))
-(? (false and both))
+(? (true both false))
+(? (true neither false))
+(? (true both true))
+(? (false both false))
+(? (true neither true))
+(? (false neither false))
 "#,
         None,
     );
-    assert_eq!(results.len(), 14);
-    assert_eq!(results[0], 1.0);
-    assert_eq!(results[1], 0.0);
-    assert_eq!(results[2], 0.5);
-    assert_eq!(results[3], 0.5);
-    assert_eq!(results[4], 0.0);
-    assert_eq!(results[5], 1.0);
-    assert_eq!(results[6], 0.5);
-    assert_eq!(results[7], 0.5);
-    assert_eq!(results[8], 0.5);
-    assert_eq!(results[9], 0.5);
-    assert_eq!(results[10], 0.5);
-    assert_eq!(results[11], 0.5);
-    assert_eq!(results[12], 1.0);
-    assert_eq!(results[13], 0.0);
+    assert_eq!(results.len(), 12);
+    assert_eq!(results[0], 1.0);    // true
+    assert_eq!(results[1], 0.0);    // false
+    assert_eq!(results[2], 0.0);    // not true
+    assert_eq!(results[3], 1.0);    // not false
+    assert_eq!(results[4], 0.5);    // liar paradox
+    assert_eq!(results[5], 0.5);    // not liar paradox
+    assert_eq!(results[6], 0.5);    // true both false = 0.5 (contradiction)
+    assert_eq!(results[7], 0.0);    // true neither false = 0 (gap)
+    assert_eq!(results[8], 1.0);    // true both true = 1
+    assert_eq!(results[9], 0.0);    // false both false = 0
+    assert_eq!(results[10], 1.0);   // true neither true = 1
+    assert_eq!(results[11], 0.0);   // false neither false = 0
 }
 
 // ===== Type System: "everything is a link" =====
