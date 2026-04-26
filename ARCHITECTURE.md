@@ -91,6 +91,19 @@ Each AST node is evaluated recursively by `eval_node` / `evalNode`. The evaluati
 
 Only query expressions `(? ...)` produce output. Their evaluated truth values are collected and returned as an array of numbers.
 
+## Public Library API
+
+Both implementations expose the reusable parser, AST, evaluator, quantization, decimal rounding, binding, substitution, and runner helpers as library APIs. The JavaScript module exports camelCase names, while the Rust crate exposes snake_case equivalents where applicable.
+
+For consumers that start from a selected natural-language interpretation rather than a complete `.lino` file, the library also exposes a meta-expression adapter:
+
+| JavaScript | Rust | Purpose |
+|------------|------|---------|
+| `formalizeSelectedInterpretation(request)` | `formalize_selected_interpretation(request)` | Convert a selected interpretation plus explicit dependencies into either an executable RML formalization or a partial result with unknowns. |
+| `evaluateFormalization(formalization)` | `evaluate_formalization(&formalization)` | Deterministically evaluate executable formalizations and preserve partial results for unsupported or underspecified claims. |
+
+The adapter currently supports explicit arithmetic equality and arithmetic value questions, plus direct LiNo/RML expressions. Real-world claims such as `moon orbits the Sun` remain non-computable until a caller provides selected entities, relations, evidence sources, and a formal shape.
+
 ## Environment (`Env`)
 
 The environment holds all mutable state during evaluation:

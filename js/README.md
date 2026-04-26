@@ -45,7 +45,23 @@ npm run demo
 ## API
 
 ```javascript
-import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound } from './src/rml-links.mjs';
+import {
+  run,
+  parseLino,
+  tokenizeOne,
+  parseOne,
+  Env,
+  evalNode,
+  quantize,
+  decRound,
+  keyOf,
+  isNum,
+  parseBinding,
+  parseBindings,
+  substitute,
+  formalizeSelectedInterpretation,
+  evaluateFormalization,
+} from './src/rml-links.mjs';
 
 // Run a complete LiNo knowledge base
 const results = run(linoText);
@@ -60,7 +76,21 @@ const truthValue = evalNode(ast, env);
 
 // Quantize a value to N discrete levels
 const q = quantize(0.4, 3, 0, 1); // -> 0.5 (nearest ternary level)
+
+// Adapter for consumers that already selected an interpretation
+const formalization = formalizeSelectedInterpretation({
+  text: '0.1 + 0.2 = 0.3',
+  interpretation: {
+    kind: 'arithmetic-equality',
+    expression: '0.1 + 0.2 = 0.3',
+  },
+  formalSystem: 'rml-arithmetic',
+});
+const evaluation = evaluateFormalization(formalization);
+// -> { computable: true, result: { kind: 'truth-value', value: 1, deterministic: true }, ... }
 ```
+
+The meta-expression adapter deliberately keeps unsupported real-world claims partial. A selected interpretation such as `moon orbits the Sun` is returned as non-computable with explicit unknowns until a consumer supplies a formal shape and reproducible dependencies.
 
 ## Testing
 

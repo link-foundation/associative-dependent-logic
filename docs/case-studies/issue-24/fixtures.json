@@ -1,0 +1,81 @@
+{
+  "issue": 24,
+  "fixtures": [
+    {
+      "name": "arithmetic equality",
+      "request": {
+        "text": "0.1 + 0.2 = 0.3",
+        "interpretation": {
+          "kind": "arithmetic-equality",
+          "expression": "0.1 + 0.2 = 0.3"
+        },
+        "formalSystem": "rml-arithmetic",
+        "dependencies": []
+      },
+      "expected": {
+        "computable": true,
+        "formalizationLevel": 3,
+        "result": {
+          "kind": "truth-value",
+          "value": 1,
+          "deterministic": true
+        }
+      }
+    },
+    {
+      "name": "arithmetic question",
+      "request": {
+        "text": "What is 0.1 + 0.2?",
+        "interpretation": {
+          "kind": "arithmetic-question",
+          "expression": "0.1 + 0.2"
+        },
+        "formalSystem": "rml-arithmetic",
+        "dependencies": []
+      },
+      "expected": {
+        "computable": true,
+        "formalizationLevel": 3,
+        "result": {
+          "kind": "number",
+          "value": 0.3,
+          "deterministic": true
+        }
+      }
+    },
+    {
+      "name": "unsupported real-world claim",
+      "request": {
+        "text": "moon orbits the Sun",
+        "interpretation": {
+          "kind": "real-world-claim",
+          "summary": "Treat \"moon orbits the Sun\" as a factual claim that needs evidence."
+        },
+        "formalSystem": "rml",
+        "dependencies": [
+          {
+            "id": "wikidata",
+            "status": "missing",
+            "description": "No selected entity and relation ids were provided."
+          }
+        ]
+      },
+      "expected": {
+        "computable": false,
+        "formalizationLevel": 2,
+        "unknowns": [
+          "selected-subject",
+          "selected-relation",
+          "evidence-source",
+          "formal-shape",
+          "dependency:wikidata"
+        ],
+        "result": {
+          "kind": "partial",
+          "value": "unknown",
+          "deterministic": false
+        }
+      }
+    }
+  ]
+}

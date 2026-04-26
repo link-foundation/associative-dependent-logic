@@ -703,30 +703,207 @@ function defineForm(head, rhs, env){
   return 0;
 }
 
-// ---------- Runner ----------
-function run(text, options){
-  const parser = new Parser();
-  // Strip comments (# ...) before parsing — LiNo parser doesn't handle them
-  // First strip full-line comments, then strip inline comments (# after content)
-  const stripped = text
+// ---------- Public LiNo helpers ----------
+function stripLinoComments(text) {
+  return text
     .replace(/^[ \t]*#.*$/gm, '')          // full-line comments
     .replace(/(\)[ \t]+)#.*$/gm, '$1')     // inline comments after closing paren
     .replace(/\n{3,}/g, '\n\n');
-  const links = parser.parse(stripped);
+}
 
-  // Convert each top-level LiNo link to an AST by re-tokenizing that link only.
-  // Filter out comment-only links (starting with #)
-  const forms = links
+function parseLino(text) {
+  const parser = new Parser();
+  return parser.parse(stripLinoComments(text)).map(link => String(link));
+}
+
+function parseLinoForms(text) {
+  return parseLino(text)
     .filter(linkStr => {
       const s = String(linkStr).trim();
       // Skip if it's just a comment link like "(# ...)"
       return !s.match(/^\(#\s/);
     })
     .map(linkStr => {
-      const s = String(linkStr);                // link's own LiNo string
-      const toks = tokenizeOne(s);
+      const toks = tokenizeOne(String(linkStr));
       return parseOne(toks);
     });
+}
+
+// ---------- Meta-expression adapter ----------
+function normalizeInterpretation(interpretation) {
+  if (!interpretation) return {};
+  if (typeof interpretation === 'string') return { kind: interpretation, summary: interpretation };
+  return interpretation;
+}
+
+function normalizeQuestionExpression(text) {
+  return String(text || '')
+    .trim()
+    .replace(/\?+$/g, '')
+    .replace(/^what\s+is\s+/i, '')
+    .trim();
+}
+
+function splitTopLevelEquals(expression) {
+  let depth = 0;
+  const s = String(expression);
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === '=' && depth === 0) {
+      if (s[i - 1] === '!' || s[i + 1] === '=') continue;
+      return [s.slice(0, i).trim(), s.slice(i + 1).trim()];
+    }
+  }
+  return null;
+}
+
+function parseExpressionShape(expression, options = {}) {
+  const trimmed = String(expression || '').trim();
+  if (!trimmed) throw new Error('empty expression');
+  const source = trimmed.startsWith('(') && trimmed.endsWith(')') ? trimmed : `(${trimmed})`;
+  let ast = parseOne(tokenizeOne(source));
+  while (
+    Array.isArray(ast) &&
+    ast.length === 1 &&
+    (options.unwrapSingle || Array.isArray(ast[0]))
+  ) {
+    ast = ast[0];
+  }
+  return ast;
+}
+
+function buildArithmeticFormalization(expression, valueKind) {
+  const eq = valueKind === 'truth-value' ? splitTopLevelEquals(expression) : null;
+  const ast = eq
+    ? [parseExpressionShape(eq[0], { unwrapSingle: true }), '=', parseExpressionShape(eq[1], { unwrapSingle: true })]
+    : parseExpressionShape(expression, { unwrapSingle: true });
+  return {
+    ast,
+    lino: keyOf(ast),
+    valueKind,
+  };
+}
+
+function partialFormalization(request, interpretation, unknowns, level = 2) {
+  const uniqueUnknowns = [...new Set(unknowns)];
+  return {
+    type: 'rml-formalization',
+    sourceText: request?.text || '',
+    interpretation,
+    formalSystem: request?.formalSystem || request?.formal_system || 'rml',
+    dependencies: request?.dependencies || [],
+    computable: false,
+    formalizationLevel: level,
+    unknowns: uniqueUnknowns,
+    valueKind: 'partial',
+    ast: null,
+    lino: null,
+  };
+}
+
+function formalizeSelectedInterpretation(request = {}) {
+  const interpretation = normalizeInterpretation(request.interpretation);
+  const kind = String(interpretation.kind || '').toLowerCase();
+  const formalSystem = request.formalSystem || request.formal_system || 'rml';
+  const dependencies = request.dependencies || [];
+  const rawExpression =
+    interpretation.expression ||
+    interpretation.formalExpression ||
+    interpretation.formal_expression ||
+    interpretation.lino ||
+    normalizeQuestionExpression(request.text);
+
+  const canUseArithmetic =
+    formalSystem === 'rml-arithmetic' ||
+    formalSystem === 'arithmetic' ||
+    kind.startsWith('arithmetic');
+
+  if (canUseArithmetic && rawExpression) {
+    const valueKind = kind.includes('equal') || splitTopLevelEquals(rawExpression) ? 'truth-value' : 'number';
+    try {
+      const formal = buildArithmeticFormalization(rawExpression, valueKind);
+      return {
+        type: 'rml-formalization',
+        sourceText: request.text || '',
+        interpretation,
+        formalSystem,
+        dependencies,
+        computable: true,
+        formalizationLevel: 3,
+        unknowns: [],
+        valueKind: formal.valueKind,
+        ast: formal.ast,
+        lino: formal.lino,
+      };
+    } catch (error) {
+      return partialFormalization(request, interpretation, ['unsupported-arithmetic-shape', error.message], 1);
+    }
+  }
+
+  if ((interpretation.lino || interpretation.formalExpression || interpretation.formal_expression) && rawExpression) {
+    try {
+      const ast = parseExpressionShape(rawExpression);
+      return {
+        type: 'rml-formalization',
+        sourceText: request.text || '',
+        interpretation,
+        formalSystem,
+        dependencies,
+        computable: true,
+        formalizationLevel: 3,
+        unknowns: [],
+        valueKind: Array.isArray(ast) && ast[0] === '?' ? 'query' : 'truth-value',
+        ast,
+        lino: keyOf(ast),
+      };
+    } catch (error) {
+      return partialFormalization(request, interpretation, ['unsupported-lino-shape', error.message], 1);
+    }
+  }
+
+  const dependencyUnknowns = dependencies
+    .filter(dep => dep && ['missing', 'unknown', 'partial'].includes(dep.status))
+    .map(dep => `dependency:${dep.id || 'unknown'}`);
+  return partialFormalization(request, interpretation, [
+    'selected-subject',
+    'selected-relation',
+    'evidence-source',
+    'formal-shape',
+    ...dependencyUnknowns,
+  ]);
+}
+
+function evaluateFormalization(formalization, options = {}) {
+  if (!formalization || !formalization.computable || !formalization.ast) {
+    return {
+      computable: false,
+      formalizationLevel: formalization?.formalizationLevel || 0,
+      unknowns: formalization?.unknowns || ['formalization'],
+      result: { kind: 'partial', value: 'unknown', deterministic: false },
+    };
+  }
+
+  const env = new Env(options.env || options);
+  const evaluated = evalNode(formalization.ast, env);
+  const value = evaluated && evaluated.query ? evaluated.value : evaluated;
+  const kind =
+    formalization.valueKind === 'truth-value' ? 'truth-value' :
+    formalization.valueKind === 'query' && typeof value === 'string' ? 'type' :
+    'number';
+
+  return {
+    computable: true,
+    formalizationLevel: formalization.formalizationLevel,
+    unknowns: [],
+    result: { kind, value, deterministic: true },
+  };
+}
+
+// ---------- Runner ----------
+function run(text, options){
+  const forms = parseLinoForms(text);
 
   const env = new Env(options);
   const outs = [];
@@ -766,4 +943,21 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 }
 
-export { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute, parseBindings };
+export {
+  run,
+  parseLino,
+  tokenizeOne,
+  parseOne,
+  Env,
+  evalNode,
+  quantize,
+  decRound,
+  keyOf,
+  isNum,
+  isStructurallySame,
+  parseBinding,
+  parseBindings,
+  substitute,
+  formalizeSelectedInterpretation,
+  evaluateFormalization,
+};
