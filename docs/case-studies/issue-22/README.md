@@ -6,6 +6,11 @@
 
 Relative Meta-Logic (RML) is currently strongest as a small, executable, probabilistic meta-logic over LiNo links. Its distinctive capabilities are configurable truth ranges, N-valued and continuous truth values, probabilistic and fuzzy operators, paradox-tolerant midpoint semantics, and a uniform link notation that can encode terms, propositions, probabilities, and a prototype dependent type layer.
 
+User-facing standalone comparison tables are available in:
+
+- [Core Concept Comparison](../../CONCEPTS-COMPARISION.md)
+- [Product Feature Comparison](../../FEATURE-COMPARISION.md)
+
 The compared systems cluster into five groups:
 
 1. **LF-family logical frameworks:** Edinburgh LF, Twelf, and HELF focus on representing deductive systems with dependent typed lambda terms. Twelf adds logic programming and metatheorem checking around totality, modes, worlds, termination, and coverage.

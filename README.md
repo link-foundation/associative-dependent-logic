@@ -15,6 +15,11 @@ Both implementations pass the same comprehensive test suites and produce identic
 
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+## Comparisons
+
+- [Core concept comparison](./docs/CONCEPTS-COMPARISION.md) - RML vs Twelf, LF, HELF, Isabelle, Coq/Rocq, Lean, Foundation, AFP, Abella, lambda Prolog, and Pecan by logical/metatheoretic concepts.
+- [Product feature comparison](./docs/FEATURE-COMPARISION.md) - RML vs the same systems by authoring workflow, automation, libraries, tooling, and distribution.
+
 ## Overview
 
 RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minimal probabilistic logic system built on top of [LiNo (Links Notation)](https://github.com/link-foundation/links-notation). It supports [many-valued logics](https://en.wikipedia.org/wiki/Many-valued_logic) from unary (1-valued) through continuous probabilistic ([fuzzy](https://en.wikipedia.org/wiki/Fuzzy_logic)), allowing you to:
