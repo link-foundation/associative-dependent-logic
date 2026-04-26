@@ -1,6 +1,8 @@
 # Issue Plan
 
-This file is the executable artefact of the case study. Each entry below is a planned GitHub issue with title, labels, body template, dependencies, and acceptance criteria. The plan is **not yet filed** — filing is the next, separately reviewable step (see [README.md § Risks and Open Questions](./README.md#risks-and-open-questions)).
+This file is the executable artefact of the case study. Each entry below is a planned GitHub issue with title, labels, body template, dependencies, and acceptance criteria.
+
+**Status: filed.** All 67 planned issues plus the tracking epic have been filed on GitHub with full body, labels, and resolved `Depends on` / `Blocks` cross-references. See the [Filed-issue index](#filed-issue-index) at the bottom of this file for the planned-ID → GitHub-issue-number map. The tracking epic is [#95](https://github.com/link-foundation/relative-meta-logic/issues/95).
 
 ## Index
 
@@ -762,9 +764,89 @@ These items belong in a follow-up plan once phases A–J have stabilised.
 
 ---
 
+## Filed-issue index
+
+The table below maps every planned issue ID to its filed GitHub issue number. All `Depends on` / `Blocks` lines in each filed issue use the GitHub numbers shown here. The tracking epic ([#95](https://github.com/link-foundation/relative-meta-logic/issues/95), `J-EPIC`) consolidates the full task list with checkboxes per phase.
+
+| Plan ID | GitHub | Title |
+|---------|--------|-------|
+| A1 | [#28](https://github.com/link-foundation/relative-meta-logic/issues/28) | Structured diagnostics with source spans |
+| A2 | [#29](https://github.com/link-foundation/relative-meta-logic/issues/29) | Interactive REPL |
+| A3 | [#30](https://github.com/link-foundation/relative-meta-logic/issues/30) | Trace mode for evaluation |
+| A4 | [#31](https://github.com/link-foundation/relative-meta-logic/issues/31) | Document operator-redefinition design rationale |
+| A5 | [#32](https://github.com/link-foundation/relative-meta-logic/issues/32) | English-readability lint for `lib/` and `examples/` |
+| B1 | [#33](https://github.com/link-foundation/relative-meta-logic/issues/33) | File imports with cycle detection |
+| B2 | [#34](https://github.com/link-foundation/relative-meta-logic/issues/34) | Namespaces and qualified references |
+| C1 | [#35](https://github.com/link-foundation/relative-meta-logic/issues/35) | Proof-producing evaluator |
+| C2 | [#36](https://github.com/link-foundation/relative-meta-logic/issues/36) | Independent proof-replay checker |
+| C3 | [#47](https://github.com/link-foundation/relative-meta-logic/issues/47) | Metatheorem checker over encoded systems |
+| C5 | [#48](https://github.com/link-foundation/relative-meta-logic/issues/48) | Soundness statement |
+| D1 | [#37](https://github.com/link-foundation/relative-meta-logic/issues/37) | Promote dependent types and Pi to a documented kernel |
+| D2 | [#39](https://github.com/link-foundation/relative-meta-logic/issues/39) | Beta reduction in the evaluator |
+| D3 | [#40](https://github.com/link-foundation/relative-meta-logic/issues/40) | Definitional equality / convertibility |
+| D4 | [#50](https://github.com/link-foundation/relative-meta-logic/issues/50) | Full normalization for typed fragment |
+| D5 | [#41](https://github.com/link-foundation/relative-meta-logic/issues/41) | Universe hierarchy as a checked layer |
+| D6 | [#42](https://github.com/link-foundation/relative-meta-logic/issues/42) | Bidirectional type checker |
+| D7 | [#51](https://github.com/link-foundation/relative-meta-logic/issues/51) | Higher-order abstract syntax (HOAS) helpers |
+| D8 | [#38](https://github.com/link-foundation/relative-meta-logic/issues/38) | Capture-avoiding substitution and freshness |
+| D9 | [#52](https://github.com/link-foundation/relative-meta-logic/issues/52) | Prenex polymorphism |
+| D10 | [#45](https://github.com/link-foundation/relative-meta-logic/issues/45) | Inductive families with eliminators |
+| D11 | [#53](https://github.com/link-foundation/relative-meta-logic/issues/53) | Coinductive families and productivity |
+| D12 | [#44](https://github.com/link-foundation/relative-meta-logic/issues/44) | Totality checking (Twelf-style) |
+| D13 | [#49](https://github.com/link-foundation/relative-meta-logic/issues/49) | Termination checking |
+| D14 | [#46](https://github.com/link-foundation/relative-meta-logic/issues/46) | Coverage checking for case-style relations |
+| D15 | [#43](https://github.com/link-foundation/relative-meta-logic/issues/43) | Mode declarations |
+| D16 | [#54](https://github.com/link-foundation/relative-meta-logic/issues/54) | World declarations |
+| E1 | [#55](https://github.com/link-foundation/relative-meta-logic/issues/55) | Tactic language as links |
+| E2 | [#56](https://github.com/link-foundation/relative-meta-logic/issues/56) | Simplifier and rewriting |
+| E3 | [#57](https://github.com/link-foundation/relative-meta-logic/issues/57) | Bounded proof search |
+| E4 | [#58](https://github.com/link-foundation/relative-meta-logic/issues/58) | Counter-model finder for finite valences |
+| E5 | [#59](https://github.com/link-foundation/relative-meta-logic/issues/59) | Macro / template mechanism for reusable link shapes |
+| F1 | [#60](https://github.com/link-foundation/relative-meta-logic/issues/60) | Lean 4 export of RML fragments |
+| F2 | [#61](https://github.com/link-foundation/relative-meta-logic/issues/61) | Rocq export |
+| F3 | [#62](https://github.com/link-foundation/relative-meta-logic/issues/62) | Isabelle export |
+| F4 | [#63](https://github.com/link-foundation/relative-meta-logic/issues/63) | Pecan-style automatic-sequence backend |
+| F5 | [#64](https://github.com/link-foundation/relative-meta-logic/issues/64) | SMT-LIB bridge |
+| F6 | [#65](https://github.com/link-foundation/relative-meta-logic/issues/65) | TPTP bridge for first-order ATPs |
+| F7 | [#66](https://github.com/link-foundation/relative-meta-logic/issues/66) | Program extraction to JS / Rust |
+| G1 | [#67](https://github.com/link-foundation/relative-meta-logic/issues/67) | Standard library: classical logic |
+| G2 | [#69](https://github.com/link-foundation/relative-meta-logic/issues/69) | Standard library: first-order logic |
+| G3 | [#70](https://github.com/link-foundation/relative-meta-logic/issues/70) | Standard library: higher-order logic |
+| G4 | [#71](https://github.com/link-foundation/relative-meta-logic/issues/71) | Standard library: modal logic |
+| G5 | [#72](https://github.com/link-foundation/relative-meta-logic/issues/72) | Standard library: provability logic |
+| G6 | [#73](https://github.com/link-foundation/relative-meta-logic/issues/73) | Standard library: set theory |
+| G7 | [#74](https://github.com/link-foundation/relative-meta-logic/issues/74) | Standard library: arithmetic |
+| G8 | [#75](https://github.com/link-foundation/relative-meta-logic/issues/75) | Standard library: algebra |
+| G9 | [#76](https://github.com/link-foundation/relative-meta-logic/issues/76) | Standard library: programming-language theory |
+| G10 | [#77](https://github.com/link-foundation/relative-meta-logic/issues/77) | Standard library: probabilistic / Belnap |
+| H1 | [#78](https://github.com/link-foundation/relative-meta-logic/issues/78) | Language Server Protocol implementation |
+| H2 | [#79](https://github.com/link-foundation/relative-meta-logic/issues/79) | VS Code extension |
+| H3 | [#80](https://github.com/link-foundation/relative-meta-logic/issues/80) | Generated API/reference docs |
+| H4 | [#81](https://github.com/link-foundation/relative-meta-logic/issues/81) | Backward-compatibility policy + release process |
+| H5 | [#82](https://github.com/link-foundation/relative-meta-logic/issues/82) | Literate `.lino` format |
+| H6 | [#83](https://github.com/link-foundation/relative-meta-logic/issues/83) | Online wasm playground |
+| H7 | [#93](https://github.com/link-foundation/relative-meta-logic/issues/93) | Tutorials and walkthroughs |
+| H8 | [#94](https://github.com/link-foundation/relative-meta-logic/issues/94) | Docker support |
+| I1 | [#89](https://github.com/link-foundation/relative-meta-logic/issues/89) | Shared test corpus |
+| I2 | [#90](https://github.com/link-foundation/relative-meta-logic/issues/90) | Parity CI job |
+| J1 | [#84](https://github.com/link-foundation/relative-meta-logic/issues/84) | Encode the LiNo grammar as links |
+| J2 | [#85](https://github.com/link-foundation/relative-meta-logic/issues/85) | Encode the evaluator as links |
+| J3 | [#86](https://github.com/link-foundation/relative-meta-logic/issues/86) | Encode the type layer as links |
+| J4 | [#87](https://github.com/link-foundation/relative-meta-logic/issues/87) | Encode operators and aggregators as links |
+| J5 | [#88](https://github.com/link-foundation/relative-meta-logic/issues/88) | Encode the metatheorem checker as links |
+| J6 | [#91](https://github.com/link-foundation/relative-meta-logic/issues/91) | Bootstrap test: encoded RML evaluates the example corpus |
+| J7 | [#92](https://github.com/link-foundation/relative-meta-logic/issues/92) | Tutorial: "RML in RML" |
+| J-EPIC | [#95](https://github.com/link-foundation/relative-meta-logic/issues/95) | Universal formal-system constructor: feature-parity audit |
+
+Total: 67 planned issues + 1 tracking epic = 68 GitHub issues. Filed in topological order so every `Depends on #N` resolves immediately.
+
+The filing tooling lives in [`experiments/issue-26-filing/`](https://github.com/link-foundation/relative-meta-logic/tree/main/experiments/issue-26-filing) (`issues.json` + `file-issues.mjs` + `validate.mjs`) and is reusable for future plan updates.
+
+---
+
 ## Summary
 
-The plan distils into **roughly 70 issues** across 10 phases plus one tracking epic. The dependency graph in this file has been validated visually; once the maintainer approves the plan, filing follows the order below:
+The plan distils into **67 issues** across 10 phases plus one tracking epic. The dependency graph in this file has been validated visually; the filing order followed:
 
 1. Phase A first (5 issues), all unblocked.
 2. Phases B and D-foundations (D1, D8) once A1 lands.

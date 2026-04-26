@@ -27,7 +27,7 @@ The plan must:
 5. End with a **capstone issue**: re-implementing RML in itself, demonstrating that RML really is a meta-logic capable of describing and reasoning about itself.
 6. Express every encoded construct in **links notation with English-like words and templates**, so a beginner can read each link as a sentence (e.g. `(zero is a Natural)` rather than `Nat.zero : Nat`).
 
-This case study captures the analysis. It is **not** the place to file the issues themselves — that happens in a follow-up sweep that uses [`issue-plan.md`](./issue-plan.md) as input to `gh issue create`. Filing live issues from a single PR would create dozens of dangling threads before review of the plan; instead, this PR ships the plan, the maintainer reviews it, and the issues are filed in a controlled batch.
+This case study captures the analysis **and the filed plan**. As of the latest update of PR #27, every planned issue (A1–J7 plus the J-EPIC tracking issue) has been filed on GitHub with full body, labels, and `Depends on` / `Blocks` cross-references — see the [filed-issue index in `issue-plan.md`](./issue-plan.md#filed-issue-index) and tracking epic [#95](https://github.com/link-foundation/relative-meta-logic/issues/95).
 
 ## Scope of the Plan
 
@@ -95,7 +95,7 @@ The issue body raises eight distinct requirements. They are tracked atomically i
 
 | Risk / question | Mitigation |
 |-----------------|------------|
-| Filing 80+ issues at once will spam watchers and obscure priorities. | The plan recommends filing one phase at a time; phase A first, the rest gated on phase A landing. The capstone issue (J) is filed last so its dependency list is accurate. |
+| Filing 80+ issues at once will spam watchers and obscure priorities. | All 67 planned issues are filed in topological order so each `Depends on #N` reference resolves immediately. The tracking epic [#95](https://github.com/link-foundation/relative-meta-logic/issues/95) consolidates them so watchers can subscribe once. |
 | Some "gaps" in the comparison docs reflect design choices, not omissions (e.g. RML accepts self-reference where Lean rejects it). | Each issue marks whether it is a *parity* goal or a *deliberate divergence* goal. Some Lean/Rocq features will not be ported because they conflict with RML's paradox-tolerant semantics. |
 | Self-reimplementation may run into RML's current evaluator limits (no full normalization, prototype types). | Phase J explicitly depends on phases B, C, D, and E. If phase D cannot deliver full normalization for all link forms, phase J ships an *interpretive* (small-step) self-evaluator instead of a *compiled* one and documents the limitation. |
 | Bridges to mature provers (Lean/Rocq/Isabelle) require domain expertise the project may not have in-house. | Phase F issues are explicitly marked `help wanted` and start with an export pilot to a single target (Lean) before generalizing. |
@@ -112,4 +112,4 @@ The issue body raises eight distinct requirements. They are tracked atomically i
 | Plan ends with self-reimplementation capstone | Done — see [`issue-plan.md`](./issue-plan.md#phase-j-self-reimplementation-capstone) |
 | LiNo style guidance for English-readable links | Done — see [`issue-plan.md`](./issue-plan.md#naming-and-template-conventions) |
 | External research and prior-art references collected | Done — see [`research.md`](./research.md) |
-| No actual issues filed yet (filing is a separate, reviewable batch) | Intentional — see "Risks and Open Questions" above |
+| Issues actually filed on GitHub with proper labels and dependencies | Done — see [filed-issue index](./issue-plan.md#filed-issue-index) and tracking epic [#95](https://github.com/link-foundation/relative-meta-logic/issues/95) |

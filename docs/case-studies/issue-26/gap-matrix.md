@@ -1,6 +1,8 @@
-# Gap Matrix: Comparison Tables → Planned Issues
+# Gap Matrix: Comparison Tables → Filed Issues
 
-This file walks every row of [CONCEPTS-COMPARISION.md](../../CONCEPTS-COMPARISION.md) and [FEATURE-COMPARISION.md](../../FEATURE-COMPARISION.md) where RML is `Part`, `No`, or weaker than at least one peer system, and assigns it to one or more planned issues by ID. Issue IDs (e.g. `J3`) are defined in [`issue-plan.md`](./issue-plan.md).
+This file walks every row of [CONCEPTS-COMPARISION.md](../../CONCEPTS-COMPARISION.md) and [FEATURE-COMPARISION.md](../../FEATURE-COMPARISION.md) where RML is `Part`, `No`, or weaker than at least one peer system, and assigns it to one or more issues by plan ID. Plan IDs (e.g. `J3`) are defined in [`issue-plan.md`](./issue-plan.md).
+
+> **All plan IDs below are now filed GitHub issues.** Use the [filed-issue index](./issue-plan.md#filed-issue-index) to look up the corresponding GitHub number (e.g. `J3` → [#86](https://github.com/link-foundation/relative-meta-logic/issues/86)). The tracking epic is [#95](https://github.com/link-foundation/relative-meta-logic/issues/95).
 
 The "Status" column shows RML's current state in the comparison docs. The "Action" column shows what the planned issues do about it. The "Issue IDs" column points to the planned issues in [`issue-plan.md`](./issue-plan.md).
 
