@@ -410,6 +410,21 @@ fn run_handle_inline_comments() {
     assert_eq!(results[0], 1.0);
 }
 
+#[test]
+fn run_inline_comment_containing_colon() {
+    // Regression: a `:` inside an inline comment used to be passed through
+    // to the LiNo parser and parsed as a binding, silently dropping every
+    // statement in the file. See docs/case-studies/issue-68.
+    let text = r#"
+(? true)                  # comment with: colon
+(? false)                 # another: comment
+"#;
+    let results = run(text, None);
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0], 1.0);
+    assert_eq!(results[1], 0.0);
+}
+
 // ===== meta-expression adapter API =====
 
 #[test]
