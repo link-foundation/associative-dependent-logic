@@ -24,7 +24,11 @@ pub fn parse_lino(text: &str) -> Vec<String> {
         .lines()
         .map(|line| {
             let trimmed = line.trim();
-            if trimmed.starts_with('#') { "" } else { line }
+            if trimmed.starts_with('#') {
+                ""
+            } else {
+                line
+            }
         })
         .collect::<Vec<&str>>()
         .join("\n");
@@ -257,7 +261,7 @@ pub enum Aggregator {
 }
 
 impl Aggregator {
-    fn apply(&self, xs: &[f64], lo: f64) -> f64 {
+    pub fn apply(&self, xs: &[f64], lo: f64) -> f64 {
         if xs.is_empty() {
             return lo;
         }
@@ -270,7 +274,7 @@ impl Aggregator {
         }
     }
 
-    fn from_name(name: &str) -> Option<Self> {
+    pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "avg" => Some(Aggregator::Avg),
             "min" => Some(Aggregator::Min),
@@ -296,7 +300,10 @@ pub enum Op {
     /// Inequality: not(eq(...))
     Neq,
     /// Composition: outer(inner(...))
-    Compose { outer: String, inner: String },
+    Compose {
+        outer: String,
+        inner: String,
+    },
     /// Arithmetic: +, -, *, / (decimal-precision)
     Add,
     Sub,
@@ -551,8 +558,10 @@ impl Env {
         self.ops.insert("not".to_string(), Op::Not);
         self.ops.insert("and".to_string(), Op::Agg(Aggregator::Avg));
         self.ops.insert("or".to_string(), Op::Agg(Aggregator::Max));
-        self.ops.insert("both".to_string(), Op::Agg(Aggregator::Avg));
-        self.ops.insert("neither".to_string(), Op::Agg(Aggregator::Prod));
+        self.ops
+            .insert("both".to_string(), Op::Agg(Aggregator::Avg));
+        self.ops
+            .insert("neither".to_string(), Op::Agg(Aggregator::Prod));
         self.ops.insert("=".to_string(), Op::Eq);
         self.ops.insert("!=".to_string(), Op::Neq);
         self.ops.insert("+".to_string(), Op::Add);
@@ -620,7 +629,9 @@ pub fn parse_binding(binding: &Node) -> Option<(String, String)> {
                 }
             }
             // Prefix type form: ["A", "x"] — type name first (must start with uppercase)
-            if let (Node::Leaf(ref type_name), Node::Leaf(ref var_name)) = (&children[0], &children[1]) {
+            if let (Node::Leaf(ref type_name), Node::Leaf(ref var_name)) =
+                (&children[0], &children[1])
+            {
                 if type_name.starts_with(|c: char| c.is_uppercase()) && !var_name.ends_with(':') {
                     return Some((var_name.clone(), type_name.clone()));
                 }
@@ -643,7 +654,7 @@ pub fn parse_bindings(binding: &Node) -> Option<Vec<(String, String)>> {
         for child in children {
             if let Node::Leaf(ref s) = child {
                 if s.ends_with(',') {
-                    tokens.push(s[..s.len()-1].to_string());
+                    tokens.push(s[..s.len() - 1].to_string());
                     tokens.push(",".to_string());
                 } else {
                     tokens.push(s.clone());
@@ -655,10 +666,13 @@ pub fn parse_bindings(binding: &Node) -> Option<Vec<(String, String)>> {
         let mut bindings = Vec::new();
         let mut i = 0;
         while i < tokens.len() {
-            if tokens[i] == "," { i += 1; continue; }
-            if i + 1 < tokens.len() && tokens[i+1] != "," {
+            if tokens[i] == "," {
+                i += 1;
+                continue;
+            }
+            if i + 1 < tokens.len() && tokens[i + 1] != "," {
                 let type_name = &tokens[i];
-                let var_name = &tokens[i+1];
+                let var_name = &tokens[i + 1];
                 if type_name.starts_with(|c: char| c.is_uppercase()) {
                     bindings.push((var_name.clone(), type_name.clone()));
                     i += 2;
@@ -820,7 +834,11 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
             // Infix AND/OR/BOTH/NEITHER: ((A) and (B)) / ((A) or (B)) / ((A) both (B)) / ((A) neither (B))
             if children.len() == 3 {
                 if let Node::Leaf(ref op_name) = children[1] {
-                    if op_name == "and" || op_name == "or" || op_name == "both" || op_name == "neither" {
+                    if op_name == "and"
+                        || op_name == "or"
+                        || op_name == "both"
+                        || op_name == "neither"
+                    {
                         let l = eval_node(&children[0], env).as_f64();
                         let r = eval_node(&children[2], env).as_f64();
                         return EvalResult::Value(env.clamp(env.apply_op(op_name, &[l, r])));
@@ -836,12 +854,19 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                         let mut valid = true;
                         for i in (2..children.len()).step_by(2) {
                             if let Node::Leaf(ref s) = children[i] {
-                                if s != sep { valid = false; break; }
-                            } else { valid = false; break; }
+                                if s != sep {
+                                    valid = false;
+                                    break;
+                                }
+                            } else {
+                                valid = false;
+                                break;
+                            }
                         }
                         if valid {
                             let head_str = head.clone();
-                            let vals: Vec<f64> = (1..children.len()).step_by(2)
+                            let vals: Vec<f64> = (1..children.len())
+                                .step_by(2)
                                 .map(|i| eval_node(&children[i], env).as_f64())
                                 .collect();
                             return EvalResult::Value(env.clamp(env.apply_op(&head_str, &vals)));
@@ -1001,9 +1026,15 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                                     env.set_type(&binding.0, &binding.1);
                                 }
                                 let body_key = key_of(&children[2]);
-                                let body_type = env.get_type(&body_key).cloned().unwrap_or_else(|| "unknown".to_string());
+                                let body_type = env
+                                    .get_type(&body_key)
+                                    .cloned()
+                                    .unwrap_or_else(|| "unknown".to_string());
                                 let key = key_of(&Node::List(children.clone()));
-                                env.set_type(&key, &format!("(Pi ({} {}) {})", param_type, param_name, body_type));
+                                env.set_type(
+                                    &key,
+                                    &format!("(Pi ({} {}) {})", param_type, param_name, body_type),
+                                );
                             }
                         }
                         return EvalResult::Value(1.0);
@@ -1023,7 +1054,9 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                             if fn_children.len() == 3 {
                                 if let Node::Leaf(ref fn_head) = fn_children[0] {
                                     if fn_head == "lambda" {
-                                        if let Some((param_name, _)) = parse_binding(&fn_children[1]) {
+                                        if let Some((param_name, _)) =
+                                            parse_binding(&fn_children[1])
+                                        {
                                             let body = &fn_children[2];
                                             let result = substitute(body, &param_name, arg);
                                             return eval_node(&result, env);
@@ -1057,7 +1090,10 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                             Node::Leaf(s) => s.clone(),
                             other => key_of(other),
                         };
-                        let type_str = env.get_type(&expr_key).cloned().unwrap_or_else(|| "unknown".to_string());
+                        let type_str = env
+                            .get_type(&expr_key)
+                            .cloned()
+                            .unwrap_or_else(|| "unknown".to_string());
                         return EvalResult::TypeQuery(type_str);
                     }
                 }
@@ -1077,7 +1113,11 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                             other => key_of(other),
                         };
                         if let Some(actual) = env.get_type(&expr_key) {
-                            return EvalResult::Value(if *actual == expected_key { env.hi } else { env.lo });
+                            return EvalResult::Value(if *actual == expected_key {
+                                env.hi
+                            } else {
+                                env.lo
+                            });
                         }
                         return EvalResult::Value(env.lo);
                     }
@@ -1142,7 +1182,9 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         if let Node::Leaf(ref last) = rhs[1] {
             if last == head {
                 match &rhs[0] {
-                    Node::Leaf(ref type_name) if type_name.starts_with(|c: char| c.is_uppercase()) => {
+                    Node::Leaf(ref type_name)
+                        if type_name.starts_with(|c: char| c.is_uppercase()) =>
+                    {
                         env.terms.insert(head.to_string());
                         env.types.insert(head.to_string(), type_name.clone());
                         return EvalResult::Value(1.0);
@@ -1224,7 +1266,8 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         }
 
         // Aggregator selection: (and: avg|min|max|product|probabilistic_sum)
-        if (head == "and" || head == "or" || head == "both" || head == "neither") && rhs.len() == 1 {
+        if (head == "and" || head == "or" || head == "both" || head == "neither") && rhs.len() == 1
+        {
             if let Node::Leaf(ref sel) = rhs[0] {
                 if let Some(agg) = Aggregator::from_name(sel) {
                     env.define_op(head, Op::Agg(agg));
@@ -1244,14 +1287,25 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
                     let body = rhs[2].clone();
                     env.terms.insert(head.to_string());
                     let body_key = key_of(&body);
-                    let body_type = env.get_type(&body_key).cloned().unwrap_or_else(|| {
-                        match &body {
-                            Node::Leaf(s) => s.clone(),
-                            other => key_of(other),
-                        }
-                    });
-                    env.set_type(head, &format!("(Pi ({} {}) {})", param_type, param_name, body_type));
-                    env.set_lambda(head, Lambda { param: param_name, param_type, body });
+                    let body_type =
+                        env.get_type(&body_key)
+                            .cloned()
+                            .unwrap_or_else(|| match &body {
+                                Node::Leaf(s) => s.clone(),
+                                other => key_of(other),
+                            });
+                    env.set_type(
+                        head,
+                        &format!("(Pi ({} {}) {})", param_type, param_name, body_type),
+                    );
+                    env.set_lambda(
+                        head,
+                        Lambda {
+                            param: param_name,
+                            param_type,
+                            body,
+                        },
+                    );
                     return EvalResult::Value(1.0);
                 }
             }
@@ -1296,6 +1350,348 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
 
     // Else: ignore (keeps PoC minimal)
     EvalResult::Value(0.0)
+}
+
+// ========== Meta-expression Adapter ==========
+
+/// Selected interpretation supplied by a consumer such as meta-expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Interpretation {
+    pub kind: String,
+    pub expression: Option<String>,
+    pub summary: Option<String>,
+    pub lino: Option<String>,
+}
+
+impl Interpretation {
+    pub fn arithmetic_equality(expression: &str) -> Self {
+        Self {
+            kind: "arithmetic-equality".to_string(),
+            expression: Some(expression.to_string()),
+            summary: None,
+            lino: None,
+        }
+    }
+
+    pub fn arithmetic_question(expression: &str) -> Self {
+        Self {
+            kind: "arithmetic-question".to_string(),
+            expression: Some(expression.to_string()),
+            summary: None,
+            lino: None,
+        }
+    }
+
+    pub fn real_world_claim(summary: &str) -> Self {
+        Self {
+            kind: "real-world-claim".to_string(),
+            expression: None,
+            summary: Some(summary.to_string()),
+            lino: None,
+        }
+    }
+
+    pub fn lino(expression: &str) -> Self {
+        Self {
+            kind: "lino".to_string(),
+            expression: None,
+            summary: None,
+            lino: Some(expression.to_string()),
+        }
+    }
+}
+
+/// Explicit dependency record used to keep unsupported claims partial.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dependency {
+    pub id: String,
+    pub status: String,
+    pub description: String,
+}
+
+impl Dependency {
+    pub fn missing(id: &str, description: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            status: "missing".to_string(),
+            description: description.to_string(),
+        }
+    }
+}
+
+/// Request object for `formalize_selected_interpretation`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormalizationRequest {
+    pub text: String,
+    pub interpretation: Interpretation,
+    pub formal_system: String,
+    pub dependencies: Vec<Dependency>,
+}
+
+/// A dependency-aware RML formalization.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Formalization {
+    pub source_text: String,
+    pub interpretation: Interpretation,
+    pub formal_system: String,
+    pub dependencies: Vec<Dependency>,
+    pub computable: bool,
+    pub formalization_level: u8,
+    pub unknowns: Vec<String>,
+    pub value_kind: String,
+    pub ast: Option<Node>,
+    pub lino: Option<String>,
+}
+
+/// Result value from evaluating a formalization.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormalizationResultValue {
+    Number(f64),
+    TruthValue(f64),
+    Type(String),
+    Partial(String),
+}
+
+/// Evaluation result for the meta-expression adapter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormalizationEvaluation {
+    pub computable: bool,
+    pub formalization_level: u8,
+    pub unknowns: Vec<String>,
+    pub result: FormalizationResultValue,
+}
+
+fn normalize_question_expression(text: &str) -> String {
+    let mut out = text.trim().trim_end_matches('?').trim().to_string();
+    let lower = out.to_lowercase();
+    if lower.starts_with("what is ") {
+        out = out[8..].trim().to_string();
+    }
+    out
+}
+
+fn split_top_level_equals(expression: &str) -> Option<(String, String)> {
+    let mut depth: i32 = 0;
+    let chars: Vec<char> = expression.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            '=' if depth == 0 => {
+                if i > 0 && chars[i - 1] == '!' {
+                    continue;
+                }
+                if i + 1 < chars.len() && chars[i + 1] == '=' {
+                    continue;
+                }
+                let left: String = chars[..i].iter().collect();
+                let right: String = chars[i + 1..].iter().collect();
+                return Some((left.trim().to_string(), right.trim().to_string()));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_expression_shape(expression: &str, unwrap_single: bool) -> Result<Node, String> {
+    let trimmed = expression.trim();
+    if trimmed.is_empty() {
+        return Err("empty expression".to_string());
+    }
+    let source = if trimmed.starts_with('(') && trimmed.ends_with(')') {
+        trimmed.to_string()
+    } else {
+        format!("({})", trimmed)
+    };
+    let mut ast = parse_one(&tokenize_one(&source))?;
+    loop {
+        match ast {
+            Node::List(ref children) if children.len() == 1 => {
+                if unwrap_single || matches!(&children[0], Node::List(_)) {
+                    ast = children[0].clone();
+                    continue;
+                }
+                return Ok(ast);
+            }
+            _ => return Ok(ast),
+        }
+    }
+}
+
+fn unique_unknowns(unknowns: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for unknown in unknowns {
+        if !out.contains(&unknown) {
+            out.push(unknown);
+        }
+    }
+    out
+}
+
+fn partial_formalization(
+    request: FormalizationRequest,
+    unknowns: Vec<String>,
+    formalization_level: u8,
+) -> Formalization {
+    Formalization {
+        source_text: request.text,
+        interpretation: request.interpretation,
+        formal_system: request.formal_system,
+        dependencies: request.dependencies,
+        computable: false,
+        formalization_level,
+        unknowns: unique_unknowns(unknowns),
+        value_kind: "partial".to_string(),
+        ast: None,
+        lino: None,
+    }
+}
+
+fn build_arithmetic_formalization(
+    expression: &str,
+    value_kind: &str,
+) -> Result<(Node, String), String> {
+    let ast = if value_kind == "truth-value" {
+        if let Some((left, right)) = split_top_level_equals(expression) {
+            Node::List(vec![
+                parse_expression_shape(&left, true)?,
+                Node::Leaf("=".to_string()),
+                parse_expression_shape(&right, true)?,
+            ])
+        } else {
+            parse_expression_shape(expression, true)?
+        }
+    } else {
+        parse_expression_shape(expression, true)?
+    };
+    let lino = key_of(&ast);
+    Ok((ast, lino))
+}
+
+/// Convert an explicitly selected interpretation into an executable or partial RML formalization.
+pub fn formalize_selected_interpretation(request: FormalizationRequest) -> Formalization {
+    let kind = request.interpretation.kind.to_lowercase();
+    let raw_expression = request
+        .interpretation
+        .expression
+        .clone()
+        .or_else(|| request.interpretation.lino.clone())
+        .unwrap_or_else(|| normalize_question_expression(&request.text));
+    let can_use_arithmetic = request.formal_system == "rml-arithmetic"
+        || request.formal_system == "arithmetic"
+        || kind.starts_with("arithmetic");
+
+    if can_use_arithmetic && !raw_expression.is_empty() {
+        let value_kind =
+            if kind.contains("equal") || split_top_level_equals(&raw_expression).is_some() {
+                "truth-value"
+            } else {
+                "number"
+            };
+        match build_arithmetic_formalization(&raw_expression, value_kind) {
+            Ok((ast, lino)) => Formalization {
+                source_text: request.text,
+                interpretation: request.interpretation,
+                formal_system: request.formal_system,
+                dependencies: request.dependencies,
+                computable: true,
+                formalization_level: 3,
+                unknowns: vec![],
+                value_kind: value_kind.to_string(),
+                ast: Some(ast),
+                lino: Some(lino),
+            },
+            Err(error) => partial_formalization(
+                request,
+                vec!["unsupported-arithmetic-shape".to_string(), error],
+                1,
+            ),
+        }
+    } else if request.interpretation.lino.is_some() && !raw_expression.is_empty() {
+        match parse_expression_shape(&raw_expression, false) {
+            Ok(ast) => {
+                let lino = key_of(&ast);
+                Formalization {
+                    source_text: request.text,
+                    interpretation: request.interpretation,
+                    formal_system: request.formal_system,
+                    dependencies: request.dependencies,
+                    computable: true,
+                    formalization_level: 3,
+                    unknowns: vec![],
+                    value_kind: if matches!(&ast, Node::List(children) if matches!(children.first(), Some(Node::Leaf(head)) if head == "?"))
+                    {
+                        "query".to_string()
+                    } else {
+                        "truth-value".to_string()
+                    },
+                    ast: Some(ast),
+                    lino: Some(lino),
+                }
+            }
+            Err(error) => partial_formalization(
+                request,
+                vec!["unsupported-lino-shape".to_string(), error],
+                1,
+            ),
+        }
+    } else {
+        let mut unknowns = vec![
+            "selected-subject".to_string(),
+            "selected-relation".to_string(),
+            "evidence-source".to_string(),
+            "formal-shape".to_string(),
+        ];
+        for dependency in &request.dependencies {
+            if dependency.status == "missing"
+                || dependency.status == "unknown"
+                || dependency.status == "partial"
+            {
+                unknowns.push(format!("dependency:{}", dependency.id));
+            }
+        }
+        partial_formalization(request, unknowns, 2)
+    }
+}
+
+/// Evaluate a formalization when it has an executable RML AST.
+pub fn evaluate_formalization(formalization: &Formalization) -> FormalizationEvaluation {
+    let Some(ast) = formalization.ast.as_ref() else {
+        return FormalizationEvaluation {
+            computable: false,
+            formalization_level: formalization.formalization_level,
+            unknowns: formalization.unknowns.clone(),
+            result: FormalizationResultValue::Partial("unknown".to_string()),
+        };
+    };
+
+    if !formalization.computable {
+        return FormalizationEvaluation {
+            computable: false,
+            formalization_level: formalization.formalization_level,
+            unknowns: formalization.unknowns.clone(),
+            result: FormalizationResultValue::Partial("unknown".to_string()),
+        };
+    }
+
+    let mut env = Env::new(None);
+    let evaluated = eval_node(ast, &mut env);
+    let result = match formalization.value_kind.as_str() {
+        "truth-value" => FormalizationResultValue::TruthValue(evaluated.as_f64()),
+        "query" => match evaluated {
+            EvalResult::TypeQuery(s) => FormalizationResultValue::Type(s),
+            other => FormalizationResultValue::Number(other.as_f64()),
+        },
+        _ => FormalizationResultValue::Number(evaluated.as_f64()),
+    };
+
+    FormalizationEvaluation {
+        computable: true,
+        formalization_level: formalization.formalization_level,
+        unknowns: vec![],
+        result,
+    }
 }
 
 // ========== Runner ==========

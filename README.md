@@ -36,6 +36,7 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 - Query the truth value of complex expressions
 - Define dependent types as links — universe hierarchy, Pi-types, lambdas, type queries
 - Combine types with probabilistic logic in a unified framework
+- Reuse the evaluator as a library, including a meta-expression adapter that accepts selected interpretations and explicit dependencies while keeping underspecified claims partial
 
 ## Supported Logic Types
 

@@ -45,7 +45,11 @@ Or after building:
 ## API
 
 ```rust
-use rml::{run, tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round};
+use rml::{
+    run, tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round,
+    formalize_selected_interpretation, evaluate_formalization,
+    FormalizationRequest, Interpretation,
+};
 
 // Run a complete LiNo knowledge base
 let results = run(lino_text, None);
@@ -61,7 +65,19 @@ let truth_value = eval_node(&ast, &mut env);
 
 // Quantize a value to N discrete levels
 let q = quantize(0.4, 3, 0.0, 1.0); // -> 0.5 (nearest ternary level)
+
+// Adapter for consumers that already selected an interpretation
+let formalization = formalize_selected_interpretation(FormalizationRequest {
+    text: "0.1 + 0.2 = 0.3".to_string(),
+    interpretation: Interpretation::arithmetic_equality("0.1 + 0.2 = 0.3"),
+    formal_system: "rml-arithmetic".to_string(),
+    dependencies: vec![],
+});
+let evaluation = evaluate_formalization(&formalization);
+// -> computable truth-value result 1.0
 ```
+
+The meta-expression adapter deliberately keeps unsupported real-world claims partial. A selected interpretation such as `moon orbits the Sun` is returned as non-computable with explicit unknowns until a consumer supplies a formal shape and reproducible dependencies.
 
 ## Testing
 

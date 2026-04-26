@@ -1,6 +1,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { run, tokenizeOne, parseOne, Env, evalNode, quantize, decRound, substitute } from '../src/rml-links.mjs';
+import {
+  run,
+  tokenizeOne,
+  parseOne,
+  Env,
+  evalNode,
+  quantize,
+  decRound,
+  substitute,
+  formalizeSelectedInterpretation,
+  evaluateFormalization,
+} from '../src/rml-links.mjs';
 
 const approx = (actual, expected, epsilon = 1e-9) =>
   assert.ok(Math.abs(actual - expected) < epsilon,
@@ -254,6 +265,69 @@ describe('run', () => {
     const results = run(text);
     assert.strictEqual(results.length, 1);
     assert.strictEqual(results[0], 1);
+  });
+});
+
+describe('meta-expression adapter API', () => {
+  it('formalizes and evaluates arithmetic equality deterministically', () => {
+    const formalization = formalizeSelectedInterpretation({
+      text: '0.1 + 0.2 = 0.3',
+      interpretation: {
+        kind: 'arithmetic-equality',
+        expression: '0.1 + 0.2 = 0.3',
+      },
+      formalSystem: 'rml-arithmetic',
+    });
+
+    assert.strictEqual(formalization.computable, true);
+    assert.strictEqual(formalization.formalizationLevel, 3);
+    assert.deepStrictEqual(formalization.unknowns, []);
+
+    const result = evaluateFormalization(formalization);
+    assert.deepStrictEqual(result.unknowns, []);
+    assert.strictEqual(result.computable, true);
+    assert.strictEqual(result.result.kind, 'truth-value');
+    assert.strictEqual(result.result.value, 1);
+  });
+
+  it('formalizes and evaluates arithmetic questions without query clamping', () => {
+    const formalization = formalizeSelectedInterpretation({
+      text: 'What is 0.1 + 0.2?',
+      interpretation: {
+        kind: 'arithmetic-question',
+        expression: '0.1 + 0.2',
+      },
+      formalSystem: 'rml-arithmetic',
+    });
+
+    const result = evaluateFormalization(formalization);
+    assert.strictEqual(result.computable, true);
+    assert.strictEqual(result.result.kind, 'number');
+    assert.strictEqual(result.result.value, 0.3);
+  });
+
+  it('keeps unsupported real-world claims partial with explicit unknowns', () => {
+    const formalization = formalizeSelectedInterpretation({
+      text: 'moon orbits the Sun',
+      interpretation: {
+        kind: 'real-world-claim',
+        summary: 'Treat "moon orbits the Sun" as a factual claim that needs evidence.',
+      },
+      formalSystem: 'rml',
+      dependencies: [
+        { id: 'wikidata', status: 'missing', description: 'No selected entity and relation ids were provided.' },
+      ],
+    });
+
+    assert.strictEqual(formalization.computable, false);
+    assert.strictEqual(formalization.formalizationLevel, 2);
+    assert.ok(formalization.unknowns.includes('selected-subject'));
+    assert.ok(formalization.unknowns.includes('selected-relation'));
+
+    const result = evaluateFormalization(formalization);
+    assert.strictEqual(result.computable, false);
+    assert.strictEqual(result.result.kind, 'partial');
+    assert.strictEqual(result.result.value, 'unknown');
   });
 });
 
