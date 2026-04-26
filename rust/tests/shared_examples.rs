@@ -1,11 +1,11 @@
 // Walks the repository-root /examples folder and runs every .lino file
 // through the Rust implementation. Asserts the output matches the canonical
-// fixtures in /examples/expected.json.
+// fixtures in /examples/expected.lino (Links Notation).
 //
 // The JavaScript test suite asserts against the same fixtures file, so any
 // drift between the two implementations fails both test suites.
 
-use rml::{run_typed, RunResult};
+use rml::{is_num, parse_lino, parse_one, run_typed, tokenize_one, Node, RunResult};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,193 +25,90 @@ fn list_lino_files(dir: &Path) -> Vec<String> {
         .expect("examples dir exists")
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".lino"))
+        .filter(|name| name.ends_with(".lino") && name != "expected.lino")
         .collect();
     files.sort();
     files
 }
 
-// Minimal JSON parser specialised for examples/expected.json.
-// The fixtures file has a fixed shape:
-//   { "<filename>.lino": [ { "num": <number> } | { "type": "<string>" }, ... ], ... }
-// We don't pull in serde_json just to read this — a hand-rolled parser
-// keeps the crate's dependency surface unchanged.
-struct JsonParser<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> JsonParser<'a> {
-    fn new(text: &'a str) -> Self {
-        Self {
-            bytes: text.as_bytes(),
-            pos: 0,
-        }
-    }
-
-    fn skip_ws(&mut self) {
-        while self.pos < self.bytes.len() {
-            let b = self.bytes[self.pos];
-            if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn expect(&mut self, ch: u8) {
-        self.skip_ws();
-        assert!(
-            self.pos < self.bytes.len() && self.bytes[self.pos] == ch,
-            "expected '{}' at byte {}",
-            ch as char,
-            self.pos
-        );
-        self.pos += 1;
-    }
-
-    fn peek(&mut self) -> u8 {
-        self.skip_ws();
-        assert!(self.pos < self.bytes.len(), "unexpected end of JSON");
-        self.bytes[self.pos]
-    }
-
-    fn parse_string(&mut self) -> String {
-        self.expect(b'"');
-        let mut out = String::new();
-        while self.pos < self.bytes.len() {
-            let b = self.bytes[self.pos];
-            if b == b'"' {
-                self.pos += 1;
-                return out;
-            }
-            if b == b'\\' {
-                self.pos += 1;
-                let esc = self.bytes[self.pos];
-                self.pos += 1;
-                match esc {
-                    b'"' => out.push('"'),
-                    b'\\' => out.push('\\'),
-                    b'/' => out.push('/'),
-                    b'n' => out.push('\n'),
-                    b't' => out.push('\t'),
-                    b'r' => out.push('\r'),
-                    other => panic!("unsupported escape \\{}", other as char),
-                }
-                continue;
-            }
-            out.push(b as char);
-            self.pos += 1;
-        }
-        panic!("unterminated string");
-    }
-
-    fn parse_number(&mut self) -> f64 {
-        self.skip_ws();
-        let start = self.pos;
-        while self.pos < self.bytes.len() {
-            let b = self.bytes[self.pos];
-            let is_num_char = matches!(b,
-                b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E');
-            if !is_num_char {
-                break;
-            }
-            self.pos += 1;
-        }
-        let s = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap();
-        s.parse::<f64>().unwrap_or_else(|_| panic!("bad number {}", s))
-    }
-
-    fn parse_value(&mut self) -> ExpectedValue {
-        self.expect(b'{');
-        self.skip_ws();
-        let key = self.parse_string();
-        self.expect(b':');
-        let result = match key.as_str() {
-            "num" => ExpectedValue::Num(self.parse_number()),
-            "type" => ExpectedValue::Type(self.parse_string()),
-            other => panic!("unexpected key {} in expected.json entry", other),
-        };
-        self.expect(b'}');
-        result
-    }
-
-    fn parse_array(&mut self) -> Vec<ExpectedValue> {
-        self.expect(b'[');
-        let mut out = Vec::new();
-        self.skip_ws();
-        if self.peek() == b']' {
-            self.pos += 1;
-            return out;
-        }
-        loop {
-            out.push(self.parse_value());
-            self.skip_ws();
-            let b = self.peek();
-            if b == b',' {
-                self.pos += 1;
-            } else if b == b']' {
-                self.pos += 1;
-                return out;
-            } else {
-                panic!("expected ',' or ']' at byte {}", self.pos);
-            }
-        }
-    }
-
-    fn parse_object(&mut self) -> Vec<(String, Vec<ExpectedValue>)> {
-        self.expect(b'{');
-        let mut out = Vec::new();
-        self.skip_ws();
-        if self.peek() == b'}' {
-            self.pos += 1;
-            return out;
-        }
-        loop {
-            self.skip_ws();
-            let key = self.parse_string();
-            self.expect(b':');
-            let arr = self.parse_array();
-            out.push((key, arr));
-            self.skip_ws();
-            let b = self.peek();
-            if b == b',' {
-                self.pos += 1;
-            } else if b == b'}' {
-                self.pos += 1;
-                return out;
-            } else {
-                panic!("expected ',' or '}}' at byte {}", self.pos);
-            }
-        }
-    }
-}
-
+// Parse expected.lino into pairs of (filename, expected results).
+//
+// Each link has the shape `(filename.lino: <result> <result> ...)`. A numeric
+// result is a bare token (parsed with `is_num`); a type result is the link
+// `(type <Name>)`. The order matches the order of `(? ...)` queries in the
+// referenced example file.
 fn load_expected() -> Vec<(String, Vec<ExpectedValue>)> {
-    let path = examples_dir().join("expected.json");
+    let path = examples_dir().join("expected.lino");
     let text = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("could not read {}: {}", path.display(), e));
-    let mut parser = JsonParser::new(&text);
-    parser.parse_object()
+
+    let mut out = Vec::new();
+    for link_str in parse_lino(&text) {
+        let toks = tokenize_one(&link_str);
+        let ast = parse_one(&toks)
+            .unwrap_or_else(|e| panic!("failed to parse expected.lino entry {}: {}", link_str, e));
+        let children = match ast {
+            Node::List(c) => c,
+            Node::Leaf(_) => panic!("expected list at top of {}", link_str),
+        };
+        let mut iter = children.into_iter();
+        let head = iter
+            .next()
+            .unwrap_or_else(|| panic!("empty link in expected.lino: {}", link_str));
+        let filename = match head {
+            Node::Leaf(s) if s.ends_with(':') => s[..s.len() - 1].to_string(),
+            other => panic!(
+                "expected.lino: first token of {} must be `<filename>:`, got {:?}",
+                link_str, other
+            ),
+        };
+        let mut values = Vec::new();
+        for node in iter {
+            match node {
+                Node::Leaf(s) if is_num(&s) => {
+                    values.push(ExpectedValue::Num(s.parse::<f64>().unwrap_or_else(|_| {
+                        panic!("expected.lino: bad number {} in {}", s, filename)
+                    })));
+                }
+                Node::List(ref children) if children.len() == 2 => {
+                    if let (Node::Leaf(k), Node::Leaf(v)) = (&children[0], &children[1]) {
+                        if k == "type" {
+                            values.push(ExpectedValue::Type(v.clone()));
+                            continue;
+                        }
+                    }
+                    panic!(
+                        "expected.lino: unsupported result {:?} in {}",
+                        node, filename
+                    );
+                }
+                other => panic!(
+                    "expected.lino: unsupported result {:?} in {}",
+                    other, filename
+                ),
+            }
+        }
+        out.push((filename, values));
+    }
+    out
 }
 
 #[test]
-fn every_example_file_is_in_expected_json() {
+fn every_example_file_is_in_expected_lino() {
     let on_disk = list_lino_files(&examples_dir());
     let expected = load_expected();
     let expected_keys: Vec<String> = expected.iter().map(|(k, _)| k.clone()).collect();
     for file in &on_disk {
         assert!(
             expected_keys.contains(file),
-            "{} is missing from expected.json",
+            "{} is missing from expected.lino",
             file
         );
     }
     for key in &expected_keys {
         assert!(
             on_disk.contains(key),
-            "expected.json references missing file {}",
+            "expected.lino references missing file {}",
             key
         );
     }

@@ -6,9 +6,11 @@ both the JavaScript and the Rust implementations and is required to produce
 identical output.
 
 The canonical expected output for each file lives in
-[`expected.json`](./expected.json). Both implementations have automated tests
-that walk this folder and assert their results against that file, so any
-implementation drift fails CI in both languages.
+[`expected.lino`](./expected.lino), itself written in Links Notation so the
+contract between implementations is expressed in the same language as the
+examples. Both implementations have automated tests that walk this folder
+and assert their results against that file, so any implementation drift
+fails CI in both languages.
 
 ## Running an example
 

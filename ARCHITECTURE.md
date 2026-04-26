@@ -11,7 +11,7 @@ This document describes the internal architecture of **Relative Meta-Logic (RML,
 ├── LICENSE                  # Unlicense (public domain)
 ├── examples/                # Shared .lino knowledge bases (run by both langs)
 │   ├── README.md
-│   ├── expected.json        # Canonical outputs both implementations must match
+│   ├── expected.lino        # Canonical outputs both implementations must match (Links Notation)
 │   ├── classical-logic.lino
 │   ├── propositional-logic.lino
 │   ├── fuzzy-logic.lino

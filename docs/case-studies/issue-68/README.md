@@ -42,16 +42,16 @@ Both CLIs accept the same `.lino` syntax (LiNo / Links Notation). LiNo is the sh
 | R1 | A single `examples/` folder lives at the repository root | `/examples/` now holds all `.lino` files; the per-language `js/examples/` and `rust/examples/` folders are removed |
 | R2 | The JavaScript implementation fully supports every example | The JS CLI and tests load files from the root `examples/` folder. A new "load all root examples" test iterates every file and asserts the run completes without error and produces the same numeric outputs as the language-agnostic fixtures file |
 | R3 | The Rust implementation fully supports every example | The Rust integration tests likewise iterate every file under `../examples/` and check the same fixtures file |
-| R4 | Every example is carefully tested | Each example has explicit per-file expectations stored in `examples/expected.json`. Both languages assert against this single fixtures file, so any drift between implementations fails the test suite in both |
+| R4 | Every example is carefully tested | Each example has explicit per-file expectations stored in `examples/expected.lino` (Links Notation, not JSON, so the contract is in the same language as the examples). Both implementations assert against this single fixtures file, so any drift between implementations fails the test suite in both |
 | R5 | Demo files are also shared | `demo.lino` and `flipped-axioms.lino` were also byte-identical between languages and have moved to the root `examples/` folder. `npm run demo` and `cargo run` continue to work via updated paths |
-| R6 | If anything is wrong we should fix it | While moving, we ran every example in both implementations and recorded the actual outputs into `expected.json`. The recorded outputs were sanity-checked against the inline assertions that already lived in the test suite |
+| R6 | If anything is wrong we should fix it | While moving, we ran every example in both implementations and recorded the actual outputs into `expected.lino`. The recorded outputs were sanity-checked against the inline assertions that already lived in the test suite |
 
 ## Repository layout (after this change)
 
 ```
 /examples/
   README.md                     # index + how-to-run for each language
-  expected.json                 # canonical numeric outputs for every .lino file
+  expected.lino                 # canonical outputs for every .lino file (Links Notation)
   classical-logic.lino
   propositional-logic.lino
   fuzzy-logic.lino
@@ -81,12 +81,12 @@ The simplest and most language-agnostic solution is therefore: keep the files at
 
 1. Moved every `.lino` file from `js/examples/` and `rust/examples/` to a single root-level `examples/` folder. Verified the JS and Rust copies were byte-identical before deleting the duplicates.
 2. Moved `demo.lino` and `flipped-axioms.lino` to `examples/` for the same reason.
-3. Added `examples/expected.json` capturing the canonical numeric outputs every example must produce.
+3. Added `examples/expected.lino` capturing the canonical outputs every example must produce. The contract is itself written in Links Notation — the expected value for each example is a link `(filename.lino: <result> <result> ...)` where a numeric result is a bare number and a type result is the link `(type <Name>)`. This avoids introducing JSON for an internal LiNo-shaped data file; both implementations already have a LiNo parser, so neither needs JSON.
 4. Added `examples/README.md` listing each example and showing how to run it from either implementation.
 5. Updated the JS CLI script (`npm run demo`) and the Rust tests / docs to point at the new path.
-6. Added tests in **both** implementations that walk the `examples/` directory, run every `.lino` file, and compare results to `expected.json`. Any divergence between JS and Rust now fails the build in both languages.
+6. Added tests in **both** implementations that walk the `examples/` directory, run every `.lino` file, and compare results to `expected.lino`. Any divergence between JS and Rust now fails the build in both languages.
 
 ## Test plan
 
-- `cd js && npm test` — runs all 307+ JS tests, including the new "shared examples" test that loads every file from `../examples/` and validates against `expected.json`.
+- `cd js && npm test` — runs all JS tests, including the new "shared examples" test that loads every file from `../examples/` and validates against `expected.lino`.
 - `cd rust && cargo test` — runs all Rust tests, including the new shared-examples integration test that does the same check from Rust.

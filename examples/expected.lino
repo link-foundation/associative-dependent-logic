@@ -1,0 +1,46 @@
+# Canonical expected outputs for every shared `.lino` knowledge base.
+#
+# Format (Links Notation):
+#   (<filename>.lino: <result> <result> ...)
+#
+# A numeric result is a bare number. A type result is the link
+# (type <Name>). The order matches the order of `(? ...)` queries
+# inside the corresponding example file.
+#
+# This file is the contract between the JavaScript and Rust
+# implementations: both run every example through their own runtime
+# and assert the output matches what is recorded here.
+#
+# Regenerate after intentional changes:
+#   node examples/generate-expected.mjs
+
+
+(bayesian-inference.lino: 0.0095 0.059 0.161016949153)
+
+(bayesian-network.lino: 0.5 0.3 0.5 0.25 0.65 0.075 0.602)
+
+(belnap-four-valued.lino: 1 0 0.5 0 0 1 0.5 0.5 1 0 0.5 1 0 0)
+
+(classical-logic.lino: 1 0 0 1 0 1 1 0 1)
+
+(demo.lino: 0.5 1)
+
+(dependent-types.lino: 1 1 1 0.7 (type Natural) 1 0.5 1)
+
+(flipped-axioms.lino: 0.5 1)
+
+(fuzzy-logic.lino: 0.8 0.3 0.3 0.8 0.19999999999999996 0.6)
+
+(liar-paradox-balanced.lino: 0 0)
+
+(liar-paradox.lino: 0.5 0.5)
+
+(markov-chain.lino: 0.68 0.32 0.672 0.328 0.5599999999999999)
+
+(markov-network.lino: 0.35 0.3 0.42 0.21 0.94 0.336 0.1344)
+
+(propositional-logic.lino: 0.3 0.6 0.18 0.72 0.7 0.072 0.8320000000000001)
+
+(self-reasoning.lino: 1 1 1 1 (type Logic) 0 0.5 0.5)
+
+(ternary-kleene.lino: 0.5 0 1 0.5 0.5 0.5)

@@ -71,7 +71,7 @@ cargo run -- ../examples/demo.lino
 
 Examples are language-agnostic and live in [`/examples/`](./examples/). Both
 implementations execute the same files and are required to produce identical
-output (enforced by `examples/expected.json` and the shared-examples tests).
+output (enforced by `examples/expected.lino` and the shared-examples tests).
 
 ### Example
 
@@ -405,7 +405,7 @@ This means ADL can serve as a **meta-theory** for both classical and non-classic
 
 ## Examples
 
-Example `.lino` files are available in the shared root [`examples/`](./examples/) directory. They are executed by both the JavaScript and the Rust implementations, and the canonical outputs every implementation must reproduce live in [`examples/expected.json`](./examples/expected.json). Examples progress from standard, familiar logic systems to more advanced and non-standard constructions.
+Example `.lino` files are available in the shared root [`examples/`](./examples/) directory. They are executed by both the JavaScript and the Rust implementations, and the canonical outputs every implementation must reproduce live in [`examples/expected.lino`](./examples/expected.lino) — itself written in Links Notation, so the contract between the two implementations is expressed in the same language as the examples. Examples progress from standard, familiar logic systems to more advanced and non-standard constructions.
 
 ### Classical Logic (Boolean, 2-valued)
 
