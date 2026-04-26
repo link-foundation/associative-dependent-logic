@@ -21,10 +21,18 @@ cargo build
 cargo run -- <file.lino>
 ```
 
+The shared examples live at the repo root in [`/examples/`](../examples/) and
+both implementations are required to produce identical output for every file
+there. To run one:
+
+```bash
+cargo run -- ../examples/classical-logic.lino
+```
+
 Or after building:
 
 ```bash
-./target/release/rml <file.lino>
+./target/release/rml ../examples/classical-logic.lino
 ```
 
 ### Example

@@ -59,15 +59,19 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 ```bash
 cd js
 npm install
-node src/rml-links.mjs demo.lino
+node src/rml-links.mjs ../examples/demo.lino
 ```
 
 ### Rust
 
 ```bash
 cd rust
-cargo run -- demo.lino
+cargo run -- ../examples/demo.lino
 ```
+
+Examples are language-agnostic and live in [`/examples/`](./examples/). Both
+implementations execute the same files and are required to produce identical
+output (enforced by `examples/expected.json` and the shared-examples tests).
 
 ### Example
 
@@ -401,7 +405,7 @@ This means ADL can serve as a **meta-theory** for both classical and non-classic
 
 ## Examples
 
-Example `.lino` files are available in both `js/examples/` and `rust/examples/` directories. Examples progress from standard, familiar logic systems to more advanced and non-standard constructions.
+Example `.lino` files are available in the shared root [`examples/`](./examples/) directory. They are executed by both the JavaScript and the Rust implementations, and the canonical outputs every implementation must reproduce live in [`examples/expected.json`](./examples/expected.json). Examples progress from standard, familiar logic systems to more advanced and non-standard constructions.
 
 ### Classical Logic (Boolean, 2-valued)
 
@@ -517,7 +521,7 @@ See `examples/liar-paradox-balanced.lino` — resolution in `[-1, 1]` range:
 
 ### Custom Operators (avg semantics)
 
-See `demo.lino` — demonstrates the configurable nature of operators with avg-based AND:
+See `examples/demo.lino` — demonstrates the configurable nature of operators with avg-based AND:
 
 ```lino
 (a: a is a)
@@ -532,7 +536,7 @@ See `demo.lino` — demonstrates the configurable nature of operators with avg-b
 (? ((a = a) or  (a != a)))   # -> 1
 ```
 
-See `flipped-axioms.lino` — demonstrates that the system handles arbitrary probability assignments:
+See `examples/flipped-axioms.lino` — demonstrates that the system handles arbitrary probability assignments:
 
 ```lino
 (a: a is a)

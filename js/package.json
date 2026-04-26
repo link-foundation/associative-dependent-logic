@@ -6,7 +6,7 @@
   "main": "src/rml-links.mjs",
   "scripts": {
     "test": "node --test",
-    "demo": "node src/rml-links.mjs demo.lino"
+    "demo": "node src/rml-links.mjs ../examples/demo.lino"
   },
   "keywords": [
     "logic",

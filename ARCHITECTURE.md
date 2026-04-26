@@ -9,30 +9,40 @@ This document describes the internal architecture of **Relative Meta-Logic (RML,
 ├── ARCHITECTURE.md          # This file
 ├── README.md                # Project overview, syntax, and examples
 ├── LICENSE                  # Unlicense (public domain)
+├── examples/                # Shared .lino knowledge bases (run by both langs)
+│   ├── README.md
+│   ├── expected.json        # Canonical outputs both implementations must match
+│   ├── classical-logic.lino
+│   ├── propositional-logic.lino
+│   ├── fuzzy-logic.lino
+│   ├── ternary-kleene.lino
+│   ├── belnap-four-valued.lino
+│   ├── liar-paradox.lino
+│   ├── liar-paradox-balanced.lino
+│   ├── bayesian-inference.lino
+│   ├── bayesian-network.lino
+│   ├── markov-chain.lino
+│   ├── markov-network.lino
+│   ├── self-reasoning.lino
+│   ├── dependent-types.lino
+│   ├── demo.lino
+│   └── flipped-axioms.lino
 ├── js/                      # JavaScript implementation
 │   ├── package.json
 │   ├── src/
-│   │   └── rml-links.mjs   # Core implementation (~370 lines)
-│   ├── test/
-│   │   └── adl-links.test.mjs  # 122 tests
-│   ├── demo.lino
-│   ├── flipped-axioms.lino
-│   └── examples/
-│       ├── liar-paradox.lino
-│       ├── liar-paradox-balanced.lino
-│       └── ternary-kleene.lino
+│   │   └── rml-links.mjs    # Core implementation
+│   └── tests/
+│       ├── rml-links.test.mjs
+│       └── shared-examples.test.mjs   # Runs every /examples/*.lino file
 └── rust/                    # Rust implementation
     ├── Cargo.toml
     ├── Cargo.lock
     ├── src/
-    │   ├── lib.rs           # Core implementation + 122 tests
-    │   └── main.rs          # CLI entry point (~25 lines)
-    ├── demo.lino
-    ├── flipped-axioms.lino
-    └── examples/
-        ├── liar-paradox.lino
-        ├── liar-paradox-balanced.lino
-        └── ternary-kleene.lino
+    │   ├── lib.rs           # Core implementation
+    │   └── main.rs          # CLI entry point
+    └── tests/
+        ├── rml_tests.rs
+        └── shared_examples.rs         # Runs every /examples/*.lino file
 ```
 
 Both implementations are equivalent: they pass the same 122 tests and produce identical results for all inputs.
