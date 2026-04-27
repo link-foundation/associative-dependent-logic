@@ -21,7 +21,15 @@ npm install
 node src/rml-links.mjs <file.lino>
 ```
 
-Or use the npm script:
+The shared examples live at the repo root in [`/examples/`](../examples/) and
+both implementations are required to produce identical output for every file
+there. To run one:
+
+```bash
+node src/rml-links.mjs ../examples/classical-logic.lino
+```
+
+Or use the npm script (runs `../examples/demo.lino`):
 
 ```bash
 npm run demo

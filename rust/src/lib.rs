@@ -17,20 +17,46 @@ use std::fmt;
 // Uses the official links-notation crate for parsing LiNo text.
 // See: https://github.com/link-foundation/links-notation
 
+// Find the index of an inline comment marker `#` that follows a `)` plus
+// whitespace, mirroring the JS regex `(\)[ \t]+)#.*$`.
+fn inline_comment_index(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut last_close: Option<usize> = None;
+    for (i, b) in bytes.iter().enumerate() {
+        match *b {
+            b')' => last_close = Some(i),
+            b'#' => {
+                if let Some(close_idx) = last_close {
+                    let between = &line[close_idx + 1..i];
+                    if !between.is_empty() && between.chars().all(|c| c == ' ' || c == '\t') {
+                        return Some(i);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Parse LiNo text into a vector of link strings (each a top-level parenthesized expression).
 pub fn parse_lino(text: &str) -> Vec<String> {
-    // Strip line comments (# ...) before parsing — LiNo parser doesn't handle them
+    // Strip both full-line and inline comments (# ...) before parsing —
+    // the LiNo parser doesn't handle them and an inline comment containing a
+    // colon would otherwise be misread as a binding.
     let stripped: String = text
         .lines()
         .map(|line| {
-            let trimmed = line.trim();
+            let trimmed = line.trim_start();
             if trimmed.starts_with('#') {
-                ""
+                String::new()
+            } else if let Some(idx) = inline_comment_index(line) {
+                line[..idx].trim_end().to_string()
             } else {
-                line
+                line.to_string()
             }
         })
-        .collect::<Vec<&str>>()
+        .collect::<Vec<String>>()
         .join("\n");
 
     // The links-notation crate treats blank lines as group separators,

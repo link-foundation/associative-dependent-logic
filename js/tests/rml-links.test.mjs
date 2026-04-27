@@ -266,6 +266,21 @@ describe('run', () => {
     assert.strictEqual(results.length, 1);
     assert.strictEqual(results[0], 1);
   });
+
+  it('handles inline comments that contain colons', () => {
+    // Cross-implementation regression: a `:` inside an inline comment used
+    // to confuse the Rust parser into dropping every statement in the file.
+    // The JS parser already stripped these correctly; this test pins the
+    // shared behaviour. See docs/case-studies/issue-68.
+    const text = `
+(? true)                  # comment with: colon
+(? false)                 # another: comment
+`;
+    const results = run(text);
+    assert.strictEqual(results.length, 2);
+    assert.strictEqual(results[0], 1);
+    assert.strictEqual(results[1], 0);
+  });
 });
 
 describe('meta-expression adapter API', () => {
