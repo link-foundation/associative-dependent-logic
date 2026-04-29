@@ -825,11 +825,14 @@ function computeFormSpans(text, file) {
 // New structured evaluator: returns { results, diagnostics }. Existing
 // callers can keep using `run`, which now delegates to this and surfaces only
 // the result list (preserving its previous signature for tests/CLI consumers).
+//
+// `options.env` may be an existing `Env` instance (used by the REPL to
+// preserve state across inputs) or a plain options object passed to `new Env`.
 function evaluate(code, options) {
   const opts = options || {};
   const file = opts.file || null;
   const sourceText = String(code);
-  const env = new Env(opts.env || opts);
+  const env = opts.env instanceof Env ? opts.env : new Env(opts.env || opts);
   const results = [];
   const diagnostics = [];
 
@@ -1065,15 +1068,23 @@ function run(text, options){
   return outs;
 }
 
-// CLI
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const file = process.argv[2];
-  if (!file) {
-    console.error('Usage: node src/rml-links.mjs <kb.lino>');
+// CLI (runs only when invoked directly, not when imported as a library).
+// The REPL subcommand lives in `./rml-cli.mjs` so we can `await import` it
+// without triggering an ESM circular-dependency deadlock.
+async function runCli() {
+  const arg = process.argv[2];
+  if (!arg) {
+    console.error('Usage: rml <kb.lino>   |   rml repl');
     process.exit(1);
   }
-  const text = fs.readFileSync(file, 'utf8');
-  const { results, diagnostics } = evaluate(text, { file });
+  if (arg === 'repl') {
+    const replUrl = new URL('./rml-repl.mjs', import.meta.url).href;
+    const { runRepl } = await import(replUrl);
+    await runRepl();
+    return;
+  }
+  const text = fs.readFileSync(arg, 'utf8');
+  const { results, diagnostics } = evaluate(text, { file: arg });
   for (const v of results) {
     if (typeof v === 'string') {
       console.log(v);
@@ -1085,6 +1096,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.error(formatDiagnostic(diag, text));
   }
   if (diagnostics.length > 0) process.exit(1);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runCli().catch(err => {
+    console.error(err && err.stack ? err.stack : err);
+    process.exit(1);
+  });
 }
 
 export {

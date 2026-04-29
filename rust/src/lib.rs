@@ -1883,6 +1883,13 @@ pub enum RunResult {
 /// full code list.  Errors do not abort evaluation: independent forms
 /// continue to be processed after a failing one.
 pub fn evaluate(text: &str, file: Option<&str>, options: Option<EnvOptions>) -> EvaluateResult {
+    let mut env = Env::new(options);
+    evaluate_with_env(text, file, &mut env)
+}
+
+/// Variant of [`evaluate`] that runs against a caller-owned `Env` instead of
+/// allocating a fresh one.  Used by the REPL to preserve state across inputs.
+pub fn evaluate_with_env(text: &str, file: Option<&str>, env: &mut Env) -> EvaluateResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let spans = compute_form_spans(text, file);
 
@@ -1909,7 +1916,6 @@ pub fn evaluate(text: &str, file: Option<&str>, options: Option<EnvOptions>) -> 
         })
         .collect();
 
-    let mut env = Env::new(options);
     let mut results: Vec<RunResult> = Vec::new();
 
     // Silence the default panic hook while we deliberately catch evaluator
@@ -1935,7 +1941,7 @@ pub fn evaluate(text: &str, file: Option<&str>, options: Option<EnvOptions>) -> 
             .get(idx)
             .cloned()
             .unwrap_or_else(|| Span::new(file.map(|s| s.to_string()), 1, 1, 0));
-        let result = catch_unwind(AssertUnwindSafe(|| eval_node(&form, &mut env)));
+        let result = catch_unwind(AssertUnwindSafe(|| eval_node(&form, env)));
         match result {
             Ok(EvalResult::Query(v)) => results.push(RunResult::Num(v)),
             Ok(EvalResult::TypeQuery(s)) => results.push(RunResult::Type(s)),
@@ -2063,3 +2069,5 @@ pub fn run(text: &str, options: Option<EnvOptions>) -> Vec<f64> {
 
 // Tests are in the tests/ directory (integration tests).
 // To run: cargo test
+
+pub mod repl;
