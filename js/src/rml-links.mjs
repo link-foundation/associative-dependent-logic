@@ -12,6 +12,7 @@
 // - Query: (? <expr>)
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { Parser } from 'links-notation';
 
 // ---------- Structured Diagnostics ----------
@@ -923,6 +924,12 @@ function evaluate(code, options) {
     };
   }
 
+  // Import context: a stack of canonical paths currently being loaded (cycle
+  // detection) and a set of canonical paths already loaded into this env
+  // (caching for diamond patterns). Both are reused across recursive calls.
+  const importStack = opts._importStack || [];
+  const importedFiles = opts._importedFiles || new Set();
+
   // Pre-compute spans for each top-level form so error reporting can attach
   // a real source location even when the parser/evaluator throw deep inside.
   const formSpans = computeFormSpans(sourceText, file);
@@ -947,6 +954,15 @@ function evaluate(code, options) {
     }
     const span = formSpans[idx] || { file, line: 1, col: 1, length: 0 };
     env._currentSpan = span;
+
+    // Handle (import <path>) at the top level — file-level directive, not a
+    // regular RML expression.
+    if (Array.isArray(form) && form.length === 2 && form[0] === 'import') {
+      const importDiag = handleImport(form[1], span, file, env, importStack, importedFiles, diagnostics, traceEnabled, trace);
+      if (importDiag) diagnostics.push(importDiag);
+      continue;
+    }
+
     try {
       const res = evalNode(form, env);
       if (traceEnabled) {
@@ -975,6 +991,120 @@ function evaluate(code, options) {
   const out = { results, diagnostics };
   if (traceEnabled) out.trace = trace;
   return out;
+}
+
+// ---------- File imports (issue #33) ----------
+// Strip surrounding quotes (LiNo passes them through unmodified for some
+// shapes; the LiNo parser strips double-quotes for most inputs).
+function _unquotePath(s) {
+  if (typeof s !== 'string') return s;
+  if (s.length >= 2 && (s[0] === '"' || s[0] === "'") && s[s.length - 1] === s[0]) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
+// Resolve an import target relative to the importing file's directory.
+// When `importingFile` is null (e.g. evaluating a string literal in tests),
+// resolve relative to the current working directory.
+function _resolveImportPath(target, importingFile) {
+  const cleaned = _unquotePath(target);
+  if (path.isAbsolute(cleaned)) return path.resolve(cleaned);
+  const baseDir = importingFile ? path.dirname(path.resolve(importingFile)) : process.cwd();
+  return path.resolve(baseDir, cleaned);
+}
+
+// Process a top-level (import <path>) directive. Returns a Diagnostic or null.
+function handleImport(rawTarget, span, importingFile, env, importStack, importedFiles, diagnostics, traceEnabled, trace) {
+  const target = _unquotePath(rawTarget);
+  if (typeof target !== 'string' || !target) {
+    return new Diagnostic({
+      code: 'E007',
+      message: 'Import target must be a string path',
+      span,
+    });
+  }
+  const resolved = _resolveImportPath(target, importingFile);
+
+  // Cycle detection: if the resolved path is already on the active import
+  // stack, the import would loop forever.
+  if (importStack.includes(resolved)) {
+    const cycle = [...importStack, resolved].join(' -> ');
+    return new Diagnostic({
+      code: 'E007',
+      message: `Import cycle detected: ${cycle}`,
+      span,
+    });
+  }
+
+  // Cache: each file is loaded once. Repeated imports (e.g. diamond pattern)
+  // are silent no-ops.
+  if (importedFiles.has(resolved)) {
+    if (traceEnabled && trace) {
+      trace.push(new TraceEvent({ kind: 'import', detail: `${resolved} (cached)`, span }));
+    }
+    return null;
+  }
+
+  let text;
+  try {
+    text = fs.readFileSync(resolved, 'utf8');
+  } catch (err) {
+    return new Diagnostic({
+      code: 'E007',
+      message: `Failed to read import "${target}": ${err.message}`,
+      span,
+    });
+  }
+
+  importedFiles.add(resolved);
+  importStack.push(resolved);
+  if (traceEnabled && trace) {
+    trace.push(new TraceEvent({ kind: 'import', detail: resolved, span }));
+  }
+
+  const inner = evaluate(text, {
+    env,
+    file: resolved,
+    trace: traceEnabled,
+    _importStack: importStack,
+    _importedFiles: importedFiles,
+  });
+
+  importStack.pop();
+
+  // Forward inner diagnostics so the importer surfaces errors from the
+  // imported file with their original spans intact.
+  for (const diag of inner.diagnostics) diagnostics.push(diag);
+  if (traceEnabled && trace && Array.isArray(inner.trace)) {
+    for (const ev of inner.trace) trace.push(ev);
+  }
+  return null;
+}
+
+// Read a file from disk and evaluate it, honouring (import ...) directives.
+// Mirrors `evaluate()` but takes a path on disk and resolves relative imports
+// against the file's directory.
+function evaluateFile(filePath, options) {
+  const opts = options || {};
+  const resolved = path.resolve(filePath);
+  let text;
+  try {
+    text = fs.readFileSync(resolved, 'utf8');
+  } catch (err) {
+    const diag = new Diagnostic({
+      code: 'E007',
+      message: `Failed to read "${filePath}": ${err.message}`,
+      span: { file: filePath, line: 1, col: 1, length: 0 },
+    });
+    return { results: [], diagnostics: [diag] };
+  }
+  return evaluate(text, {
+    ...opts,
+    file: resolved,
+    _importStack: opts._importStack || [resolved],
+    _importedFiles: opts._importedFiles || new Set([resolved]),
+  });
 }
 
 // ---------- Meta-expression adapter ----------
@@ -1225,6 +1355,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 export {
   run,
   evaluate,
+  evaluateFile,
   Diagnostic,
   RmlError,
   TraceEvent,

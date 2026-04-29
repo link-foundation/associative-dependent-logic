@@ -12,7 +12,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 
 // ========== Structured Diagnostics ==========
 // Every parser/evaluator error is reported as a `Diagnostic` with an error
@@ -2041,17 +2043,200 @@ pub fn evaluate_with_options(
     let mut env = Env::new(options.env.clone());
     env.trace_enabled = options.trace;
     env.default_span = Span::new(file.map(|s| s.to_string()), 1, 1, 0);
-    evaluate_inner(text, file, &mut env, &options)
+    let mut ctx = ImportContext::default();
+    evaluate_inner(text, file, &mut env, &options, &mut ctx)
 }
 
 /// Variant of [`evaluate`] that runs against a caller-owned `Env` instead of
 /// allocating a fresh one.  Used by the REPL to preserve state across inputs.
 pub fn evaluate_with_env(text: &str, file: Option<&str>, env: &mut Env) -> EvaluateResult {
     let options = EvaluateOptions::default();
-    evaluate_inner(text, file, env, &options)
+    let mut ctx = ImportContext::default();
+    evaluate_inner(text, file, env, &options, &mut ctx)
 }
 
-fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &EvaluateOptions) -> EvaluateResult {
+/// Read a file from disk and evaluate it, honouring `(import "...")` directives.
+/// Mirrors `evaluate()` but takes a path on disk; relative imports inside the
+/// file are resolved against the file's directory. A missing file is reported
+/// as an `E007` diagnostic instead of an OS error.
+pub fn evaluate_file(file_path: &str, options: EvaluateOptions) -> EvaluateResult {
+    let resolved: PathBuf = match fs::canonicalize(file_path) {
+        Ok(p) => p,
+        Err(_) => Path::new(file_path).to_path_buf(),
+    };
+    let text = match fs::read_to_string(&resolved) {
+        Ok(t) => t,
+        Err(err) => {
+            let diag = Diagnostic::new(
+                "E007",
+                format!("Failed to read \"{}\": {}", file_path, err),
+                Span::new(Some(file_path.to_string()), 1, 1, 0),
+            );
+            return EvaluateResult {
+                results: Vec::new(),
+                diagnostics: vec![diag],
+                trace: Vec::new(),
+            };
+        }
+    };
+    let mut env = Env::new(options.env.clone());
+    env.trace_enabled = options.trace;
+    let resolved_str = resolved.to_string_lossy().into_owned();
+    env.default_span = Span::new(Some(resolved_str.clone()), 1, 1, 0);
+    let mut ctx = ImportContext::default();
+    ctx.stack.push(resolved.clone());
+    ctx.loaded.insert(resolved.clone());
+    evaluate_inner(&text, Some(&resolved_str), &mut env, &options, &mut ctx)
+}
+
+/// Internal state threaded through nested `(import ...)` evaluations.
+/// `stack` is the chain of files currently being loaded (for cycle detection);
+/// `loaded` is the set of canonical paths already evaluated into the current
+/// env (for diamond-import caching).
+#[derive(Default)]
+struct ImportContext {
+    stack: Vec<PathBuf>,
+    loaded: HashSet<PathBuf>,
+}
+
+/// Strip surrounding ASCII quotes from a path string. The LiNo parser strips
+/// `"..."` for most inputs but `'...'` may also appear when whitespace forced
+/// a quote conversion; either form is accepted.
+fn unquote_path(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2
+        && (bytes[0] == b'"' || bytes[0] == b'\'')
+        && bytes[bytes.len() - 1] == bytes[0]
+    {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+/// Resolve an import target relative to the importing file's directory.
+/// When `importing_file` is `None`, resolve relative to the current working
+/// directory.
+fn resolve_import_path(target: &str, importing_file: Option<&str>) -> PathBuf {
+    let cleaned = unquote_path(target);
+    let candidate = Path::new(cleaned);
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
+    }
+    let base_dir: PathBuf = if let Some(file) = importing_file {
+        Path::new(file)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    };
+    base_dir.join(candidate)
+}
+
+/// Canonicalise an import path; falls back to the unresolved path when the
+/// file does not exist (so missing-file diagnostics still carry a meaningful
+/// path, and cycle keys stay consistent).
+fn canonicalize_import(p: &Path) -> PathBuf {
+    fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Process a top-level `(import <path>)` directive. Reads the imported file
+/// and evaluates its contents against the same `env`, threading the import
+/// context for cycle detection and caching. Returns a `Diagnostic` if the
+/// import itself fails (cycle, missing file, bad target).
+fn handle_import(
+    target_node: &Node,
+    span: &Span,
+    importing_file: Option<&str>,
+    env: &mut Env,
+    options: &EvaluateOptions,
+    ctx: &mut ImportContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Diagnostic> {
+    let raw = match target_node {
+        Node::Leaf(s) => s.clone(),
+        _ => {
+            return Some(Diagnostic::new(
+                "E007",
+                "Import target must be a string path",
+                span.clone(),
+            ));
+        }
+    };
+    let cleaned = unquote_path(&raw);
+    if cleaned.is_empty() {
+        return Some(Diagnostic::new(
+            "E007",
+            "Import target must be a non-empty string path",
+            span.clone(),
+        ));
+    }
+    let unresolved = resolve_import_path(&raw, importing_file);
+    let resolved = canonicalize_import(&unresolved);
+
+    if ctx.stack.iter().any(|p| p == &resolved) {
+        let mut chain: Vec<String> = ctx
+            .stack
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        chain.push(resolved.to_string_lossy().into_owned());
+        return Some(Diagnostic::new(
+            "E007",
+            format!("Import cycle detected: {}", chain.join(" -> ")),
+            span.clone(),
+        ));
+    }
+
+    if ctx.loaded.contains(&resolved) {
+        if options.trace {
+            env.trace_events.push(TraceEvent::new(
+                "import",
+                format!("{} (cached)", resolved.to_string_lossy()),
+                span.clone(),
+            ));
+        }
+        return None;
+    }
+
+    let text = match fs::read_to_string(&resolved) {
+        Ok(t) => t,
+        Err(err) => {
+            return Some(Diagnostic::new(
+                "E007",
+                format!("Failed to read import \"{}\": {}", cleaned, err),
+                span.clone(),
+            ));
+        }
+    };
+
+    ctx.loaded.insert(resolved.clone());
+    ctx.stack.push(resolved.clone());
+    if options.trace {
+        env.trace_events.push(TraceEvent::new(
+            "import",
+            resolved.to_string_lossy().into_owned(),
+            span.clone(),
+        ));
+    }
+
+    let resolved_str = resolved.to_string_lossy().into_owned();
+    let inner = evaluate_inner(&text, Some(&resolved_str), env, options, ctx);
+    ctx.stack.pop();
+
+    for diag in inner.diagnostics {
+        diagnostics.push(diag);
+    }
+    // The inner evaluator drained env.trace_events into inner.trace; restore
+    // them so the outer call surfaces them in source order.
+    if options.trace {
+        env.trace_events.extend(inner.trace);
+    }
+    None
+}
+
+fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &EvaluateOptions, ctx: &mut ImportContext) -> EvaluateResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let spans = compute_form_spans(text, file);
 
@@ -2104,6 +2289,26 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
             .cloned()
             .unwrap_or_else(|| Span::new(file.map(|s| s.to_string()), 1, 1, 0));
         env.current_span = Some(span.clone());
+
+        // Top-level (import <path>) directive — handled before regular
+        // evaluation so it can recursively call evaluate_inner against the
+        // same env while threading the import context.
+        if let Node::List(children) = &form {
+            if children.len() == 2 {
+                if let Node::Leaf(head) = &children[0] {
+                    if head == "import" {
+                        let target = children[1].clone();
+                        if let Some(diag) =
+                            handle_import(&target, &span, file, env, options, ctx, &mut diagnostics)
+                        {
+                            diagnostics.push(diag);
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
+
         // We need to capture the form so the eval-trace event can reference it
         // by canonical key. Cloning is cheap: AST nodes are small strings.
         let form_for_trace = if options.trace {
