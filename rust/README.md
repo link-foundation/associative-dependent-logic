@@ -54,7 +54,8 @@ Or after building:
 
 ```rust
 use rml::{
-    run, tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round,
+    run, evaluate, format_diagnostic, Diagnostic, EvaluateResult, RunResult, Span,
+    tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round,
     formalize_selected_interpretation, evaluate_formalization,
     FormalizationRequest, Interpretation,
 };
@@ -64,6 +65,13 @@ let results = run(lino_text, None);
 
 // Run with custom range and valence
 let results2 = run(lino_text, Some(EnvOptions { lo: -1.0, hi: 1.0, valence: 3 }));
+
+// Structured evaluation: never panics, returns diagnostics for every error.
+// See ../docs/DIAGNOSTICS.md for the error-code table.
+let evaluation = evaluate(lino_text, Some("kb.lino"), None);
+for diag in &evaluation.diagnostics {
+    eprintln!("{}", format_diagnostic(diag, Some(lino_text)));
+}
 
 // Parse and evaluate individual expressions
 let mut env = Env::new(Some(EnvOptions { lo: 0.0, hi: 1.0, valence: 3 }));

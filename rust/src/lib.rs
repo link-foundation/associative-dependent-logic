@@ -12,6 +12,145 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+// ========== Structured Diagnostics ==========
+// Every parser/evaluator error is reported as a `Diagnostic` with an error
+// code, human-readable message, and source span (file/line/col, 1-based).
+// See `docs/DIAGNOSTICS.md` for the full code list.
+
+/// A source span: 1-based `line`/`col`, optional file path, and a `length`
+/// of the offending region (used to render carets in the CLI).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Span {
+    pub file: Option<String>,
+    pub line: usize,
+    pub col: usize,
+    pub length: usize,
+}
+
+impl Span {
+    pub fn new(file: Option<String>, line: usize, col: usize, length: usize) -> Self {
+        Self {
+            file,
+            line,
+            col,
+            length,
+        }
+    }
+
+    pub fn unknown() -> Self {
+        Self {
+            file: None,
+            line: 1,
+            col: 1,
+            length: 0,
+        }
+    }
+}
+
+/// A single diagnostic emitted by parser, evaluator, or type checker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Diagnostic {
+    pub code: String,
+    pub message: String,
+    pub span: Span,
+}
+
+impl Diagnostic {
+    pub fn new(code: &str, message: impl Into<String>, span: Span) -> Self {
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+            span,
+        }
+    }
+}
+
+/// Result of `evaluate(src)`: a list of query results (numeric or type) plus
+/// any diagnostics emitted while parsing/evaluating.
+#[derive(Debug, Clone, Default)]
+pub struct EvaluateResult {
+    pub results: Vec<RunResult>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Format a diagnostic for human-readable CLI output:
+///     `<file>:<line>:<col>: <CODE>: <message>`
+///         `<source line>`
+///         `^`
+pub fn format_diagnostic(diag: &Diagnostic, source: Option<&str>) -> String {
+    let file = diag.span.file.as_deref().unwrap_or("<input>");
+    let mut out = format!(
+        "{}:{}:{}: {}: {}",
+        file, diag.span.line, diag.span.col, diag.code, diag.message
+    );
+    if let Some(src) = source {
+        let lines: Vec<&str> = src.split('\n').collect();
+        if diag.span.line >= 1 && diag.span.line <= lines.len() {
+            let line_text = lines[diag.span.line - 1];
+            out.push('\n');
+            out.push_str(line_text);
+            out.push('\n');
+            let pad = diag.span.col.saturating_sub(1);
+            let caret_count = diag.span.length.max(1);
+            out.push_str(&" ".repeat(pad));
+            out.push_str(&"^".repeat(caret_count));
+        }
+    }
+    out
+}
+
+/// Compute (line, col) source positions for every top-level link in `text`.
+/// Mirrors `compute_form_spans` in the JavaScript implementation.
+pub fn compute_form_spans(text: &str, file: Option<&str>) -> Vec<Span> {
+    let mut spans = Vec::new();
+    let mut depth: i32 = 0;
+    let mut line: usize = 1;
+    let mut col: usize = 1;
+    let mut pending_start: Option<(usize, usize)> = None;
+    let mut in_line_comment = false;
+    let mut line_start_idx: usize = 0;
+    let bytes = text.as_bytes();
+    for (off, &b) in bytes.iter().enumerate() {
+        let ch = b as char;
+        if ch == '\n' {
+            in_line_comment = false;
+            line += 1;
+            col = 1;
+            line_start_idx = off + 1;
+            continue;
+        }
+        if in_line_comment {
+            col += 1;
+            continue;
+        }
+        if ch == '#' && depth == 0 {
+            // Determine if the line so far contains only whitespace.
+            let line_so_far = &text[line_start_idx..off];
+            if line_so_far.chars().all(|c| c == ' ' || c == '\t') {
+                in_line_comment = true;
+                col += 1;
+                continue;
+            }
+        }
+        if ch == '(' {
+            if depth == 0 {
+                pending_start = Some((line, col));
+            }
+            depth += 1;
+        } else if ch == ')' {
+            depth -= 1;
+            if depth == 0 {
+                if let Some((sl, sc)) = pending_start.take() {
+                    spans.push(Span::new(file.map(|s| s.to_string()), sl, sc, 1));
+                }
+            }
+        }
+        col += 1;
+    }
+    spans
+}
 
 // ========== LiNo Parser ==========
 // Uses the official links-notation crate for parsing LiNo text.
@@ -1288,6 +1427,13 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
                     );
                     return EvalResult::Value(1.0);
                 }
+                // Mirror JS behavior: surface a diagnostic for the missing op.
+                if !env.ops.contains_key(outer.as_str()) {
+                    panic!("Unknown op: {}", outer);
+                }
+                if !env.ops.contains_key(inner.as_str()) {
+                    panic!("Unknown op: {}", inner);
+                }
             }
         }
 
@@ -1727,6 +1873,106 @@ pub fn evaluate_formalization(formalization: &Formalization) -> FormalizationEva
 pub enum RunResult {
     Num(f64),
     Type(String),
+}
+
+/// Evaluate a complete LiNo knowledge base and return both results and any
+/// diagnostics emitted by the parser, evaluator, or type checker.
+///
+/// Each diagnostic carries a code (`E001`, `E002`, ...), a message, and a
+/// source span (1-based line/col).  See `docs/DIAGNOSTICS.md` for the
+/// full code list.  Errors do not abort evaluation: independent forms
+/// continue to be processed after a failing one.
+pub fn evaluate(text: &str, file: Option<&str>, options: Option<EnvOptions>) -> EvaluateResult {
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    let spans = compute_form_spans(text, file);
+
+    let links = parse_lino(text);
+    let forms: Vec<Node> = links
+        .iter()
+        .filter(|link_str| {
+            let s = link_str.trim();
+            !(s.starts_with("(#") && s.chars().nth(2).map_or(false, |c| c.is_whitespace()))
+        })
+        .filter_map(|link_str| {
+            let toks = tokenize_one(link_str);
+            match parse_one(&toks) {
+                Ok(node) => Some(node),
+                Err(msg) => {
+                    diagnostics.push(Diagnostic::new(
+                        "E002",
+                        msg,
+                        Span::new(file.map(|s| s.to_string()), 1, 1, 0),
+                    ));
+                    None
+                }
+            }
+        })
+        .collect();
+
+    let mut env = Env::new(options);
+    let mut results: Vec<RunResult> = Vec::new();
+
+    // Silence the default panic hook while we deliberately catch evaluator
+    // panics — otherwise they'd leak to stderr alongside the diagnostics.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
+    for (idx, form) in forms.into_iter().enumerate() {
+        let mut form = form;
+        loop {
+            match form {
+                Node::List(ref children) if children.len() == 1 => {
+                    if let Node::List(_) = &children[0] {
+                        form = children[0].clone();
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let span = spans
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| Span::new(file.map(|s| s.to_string()), 1, 1, 0));
+        let result = catch_unwind(AssertUnwindSafe(|| eval_node(&form, &mut env)));
+        match result {
+            Ok(EvalResult::Query(v)) => results.push(RunResult::Num(v)),
+            Ok(EvalResult::TypeQuery(s)) => results.push(RunResult::Type(s)),
+            Ok(_) => {}
+            Err(payload) => {
+                let (code, message) = decode_panic_payload(&payload);
+                diagnostics.push(Diagnostic::new(&code, message, span));
+            }
+        }
+    }
+
+    std::panic::set_hook(prev_hook);
+
+    EvaluateResult {
+        results,
+        diagnostics,
+    }
+}
+
+/// Map a panic payload to a diagnostic `(code, message)` pair.  Known panic
+/// messages emitted by the evaluator are mapped to the canonical `E001`/etc.
+/// codes; anything else falls back to `E000`.
+fn decode_panic_payload(payload: &Box<dyn std::any::Any + Send>) -> (String, String) {
+    let raw_msg: String = if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "evaluation panicked".to_string()
+    };
+    if raw_msg.starts_with("Unknown op:") {
+        ("E001".to_string(), raw_msg)
+    } else if raw_msg.starts_with("Unknown aggregator") {
+        ("E004".to_string(), raw_msg)
+    } else {
+        ("E000".to_string(), raw_msg)
+    }
 }
 
 /// Run a complete LiNo knowledge base and return query results (including type queries).

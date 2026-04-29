@@ -114,6 +114,32 @@ For consumers that start from a selected natural-language interpretation rather 
 
 The adapter currently supports explicit arithmetic equality and arithmetic value questions, plus direct LiNo/RML expressions. Real-world claims such as `moon orbits the Sun` remain non-computable until a caller provides selected entities, relations, evidence sources, and a formal shape.
 
+### Structured Diagnostics
+
+The `evaluate()` entry point in both implementations returns a structured
+result instead of throwing or panicking:
+
+| JavaScript | Rust |
+|------------|------|
+| `evaluate(code, options?)` → `{ results, diagnostics }` | `evaluate(text, file, options)` → `EvaluateResult { results, diagnostics }` |
+
+Each `Diagnostic` carries a stable error code (`E001`, `E002`, …), a
+human-readable message, and a 1-based source span (`{ file, line, col, length }`).
+Errors do not abort evaluation: independent forms continue to be processed
+after a failing one, so a single bad line does not silence valid queries
+elsewhere in the input.
+
+The Rust implementation bridges internal `panic!`s into diagnostics via
+`std::panic::catch_unwind`, with the default panic hook silenced for the
+duration of the call so stack traces never leak to stderr.
+
+The CLIs format diagnostics as `<file>:<line>:<col>: <CODE>: <message>`
+with the source line and a caret beneath the offending column, and exit
+non-zero whenever any diagnostic is emitted.
+
+See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md) for the complete code
+table and instructions for adding new codes.
+
 ## Environment (`Env`)
 
 The environment holds all mutable state during evaluation:

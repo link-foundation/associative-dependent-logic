@@ -14,6 +14,49 @@
 import fs from 'node:fs';
 import { Parser } from 'links-notation';
 
+// ---------- Structured Diagnostics ----------
+// Every parser/evaluator error is reported as a `Diagnostic` with an error
+// code, human-readable message, and source span (file/line/col, 1-based).
+// See `docs/DIAGNOSTICS.md` for the full code list.
+class Diagnostic {
+  constructor({ code, message, span }) {
+    this.code = code;
+    this.message = message;
+    this.span = span || { file: null, line: 1, col: 1, length: 0 };
+  }
+}
+
+// Internal error class used to carry a code + span across throw sites so the
+// outer `evaluate()` boundary can convert them into Diagnostics.
+class RmlError extends Error {
+  constructor(code, message, span) {
+    super(message);
+    this.name = 'RmlError';
+    this.code = code;
+    this.span = span || null;
+  }
+}
+
+// Format a diagnostic for human-readable CLI output:
+//   <file>:<line>:<col>: <CODE>: <message>
+//       <source line>
+//       ^
+function formatDiagnostic(diag, sourceText) {
+  const span = diag.span || { file: null, line: 1, col: 1, length: 0 };
+  const file = span.file || '<input>';
+  const lines = [`${file}:${span.line}:${span.col}: ${diag.code}: ${diag.message}`];
+  if (typeof sourceText === 'string') {
+    const srcLines = sourceText.split('\n');
+    const lineText = srcLines[span.line - 1];
+    if (lineText !== undefined) {
+      lines.push(lineText);
+      const caretCount = Math.max(1, span.length || 1);
+      lines.push(' '.repeat(Math.max(0, span.col - 1)) + '^'.repeat(caretCount));
+    }
+  }
+  return lines.join('\n');
+}
+
 // ---------- helpers: canonical keys & tokenization of a single link string ----------
 function tokenizeOne(s) {
   // s is a single-link string like "( (a = a) has probability 1 )"
@@ -51,19 +94,19 @@ function tokenizeOne(s) {
 function parseOne(tokens) {
   let i = 0;
   function read() {
-    if (tokens[i] !== '(') throw new Error('expected "("');
+    if (tokens[i] !== '(') throw new RmlError('E002', 'expected "("');
     i++;
     const arr = [];
     while (i < tokens.length && tokens[i] !== ')') {
       if (tokens[i] === '(') arr.push(read());
       else { arr.push(tokens[i]); i++; }
     }
-    if (tokens[i] !== ')') throw new Error('expected ")"');
+    if (tokens[i] !== ')') throw new RmlError('E002', 'expected ")"');
     i++;
     return arr;
   }
   const ast = read();
-  if (i !== tokens.length) throw new Error('extra tokens after link');
+  if (i !== tokens.length) throw new RmlError('E002', 'extra tokens after link');
   return ast;
 }
 const isNum = s => /^-?(\d+(\.\d+)?|\.\d+)$/.test(s);
@@ -198,7 +241,7 @@ class Env {
   }
 
   getOp(name){
-    if (!this.ops.has(name)) throw new Error(`Unknown op: ${name}`);
+    if (!this.ops.has(name)) throw new RmlError('E001', `Unknown op: ${name}`);
     return this.ops.get(name);
   }
   defineOp(name, fn){ this.ops.set(name, fn); }
@@ -665,12 +708,12 @@ function defineForm(head, rhs, env){
         sel==='max' ? xs=>xs.length? Math.max(...xs) : lo :
         sel==='product' || sel==='prod' ? xs=>xs.reduce((a,b)=>a*b,1) :
         sel==='probabilistic_sum' || sel==='ps' ? xs=> 1 - xs.reduce((a,b)=>a*(1-b),1) : null;
-      if (!agg) throw new Error(`Unknown aggregator "${sel}"`);
+      if (!agg) throw new RmlError('E004', `Unknown aggregator "${sel}"`);
       env.defineOp(head, (...xs)=> xs.length? agg(xs) : lo);
       return 1;
     }
 
-    throw new Error(`Unsupported operator definition for "${head}"`);
+    throw new RmlError('E003', `Unsupported operator definition for "${head}"`);
   }
 
   // Lambda definition: (name: lambda (A x) body)
@@ -729,6 +772,103 @@ function parseLinoForms(text) {
     });
 }
 
+// Compute (line, col) source positions for every top-level link in `text`.
+// A "top-level link" is a parenthesized form that is not nested inside another;
+// position is reported as 1-based line and column of its opening `(`.
+// Lines starting with `#` are treated as full-line comments and ignored, just
+// like `stripLinoComments` does.
+function computeFormSpans(text, file) {
+  const spans = [];
+  const lines = text.split('\n');
+  // Track parenthesis depth across the whole text (top-level links never nest).
+  let depth = 0;
+  let lineNum = 1;
+  let colNum = 1;
+  let pendingStart = null; // {line, col, offset} for the next top-level link
+  let inLineComment = false;
+  for (let off = 0; off < text.length; off++) {
+    const ch = text[off];
+    if (ch === '\n') {
+      inLineComment = false;
+      lineNum++;
+      colNum = 1;
+      continue;
+    }
+    if (inLineComment) { colNum++; continue; }
+    // Detect a full-line comment (line begins with optional whitespace + #).
+    if (ch === '#' && depth === 0) {
+      // Check if the line so far contains only whitespace.
+      const lineSoFar = lines[lineNum - 1].slice(0, colNum - 1);
+      if (/^[ \t]*$/.test(lineSoFar)) {
+        inLineComment = true;
+        colNum++;
+        continue;
+      }
+    }
+    if (ch === '(') {
+      if (depth === 0) {
+        pendingStart = { line: lineNum, col: colNum };
+      }
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+      if (depth === 0 && pendingStart) {
+        spans.push({ file: file || null, line: pendingStart.line, col: pendingStart.col, length: 1 });
+        pendingStart = null;
+      }
+    }
+    colNum++;
+  }
+  return spans;
+}
+
+// New structured evaluator: returns { results, diagnostics }. Existing
+// callers can keep using `run`, which now delegates to this and surfaces only
+// the result list (preserving its previous signature for tests/CLI consumers).
+function evaluate(code, options) {
+  const opts = options || {};
+  const file = opts.file || null;
+  const sourceText = String(code);
+  const env = new Env(opts.env || opts);
+  const results = [];
+  const diagnostics = [];
+
+  // Pre-compute spans for each top-level form so error reporting can attach
+  // a real source location even when the parser/evaluator throw deep inside.
+  const formSpans = computeFormSpans(sourceText, file);
+
+  let forms;
+  try {
+    forms = parseLinoForms(sourceText);
+  } catch (err) {
+    const diag = err && err.code
+      ? new Diagnostic({ code: err.code, message: err.message, span: { file, line: 1, col: 1, length: 0 } })
+      : new Diagnostic({ code: 'E006', message: `LiNo parse failure: ${err && err.message ? err.message : String(err)}`, span: { file, line: 1, col: 1, length: 0 } });
+    diagnostics.push(diag);
+    return { results, diagnostics };
+  }
+
+  for (let idx = 0; idx < forms.length; idx++) {
+    let form = forms[idx];
+    while (Array.isArray(form) && form.length === 1 && Array.isArray(form[0])) {
+      form = form[0];
+    }
+    const span = formSpans[idx] || { file, line: 1, col: 1, length: 0 };
+    try {
+      const res = evalNode(form, env);
+      if (res && res.query) {
+        results.push(res.value);
+      }
+    } catch (err) {
+      const diagSpan = (err && err.span) || span;
+      const code = (err && err.code) || 'E000';
+      const message = err && err.message ? err.message : String(err);
+      diagnostics.push(new Diagnostic({ code, message, span: diagSpan }));
+    }
+  }
+  return { results, diagnostics };
+}
+
 // ---------- Meta-expression adapter ----------
 function normalizeInterpretation(interpretation) {
   if (!interpretation) return {};
@@ -761,7 +901,7 @@ function splitTopLevelEquals(expression) {
 
 function parseExpressionShape(expression, options = {}) {
   const trimmed = String(expression || '').trim();
-  if (!trimmed) throw new Error('empty expression');
+  if (!trimmed) throw new RmlError('E005', 'empty expression');
   const source = trimmed.startsWith('(') && trimmed.endsWith(')') ? trimmed : `(${trimmed})`;
   let ast = parseOne(tokenizeOne(source));
   while (
@@ -933,18 +1073,27 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
   const text = fs.readFileSync(file, 'utf8');
-  const outs = run(text);
-  for (const v of outs) {
+  const { results, diagnostics } = evaluate(text, { file });
+  for (const v of results) {
     if (typeof v === 'string') {
       console.log(v);
     } else {
       console.log(String(+v.toFixed(6)).replace(/\.0+$/,''));
     }
   }
+  for (const diag of diagnostics) {
+    console.error(formatDiagnostic(diag, text));
+  }
+  if (diagnostics.length > 0) process.exit(1);
 }
 
 export {
   run,
+  evaluate,
+  Diagnostic,
+  RmlError,
+  formatDiagnostic,
+  computeFormSpans,
   parseLino,
   tokenizeOne,
   parseOne,
