@@ -53,6 +53,7 @@ fn main() -> ExitCode {
         EvaluateOptions {
             env: None,
             trace,
+            ..EvaluateOptions::default()
         },
     );
     if trace {

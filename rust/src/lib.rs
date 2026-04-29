@@ -73,19 +73,31 @@ impl Diagnostic {
 /// any diagnostics emitted while parsing/evaluating. When tracing is enabled
 /// via `evaluate_with_options`, `trace` carries the deterministic sequence of
 /// `TraceEvent` values recorded during evaluation; otherwise it is empty.
+/// When proof production is enabled (via `EvaluateOptions::with_proofs` or
+/// any per-query `(? expr with proof)` keyword), `proofs[i]` carries a
+/// derivation tree for `results[i]`; bare queries that did not request a
+/// witness get `None` so the vec stays index-aligned with `results`.
+/// Mirrors the JavaScript `{results, diagnostics, trace, proofs}` shape.
 #[derive(Debug, Clone, Default)]
 pub struct EvaluateResult {
     pub results: Vec<RunResult>,
     pub diagnostics: Vec<Diagnostic>,
     pub trace: Vec<TraceEvent>,
+    pub proofs: Vec<Option<Node>>,
 }
 
 /// Options for `evaluate_with_options` — bundles environment settings with
-/// runtime flags like `trace`. Keeps `evaluate()` backwards compatible.
+/// runtime flags like `trace` and `with_proofs`. Keeps `evaluate()`
+/// backwards compatible.
 #[derive(Debug, Clone, Default)]
 pub struct EvaluateOptions {
     pub env: Option<EnvOptions>,
     pub trace: bool,
+    /// When true, every query result is accompanied by a derivation tree at
+    /// the same index in `EvaluateResult.proofs`. The inline
+    /// `(? expr with proof)` keyword pair opts in per-query without flipping
+    /// this global flag.
+    pub with_proofs: bool,
 }
 
 // ========== Trace events ==========
@@ -1129,6 +1141,319 @@ fn eval_arith(node: &Node, env: &mut Env) -> f64 {
     eval_node(node, env).as_f64()
 }
 
+// ========== Proof derivations (issue #35) ==========
+// A derivation is a Node tree of the form `(by <rule> <subderivation>...)`.
+// Building it on the same `Node` type as the AST means the existing
+// `key_of` (print) and `parse_one(tokenize_one(...))` (parse) helpers give
+// the round-trip property `parse(print(proof)) == proof` for free, without
+// needing a separate proof format. Mirrors `buildProof` in
+// `js/src/rml-links.mjs` so cross-runtime proofs match exactly.
+//
+// The walker is intentionally read-only — it never mutates the env beyond
+// the lookups that `eval_node` would have performed during evaluation, so
+// enabling proofs cannot change query results. Sub-derivations recurse
+// through `build_proof` so every sub-expression carries its own witness
+// rather than collapsing into the literal value.
+fn wrap_proof(rule: &str, subs: Vec<Node>) -> Node {
+    let mut out = Vec::with_capacity(subs.len() + 2);
+    out.push(Node::Leaf("by".to_string()));
+    out.push(Node::Leaf(rule.to_string()));
+    out.extend(subs);
+    Node::List(out)
+}
+
+fn leaf(s: &str) -> Node {
+    Node::Leaf(s.to_string())
+}
+
+/// Strip an optional trailing `with proof` from a query body. Both
+/// `(? expr with proof)` and `(? (expr) with proof)` are accepted. Mirrors
+/// `_stripWithProof` in the JavaScript implementation.
+fn strip_with_proof(parts: &[Node]) -> &[Node] {
+    if parts.len() >= 3 {
+        if let (Node::Leaf(w), Node::Leaf(p)) =
+            (&parts[parts.len() - 2], &parts[parts.len() - 1])
+        {
+            if w == "with" && p == "proof" {
+                return &parts[..parts.len() - 2];
+            }
+        }
+    }
+    parts
+}
+
+/// Detect whether a top-level `(? ...)` form explicitly requested a proof
+/// via the inline `with proof` keyword pair. Used to populate the per-query
+/// proof slot even when the global `with_proofs` option is off. Mirrors
+/// `_queryRequestsProof` in the JavaScript implementation.
+fn query_requests_proof(node: &Node) -> bool {
+    if let Node::List(children) = node {
+        if let Some(Node::Leaf(head)) = children.first() {
+            if head == "?" {
+                let parts = &children[1..];
+                if parts.len() >= 3 {
+                    if let (Node::Leaf(w), Node::Leaf(p)) =
+                        (&parts[parts.len() - 2], &parts[parts.len() - 1])
+                    {
+                        return w == "with" && p == "proof";
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Build a derivation tree witnessing how `node` reduces under `env`.
+/// Returns a `Node::List` of the form `(by <rule> <subderivation>...)`.
+///
+/// The walker mirrors the structural cases of `eval_node`: definitions and
+/// configuration directives become leaf witnesses, infix and prefix
+/// operators become rule applications whose subderivations recurse through
+/// `build_proof`, and equality picks `assigned-equality` /
+/// `structural-equality` / `numeric-equality` (and the negated counterparts)
+/// based on the same lookups `eval_node` performs.
+pub fn build_proof(node: &Node, env: &Env) -> Node {
+    match node {
+        // Numeric and bare-symbol leaves are axiomatic at this level.
+        Node::Leaf(s) => {
+            if is_num(s) {
+                wrap_proof("literal", vec![leaf(s)])
+            } else {
+                wrap_proof("symbol", vec![leaf(s)])
+            }
+        }
+        Node::List(children) => {
+            // Definitions and operator redefs: (head: ...)
+            if let Some(Node::Leaf(s)) = children.first() {
+                if s.ends_with(':') {
+                    return wrap_proof("definition", vec![node.clone()]);
+                }
+            }
+
+            // Assignment: ((expr) has probability p)
+            if children.len() == 4 {
+                if let (Node::Leaf(w1), Node::Leaf(w2), Node::Leaf(w3)) =
+                    (&children[1], &children[2], &children[3])
+                {
+                    if w1 == "has" && w2 == "probability" && is_num(w3) {
+                        return wrap_proof(
+                            "assigned-probability",
+                            vec![children[0].clone(), leaf(w3)],
+                        );
+                    }
+                }
+            }
+
+            // Range / valence configuration directives.
+            if children.len() == 3 {
+                if let (Node::Leaf(h), Node::Leaf(lo_s), Node::Leaf(hi_s)) =
+                    (&children[0], &children[1], &children[2])
+                {
+                    if h == "range" && is_num(lo_s) && is_num(hi_s) {
+                        return wrap_proof(
+                            "configuration",
+                            vec![leaf("range"), leaf(lo_s), leaf(hi_s)],
+                        );
+                    }
+                }
+            }
+            if children.len() == 2 {
+                if let (Node::Leaf(h), Node::Leaf(v)) = (&children[0], &children[1]) {
+                    if h == "valence" && is_num(v) {
+                        return wrap_proof(
+                            "configuration",
+                            vec![leaf("valence"), leaf(v)],
+                        );
+                    }
+                }
+            }
+
+            // Query: (? expr) and the per-query proof form (? expr with proof)
+            if let Some(Node::Leaf(head)) = children.first() {
+                if head == "?" {
+                    let parts = &children[1..];
+                    let inner = strip_with_proof(parts);
+                    let target = if inner.len() == 1 {
+                        inner[0].clone()
+                    } else {
+                        Node::List(inner.to_vec())
+                    };
+                    return wrap_proof("query", vec![build_proof(&target, env)]);
+                }
+            }
+
+            // Infix arithmetic: (A + B), (A - B), (A * B), (A / B)
+            if children.len() == 3 {
+                if let Node::Leaf(op_name) = &children[1] {
+                    if matches!(op_name.as_str(), "+" | "-" | "*" | "/") {
+                        let rule = match op_name.as_str() {
+                            "+" => "sum",
+                            "-" => "difference",
+                            "*" => "product",
+                            "/" => "quotient",
+                            _ => unreachable!(),
+                        };
+                        return wrap_proof(
+                            rule,
+                            vec![build_proof(&children[0], env), build_proof(&children[2], env)],
+                        );
+                    }
+                }
+            }
+
+            // Infix AND/OR/BOTH/NEITHER
+            if children.len() == 3 {
+                if let Node::Leaf(op_name) = &children[1] {
+                    if matches!(op_name.as_str(), "and" | "or" | "both" | "neither") {
+                        return wrap_proof(
+                            op_name,
+                            vec![build_proof(&children[0], env), build_proof(&children[2], env)],
+                        );
+                    }
+                }
+            }
+
+            // Composite both/neither chains: (both A and B [and C ...]),
+            // (neither A nor B [nor C ...]).
+            if children.len() >= 4 && children.len() % 2 == 0 {
+                if let Node::Leaf(head) = &children[0] {
+                    if head == "both" || head == "neither" {
+                        let sep = if head == "both" { "and" } else { "nor" };
+                        let mut valid = true;
+                        for i in (2..children.len()).step_by(2) {
+                            if let Node::Leaf(s) = &children[i] {
+                                if s != sep {
+                                    valid = false;
+                                    break;
+                                }
+                            } else {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if valid {
+                            let subs: Vec<Node> = (1..children.len())
+                                .step_by(2)
+                                .map(|i| build_proof(&children[i], env))
+                                .collect();
+                            return wrap_proof(head, subs);
+                        }
+                    }
+                }
+            }
+
+            // Infix equality / inequality: (L = R), (L != R)
+            if children.len() == 3 {
+                if let Node::Leaf(op_name) = &children[1] {
+                    if op_name == "=" || op_name == "!=" {
+                        let l = &children[0];
+                        let r = &children[2];
+                        let k_prefix =
+                            key_of(&Node::List(vec![leaf("="), l.clone(), r.clone()]));
+                        let k_infix =
+                            key_of(&Node::List(vec![l.clone(), leaf("="), r.clone()]));
+                        let rule = if env.assign.contains_key(&k_prefix)
+                            || env.assign.contains_key(&k_infix)
+                        {
+                            if op_name == "!=" {
+                                "assigned-inequality"
+                            } else {
+                                "assigned-equality"
+                            }
+                        } else if is_structurally_same(l, r) {
+                            if op_name == "!=" {
+                                "structural-inequality"
+                            } else {
+                                "structural-equality"
+                            }
+                        } else if op_name == "!=" {
+                            "numeric-inequality"
+                        } else {
+                            "numeric-equality"
+                        };
+                        // Sub-derivation of equality preserves the original
+                        // operands as a link so the witness reads
+                        // `(by structural-equality (a a))` per the issue.
+                        let pair = Node::List(vec![l.clone(), r.clone()]);
+                        return wrap_proof(rule, vec![pair]);
+                    }
+                }
+            }
+
+            // ---------- Type system witnesses ----------
+            if children.len() == 2 {
+                if let (Node::Leaf(h), level) = (&children[0], &children[1]) {
+                    if h == "Type" {
+                        return wrap_proof("type-universe", vec![level.clone()]);
+                    }
+                }
+            }
+            if children.len() == 1 {
+                if let Node::Leaf(h) = &children[0] {
+                    if h == "Prop" {
+                        return wrap_proof("prop", vec![]);
+                    }
+                }
+            }
+            if children.len() == 3 {
+                if let Node::Leaf(h) = &children[0] {
+                    if h == "Pi" {
+                        return wrap_proof(
+                            "pi-formation",
+                            vec![children[1].clone(), children[2].clone()],
+                        );
+                    }
+                    if h == "lambda" {
+                        return wrap_proof(
+                            "lambda-formation",
+                            vec![children[1].clone(), children[2].clone()],
+                        );
+                    }
+                    if h == "apply" {
+                        return wrap_proof(
+                            "beta-reduction",
+                            vec![build_proof(&children[1], env), build_proof(&children[2], env)],
+                        );
+                    }
+                }
+            }
+            if children.len() == 3 {
+                if let (Node::Leaf(h), Node::Leaf(m)) = (&children[0], &children[1]) {
+                    if h == "type" && m == "of" {
+                        return wrap_proof(
+                            "type-query",
+                            vec![children[2].clone()],
+                        );
+                    }
+                }
+                if let Node::Leaf(m) = &children[1] {
+                    if m == "of" {
+                        return wrap_proof(
+                            "type-check",
+                            vec![children[0].clone(), children[2].clone()],
+                        );
+                    }
+                }
+            }
+
+            // Prefix operator: (op X Y ...)
+            if let Node::Leaf(head) = &children[0] {
+                if env.has_op(head) {
+                    let subs: Vec<Node> = children[1..]
+                        .iter()
+                        .map(|arg| build_proof(arg, env))
+                        .collect();
+                    return wrap_proof(head, subs);
+                }
+            }
+
+            // Fallback for unrecognised heads / named lambda applications.
+            wrap_proof("reduce", vec![node.clone()])
+        }
+    }
+}
+
 /// Evaluate an AST node in the given environment.
 pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
     match node {
@@ -1206,10 +1531,20 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 }
             }
 
-            // Query: (? expr)
+            // Query: (? expr) or (? expr with proof)
+            // The trailing `with proof` keyword pair is consumed here so it
+            // does not interfere with evaluation; `evaluate_inner` looks at
+            // the original form to decide whether to populate a proof slot.
+            // The proof itself is built by `build_proof` after evaluation.
             if let Node::Leaf(ref first) = children[0] {
                 if first == "?" {
-                    let result = eval_node(&children[1], env);
+                    let parts = strip_with_proof(&children[1..]);
+                    let target: Node = if parts.len() == 1 {
+                        parts[0].clone()
+                    } else {
+                        Node::List(parts.to_vec())
+                    };
+                    let result = eval_node(&target, env);
                     // If inner result is already a type query, pass it through
                     if result.is_type_query() {
                         return result;
@@ -2171,7 +2506,7 @@ pub fn evaluate(text: &str, file: Option<&str>, options: Option<EnvOptions>) -> 
         file,
         EvaluateOptions {
             env: options,
-            trace: false,
+            ..EvaluateOptions::default()
         },
     )
 }
@@ -2222,6 +2557,7 @@ pub fn evaluate_file(file_path: &str, options: EvaluateOptions) -> EvaluateResul
                 results: Vec::new(),
                 diagnostics: vec![diag],
                 trace: Vec::new(),
+                proofs: Vec::new(),
             };
         }
     };
@@ -2490,6 +2826,19 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
 
     let mut results: Vec<RunResult> = Vec::new();
 
+    // Proof collection (issue #35). When `options.with_proofs` is true the
+    // global flag forces a derivation for every query; otherwise we lazily
+    // allocate `proofs` on the first per-query `(? expr with proof)` opt-in
+    // and backfill `None` for any prior bare queries so indices stay aligned
+    // with `results`. When neither code path fires `proofs` stays empty and
+    // is returned as `Vec::new()` — matching the plain `evaluate()` shape.
+    let proofs_enabled = options.with_proofs;
+    let mut proofs: Option<Vec<Option<Node>>> = if proofs_enabled {
+        Some(Vec::new())
+    } else {
+        None
+    };
+
     // Silence the default panic hook while we deliberately catch evaluator
     // panics — otherwise they'd leak to stderr alongside the diagnostics.
     let prev_hook = std::panic::take_hook();
@@ -2620,10 +2969,52 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                             .push(TraceEvent::new("eval", summary, span.clone()));
                     }
                 }
+                let was_query = matches!(
+                    eval_res,
+                    EvalResult::Query(_) | EvalResult::TypeQuery(_)
+                );
                 match eval_res {
                     EvalResult::Query(v) => results.push(RunResult::Num(v)),
                     EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
                     _ => {}
+                }
+                if was_query {
+                    let wants_proof = proofs_enabled || query_requests_proof(&form);
+                    if wants_proof {
+                        // Lazily allocate the proofs vec on first per-query
+                        // opt-in so callers that never ask for proofs get
+                        // an empty vec back. Backfill `None` for any prior
+                        // bare queries so indices stay aligned with results.
+                        if proofs.is_none() {
+                            let backfill = results.len().saturating_sub(1);
+                            proofs = Some(vec![None; backfill]);
+                        }
+                        // Strip the surrounding (? ...) so the proof attaches
+                        // to the queried expression directly; this matches
+                        // the issue example `(by structural-equality (a a))`
+                        // rather than nesting under `(by query ...)`.
+                        let proof_node = match &form {
+                            Node::List(form_children)
+                                if matches!(
+                                    form_children.first(),
+                                    Some(Node::Leaf(s)) if s == "?"
+                                ) =>
+                            {
+                                let parts = &form_children[1..];
+                                let inner = strip_with_proof(parts);
+                                let target: Node = if inner.len() == 1 {
+                                    inner[0].clone()
+                                } else {
+                                    Node::List(inner.to_vec())
+                                };
+                                build_proof(&target, env)
+                            }
+                            _ => build_proof(&form, env),
+                        };
+                        proofs.as_mut().unwrap().push(Some(proof_node));
+                    } else if let Some(p) = proofs.as_mut() {
+                        p.push(None);
+                    }
                 }
             }
             Err(payload) => {
@@ -2657,6 +3048,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
         results,
         diagnostics,
         trace,
+        proofs: proofs.unwrap_or_default(),
     }
 }
 

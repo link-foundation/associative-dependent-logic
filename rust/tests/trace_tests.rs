@@ -20,6 +20,7 @@ fn trace_demo() -> Vec<TraceEvent> {
         EvaluateOptions {
             env: None,
             trace: true,
+            ..EvaluateOptions::default()
         },
     );
     out.trace
@@ -69,6 +70,7 @@ fn trace_does_not_affect_results_or_diagnostics() {
         EvaluateOptions {
             env: None,
             trace: true,
+            ..EvaluateOptions::default()
         },
     );
     assert_eq!(plain.results, traced.results);
@@ -83,6 +85,7 @@ fn resolve_event_for_aggregator_redef() {
         EvaluateOptions {
             env: None,
             trace: true,
+            ..EvaluateOptions::default()
         },
     );
     let resolves: Vec<_> = out
@@ -105,6 +108,7 @@ fn assign_event_for_probability_form() {
         EvaluateOptions {
             env: None,
             trace: true,
+            ..EvaluateOptions::default()
         },
     );
     let assigns: Vec<_> = out
@@ -126,6 +130,7 @@ fn lookup_event_when_assigned_equality_fires() {
         EvaluateOptions {
             env: None,
             trace: true,
+            ..EvaluateOptions::default()
         },
     );
     let lookups: Vec<_> = out
@@ -165,6 +170,7 @@ fn format_trace_event_renders_span_kind_detail() {
         EvaluateOptions {
             env: None,
             trace: true,
+            ..EvaluateOptions::default()
         },
     );
     let line = format_trace_event(&out.trace[0]);
@@ -179,6 +185,7 @@ fn format_trace_event_falls_back_to_input_when_no_file() {
         EvaluateOptions {
             env: None,
             trace: true,
+            ..EvaluateOptions::default()
         },
     );
     let line = format_trace_event(&out.trace[0]);
