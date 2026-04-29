@@ -464,6 +464,169 @@ function formatTraceValue(v) {
   return s;
 }
 
+// ---------- Proof derivations (issue #35) ----------
+// A derivation is a Node tree of the form `(by <rule> <subderivation>...)`,
+// expressed as a JS array so it round-trips through the existing `keyOf`
+// (print) / `parseOne(tokenizeOne(...))` (parse) helpers without needing a
+// new format. `buildProof` is invoked by `evaluate()` (and the inline
+// `(? expr with proof)` query form) once a top-level form has been
+// evaluated; it walks the same structural cases as `evalNode` to attach the
+// rule that fired at each step.
+//
+// The walker is intentionally read-only — it never mutates the env beyond
+// the lookups that `evalNode` would have performed during evaluation, so
+// enabling proofs cannot change query results. Sub-derivations recurse
+// through `buildProof` so every sub-expression carries its own witness
+// rather than collapsing into the literal value.
+function _wrap(rule, ...subs) {
+  return ['by', rule, ...subs];
+}
+
+// Pretty-print a numeric value the same way `formatTraceValue` does so
+// proof-result links such as `(eq L R 1)` stay stable across runs.
+function _proofValue(v) {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const s = formatTraceValue(v);
+    return s;
+  }
+  return String(v);
+}
+
+function buildProof(node, env) {
+  // Literals
+  if (typeof node === 'string') {
+    if (isNum(node)) {
+      return _wrap('literal', node);
+    }
+    // Bare symbol: either a declared term/symbol prior or unknown — both are
+    // axiomatic at this level so we record the symbol as a leaf witness.
+    return _wrap('symbol', node);
+  }
+
+  if (!Array.isArray(node)) return _wrap('literal', String(node));
+
+  // Definitions and operator redefs: (head: ...)
+  if (typeof node[0] === 'string' && node[0].endsWith(':')) {
+    return _wrap('definition', node);
+  }
+
+  // Assignment: ((expr) has probability p)
+  if (node.length === 4 && node[1] === 'has' && node[2] === 'probability' && isNum(node[3])) {
+    return _wrap('assigned-probability', node[0], node[3]);
+  }
+
+  // Range / valence configuration directives.
+  if (node.length === 3 && node[0] === 'range' && isNum(node[1]) && isNum(node[2])) {
+    return _wrap('configuration', 'range', node[1], node[2]);
+  }
+  if (node.length === 2 && node[0] === 'valence' && isNum(node[1])) {
+    return _wrap('configuration', 'valence', node[1]);
+  }
+
+  // Query: (? expr) and the per-query proof form (? expr with proof)
+  if (node[0] === '?') {
+    const inner = _stripWithProof(node.slice(1));
+    const target = inner.length === 1 ? inner[0] : inner;
+    return _wrap('query', buildProof(target, env));
+  }
+
+  // Infix arithmetic: (A + B), (A - B), (A * B), (A / B)
+  if (node.length === 3 && typeof node[1] === 'string' && ['+','-','*','/'].includes(node[1])) {
+    const ruleByOp = { '+': 'sum', '-': 'difference', '*': 'product', '/': 'quotient' };
+    return _wrap(ruleByOp[node[1]], buildProof(node[0], env), buildProof(node[2], env));
+  }
+
+  // Infix AND/OR/BOTH/NEITHER
+  if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='and' || node[1]==='or' || node[1]==='both' || node[1]==='neither')) {
+    return _wrap(node[1], buildProof(node[0], env), buildProof(node[2], env));
+  }
+
+  // Composite both/neither chains: (both A and B [and C ...]), (neither A nor B [nor C ...])
+  if (node.length >= 4 && typeof node[0] === 'string' && (node[0]==='both' || node[0]==='neither')) {
+    const sep = node[0]==='both' ? 'and' : 'nor';
+    let valid = node.length % 2 === 0;
+    if (valid) {
+      for (let i = 2; i < node.length; i += 2) {
+        if (node[i] !== sep) { valid = false; break; }
+      }
+    }
+    if (valid) {
+      const subs = [];
+      for (let i = 1; i < node.length; i += 2) subs.push(buildProof(node[i], env));
+      return _wrap(node[0], ...subs);
+    }
+  }
+
+  // Infix equality / inequality: (L = R), (L != R)
+  if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='=' || node[1]==='!=')) {
+    const L = node[0];
+    const R = node[2];
+    const kPrefix = keyOf(['=', L, R]);
+    const kInfix = keyOf([L, '=', R]);
+    let rule;
+    if (env.assign.has(kPrefix) || env.assign.has(kInfix)) {
+      rule = node[1] === '!=' ? 'assigned-inequality' : 'assigned-equality';
+    } else if (isStructurallySame(L, R)) {
+      rule = node[1] === '!=' ? 'structural-inequality' : 'structural-equality';
+    } else {
+      rule = node[1] === '!=' ? 'numeric-inequality' : 'numeric-equality';
+    }
+    // Sub-derivations of equality preserve the original operands as links
+    // so the witness reads (by structural-equality (a a)) per the issue.
+    return _wrap(rule, [L, R]);
+  }
+
+  // ---------- Type system witnesses ----------
+  if (node.length === 2 && node[0] === 'Type') {
+    return _wrap('type-universe', node[1]);
+  }
+  if (node.length === 1 && node[0] === 'Prop') {
+    return _wrap('prop');
+  }
+  if (node.length === 3 && node[0] === 'Pi') {
+    return _wrap('pi-formation', node[1], node[2]);
+  }
+  if (node.length === 3 && node[0] === 'lambda') {
+    return _wrap('lambda-formation', node[1], node[2]);
+  }
+  if (node.length === 3 && node[0] === 'apply') {
+    return _wrap('beta-reduction', buildProof(node[1], env), buildProof(node[2], env));
+  }
+  if (node.length === 3 && node[0] === 'type' && node[1] === 'of') {
+    return _wrap('type-query', node[2]);
+  }
+  if (node.length === 3 && node[1] === 'of') {
+    return _wrap('type-check', node[0], node[2]);
+  }
+
+  // Prefix operator: (op X Y ...)
+  const head = node[0];
+  if (typeof head === 'string' && env.hasOp(head)) {
+    return _wrap(head, ...node.slice(1).map(arg => buildProof(arg, env)));
+  }
+
+  // Fallback for prefix application of named lambdas / unrecognised heads.
+  return _wrap('reduce', node);
+}
+
+// Strip an optional `with proof` suffix from a query body. Both
+// `(? expr with proof)` and `(? (expr) with proof)` are accepted.
+function _stripWithProof(parts) {
+  if (parts.length >= 3 && parts[parts.length - 2] === 'with' && parts[parts.length - 1] === 'proof') {
+    return parts.slice(0, -2);
+  }
+  return parts;
+}
+
+// Detect whether a query body explicitly requested a proof via the inline
+// `with proof` keyword pair. Used to populate the per-query proof slot even
+// when the global `withProofs` option is off.
+function _queryRequestsProof(node) {
+  if (!Array.isArray(node) || node[0] !== '?') return false;
+  const parts = node.slice(1);
+  return parts.length >= 3 && parts[parts.length - 2] === 'with' && parts[parts.length - 1] === 'proof';
+}
+
 // Evaluate a node in arithmetic context — numeric literals are NOT clamped to the logic range.
 function evalArith(node, env){
   if (typeof node === 'string' && isNum(node)) return parseFloat(node);
@@ -511,9 +674,15 @@ function evalNode(node, env){
     return 1;
   }
 
-  // Query: (? expr)
+  // Query: (? expr) with optional `with proof` suffix (issue #35).
+  // The suffix is a per-query opt-in for derivation output; the actual proof
+  // is built by `buildProof` in `evaluate()`. Stripping it here keeps the
+  // legacy evaluation path unchanged regardless of whether proofs are
+  // requested.
   if (node[0] === '?') {
-    const v = evalNode(node[1], env);
+    const parts = _stripWithProof(node.slice(1));
+    const target = parts.length === 1 ? parts[0] : parts;
+    const v = evalNode(target, env);
     // If inner result is already a query (e.g. from (type of x)), pass it through
     if (v && typeof v === 'object' && v.query) return v;
     return { query:true, value: env.clamp(v) };
@@ -1033,6 +1202,14 @@ function evaluate(code, options) {
       trace.push(new TraceEvent({ kind, detail, span: span || { file, line: 1, col: 1, length: 0 } }));
     };
   }
+  // Proof mode (issue #35): when `withProofs` is true every query result is
+  // accompanied by a derivation tree at the same index in `proofs`. The
+  // inline `(? expr with proof)` form opts in per-query without flipping the
+  // global flag — in that case `proofs` is still populated, but bare queries
+  // that did not ask for a witness get `null` so the array stays
+  // index-aligned with `results`.
+  const proofsEnabled = !!opts.withProofs;
+  let proofs = proofsEnabled ? [] : null;
 
   // Import context: a stack of canonical paths currently being loaded (cycle
   // detection) and a set of canonical paths already loaded into this env
@@ -1059,6 +1236,7 @@ function evaluate(code, options) {
     diagnostics.push(diag);
     const out = { results, diagnostics };
     if (traceEnabled) out.trace = trace;
+    if (proofs !== null) out.proofs = proofs;
     return out;
   }
 
@@ -1123,6 +1301,27 @@ function evaluate(code, options) {
       }
       if (res && res.query) {
         results.push(res.value);
+        // Per-query proof: the global `withProofs` flag forces a proof for
+        // every query; the inline `with proof` keyword pair opts a single
+        // query in without the global flag. Lazily allocate the proofs
+        // array on first per-query opt-in so callers that never use
+        // proofs still get the original `{results, diagnostics}` shape.
+        const wantsProof = proofsEnabled || _queryRequestsProof(form);
+        if (wantsProof) {
+          if (proofs === null) {
+            // Backfill nulls for any prior bare queries so indexes align.
+            proofs = results.slice(0, -1).map(() => null);
+          }
+          // Strip the surrounding (? ...) so the proof attaches to the
+          // queried expression directly; this matches the issue example
+          // `(by structural-equality (a a))` rather than nesting under
+          // `(by query ...)`.
+          const inner = _stripWithProof(form.slice(1));
+          const target = inner.length === 1 ? inner[0] : inner;
+          proofs.push(buildProof(target, env));
+        } else if (proofs !== null) {
+          proofs.push(null);
+        }
       }
     } catch (err) {
       const diagSpan = (err && err.span) || span;
@@ -1140,6 +1339,7 @@ function evaluate(code, options) {
   }
   const out = { results, diagnostics };
   if (traceEnabled) out.trace = trace;
+  if (proofs !== null) out.proofs = proofs;
   return out;
 }
 
@@ -1582,6 +1782,7 @@ export {
   parseOne,
   Env,
   evalNode,
+  buildProof,
   quantize,
   decRound,
   keyOf,
