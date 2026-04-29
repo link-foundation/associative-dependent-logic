@@ -13,22 +13,22 @@
 (RML: Logic RML)
 
 # Define properties that logics can have
-(supports_many_valued: Property supports_many_valued)
-(supports_self_reference: Property supports_self_reference)
-(resolves_paradoxes: Property resolves_paradoxes)
-(is_meta_logic: Property is_meta_logic)
+(supports-many-valued: Property supports-many-valued)
+(supports-self-reference: Property supports-self-reference)
+(resolves-paradoxes: Property resolves-paradoxes)
+(is-meta-logic: Property is-meta-logic)
 
 # RML has these properties (with full confidence)
-(((RML supports_many_valued) = true) has probability 1)
-(((RML supports_self_reference) = true) has probability 1)
-(((RML resolves_paradoxes) = true) has probability 1)
-(((RML is_meta_logic) = true) has probability 1)
+(((RML supports-many-valued) = true) has probability 1)
+(((RML supports-self-reference) = true) has probability 1)
+(((RML resolves-paradoxes) = true) has probability 1)
+(((RML is-meta-logic) = true) has probability 1)
 
 # Query: Does RML support many-valued logic?
-(? ((RML supports_many_valued) = true))           # -> 1
+(? ((RML supports-many-valued) = true))           # -> 1
 
 # Query: Is RML a meta-logic?
-(? ((RML is_meta_logic) = true))                   # -> 1
+(? ((RML is-meta-logic) = true))                   # -> 1
 
 # Self-reference: RML can reason about itself being a logic
 (? (RML of Logic))                                 # -> 1
@@ -37,11 +37,11 @@
 
 # Define another logic (Classical) and compare
 (Classical: Logic Classical)
-(((Classical supports_many_valued) = true) has probability 0)
-(((Classical supports_self_reference) = true) has probability 0)
+(((Classical supports-many-valued) = true) has probability 0)
+(((Classical supports-self-reference) = true) has probability 0)
 
 # Compare: does Classical support self-reference?
-(? ((Classical supports_self_reference) = true))   # -> 0
+(? ((Classical supports-self-reference) = true))   # -> 0
 
 # RML can reason about the liar paradox within its own system
 (liar: liar is liar)
