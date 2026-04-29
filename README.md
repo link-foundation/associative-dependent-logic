@@ -19,6 +19,7 @@ For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 - [Core concept comparison](./docs/CONCEPTS-COMPARISION.md) - RML vs Twelf, LF, HELF, Isabelle, Coq/Rocq, Lean, Foundation, AFP, Abella, lambda Prolog, and Pecan by logical/metatheoretic concepts.
 - [Product feature comparison](./docs/FEATURE-COMPARISION.md) - RML vs the same systems by authoring workflow, automation, libraries, tooling, and distribution.
+- [Configurability and operator redefinition](./docs/CONFIGURABILITY.md) - Why every operator, truth constant, range, and valence is redefinable at runtime, with the precedence rules and a comparison to Lean/Rocq fixed semantics.
 
 ## Overview
 
