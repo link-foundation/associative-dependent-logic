@@ -1,0 +1,7 @@
+(a: a is a)
+(? (a = a))
+((b = b) has probability 0.7)
+(? (b = b))
+(? (1 + 2))
+(? (not 0))
+(? (1 = 2))
