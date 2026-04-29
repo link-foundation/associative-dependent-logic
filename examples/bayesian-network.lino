@@ -19,7 +19,7 @@
 (cloudy: cloudy is cloudy)
 (sprinkler: sprinkler is sprinkler)
 (rain: rain is rain)
-(wet_grass: wet_grass is wet_grass)
+(wet-grass: wet-grass is wet-grass)
 
 # Configure probabilistic operators
 (and: product)              # P(A ∩ B) = P(A) * P(B) for independent events
@@ -33,8 +33,8 @@
 # Directed conditional dependencies (cause → effect):
 # cloudy → sprinkler: P(Sprinkler | Cloudy)
 # cloudy → rain:      P(Rain | Cloudy)
-# sprinkler → wet_grass: P(WetGrass | Sprinkler)
-# rain → wet_grass:      P(WetGrass | Rain)
+# sprinkler → wet-grass: P(WetGrass | Sprinkler)
+# rain → wet-grass:      P(WetGrass | Rain)
 
 # Query marginal probabilities
 (? (cloudy = true))                          # -> 0.5

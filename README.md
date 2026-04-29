@@ -666,6 +666,7 @@ The test suites cover:
 - Markov chains: one-step and multi-step transitions, joint probability, stationary distribution, conditional transitions with links
 - Markov networks: cyclic graphs, pairwise joints, three-way cliques, clique potentials, normalization
 - Comprehensive valence coverage: 0 (continuous), 1 (unary), 2–10, 100, 1000, with both ranges
+- English-readability lint: identifier shape, operator-only links, allow-list (see [English-readability lint](#english-readability-lint))
 
 ## API
 
@@ -681,6 +682,48 @@ checker error carries a stable code (`E001`, …), a message, and a 1-based
 source span. The CLIs print them as `file:line:col: Exxx: message` with a
 caret under the offending token. See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md)
 for the full code list and usage examples.
+
+## English-readability lint
+
+Every link in `examples/` (and, when introduced, `lib/`) is expected to read
+as an English sentence. A small lint script enforces the conventions:
+
+```bash
+node scripts/lint-english.mjs --allowlist scripts/lint-english.allowlist.json examples/*.lino
+# or, from the JS package:
+(cd js && npm run lint:english)
+```
+
+The lint reports two classes of violation in `file:line:col: code: message`
+form (the same shape used by structured diagnostics):
+
+- `identifiers-without-hyphens` — identifiers that combine multiple words
+  with `_` or `camelCase` instead of `kebab-case`. The lint suggests the
+  hyphenated form (e.g. `wet_grass` → `wet-grass`).
+- `operator-only-link` — an operator definition such as `(@: + -)` whose
+  body contains no English word. The lint suggests adding a word-form
+  alternative (e.g. `(equals: =)`, `(plus: +)`).
+
+Reserved RML/LiNo vocabulary (`and`, `or`, `not`, `is`, `has`, `probability`,
+`true`, `false`, `unknown`, `Type`, `lambda`, …) is never flagged, and
+single-word identifiers (`alice`, `cloudy`, `Natural`) are accepted as-is.
+
+### Allow-list
+
+For deliberate exceptions, `scripts/lint-english.allowlist.json` accepts
+two arrays:
+
+```json
+{
+  "identifiers": ["legacy_name"],
+  "links": ["demo.lino:5"]
+}
+```
+
+Identifiers in `identifiers` are silenced wherever they appear; entries in
+`links` are keyed by `<basename>:<line>` and silence the
+`operator-only-link` rule for that specific definition. CI runs the lint
+with this file so any new violation fails the build.
 
 ## References
 
