@@ -1,6 +1,9 @@
 // RML CLI — run a LiNo knowledge base or launch the interactive REPL
 use rml::repl::run_repl;
-use rml::{evaluate, format_diagnostic, EnvOptions, RunResult};
+use rml::{
+    evaluate_with_options, format_diagnostic, format_trace_event, EnvOptions, EvaluateOptions,
+    RunResult,
+};
 use std::env;
 use std::fs;
 use std::io::{self, BufReader, IsTerminal};
@@ -8,11 +11,20 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: rml <kb.lino>   |   rml repl");
+    let mut trace = false;
+    let mut positionals: Vec<String> = Vec::new();
+    for arg in args.iter().skip(1) {
+        if arg == "--trace" {
+            trace = true;
+        } else {
+            positionals.push(arg.clone());
+        }
+    }
+    if positionals.is_empty() {
+        eprintln!("Usage: rml [--trace] <kb.lino>   |   rml repl");
         return ExitCode::from(1);
     }
-    let arg = &args[1];
+    let arg = &positionals[0];
     if arg == "repl" {
         let stdin = io::stdin();
         let stdout = io::stdout();
@@ -35,7 +47,19 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let evaluation = evaluate(&text, Some(file), None);
+    let evaluation = evaluate_with_options(
+        &text,
+        Some(file),
+        EvaluateOptions {
+            env: None,
+            trace,
+        },
+    );
+    if trace {
+        for event in &evaluation.trace {
+            eprintln!("{}", format_trace_event(event));
+        }
+    }
     for v in evaluation.results {
         match v {
             RunResult::Num(n) => {

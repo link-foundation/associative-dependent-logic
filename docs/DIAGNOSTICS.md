@@ -97,3 +97,90 @@ explicitly note a breaking change in the changelog. The accompanying
 3. Add a test in `js/tests/diagnostics.test.mjs` and a mirrored test in
    `rust/tests/diagnostics_tests.rs` so drift between the two
    implementations fails CI.
+
+## Trace mode
+
+Both runners support an opt-in **trace mode** that records a deterministic
+sequence of evaluator events: operator resolutions, assignment lookups,
+probability assignments, and one reduction summary per top-level form.
+Trace events share the same `file:line:col` span machinery as diagnostics,
+so they pinpoint exactly which line of the source produced each step.
+
+### Enabling tracing
+
+```sh
+node js/src/rml-links.mjs --trace examples/demo.lino
+rml --trace examples/demo.lino
+```
+
+The `--trace` flag writes one event per line to **stderr**, in source order.
+Query results still go to stdout, so piping a script through trace mode
+won't disturb downstream tools.
+
+### Library API
+
+JavaScript:
+
+```js
+import { evaluate, formatTraceEvent } from 'relative-meta-logic';
+
+const { results, diagnostics, trace } =
+  evaluate(source, { file: 'demo.lino', trace: true });
+
+for (const event of trace) {
+  console.error(formatTraceEvent(event));
+}
+```
+
+Rust:
+
+```rust
+use rml::{evaluate_with_options, format_trace_event, EvaluateOptions};
+
+let evaluation = evaluate_with_options(
+    &source,
+    Some("demo.lino"),
+    EvaluateOptions { env: None, trace: true },
+);
+for event in &evaluation.trace {
+    eprintln!("{}", format_trace_event(event));
+}
+```
+
+### Output format
+
+Each trace event prints as:
+
+```
+[span <file>:<line>:<col>] <kind> <details>
+```
+
+Example, derived from `examples/demo.lino`:
+
+```
+[span examples/demo.lino:5:1] resolve (!=: not =)
+[span examples/demo.lino:6:1] resolve (and: avg)
+[span examples/demo.lino:7:1] resolve (or: max)
+[span examples/demo.lino:10:1] assign (a = a) ← 1
+[span examples/demo.lino:14:1] lookup (a = a) → 1
+[span examples/demo.lino:14:1] eval (? ((a = a) and (a != a))) → query 0.5
+```
+
+### Event kinds
+
+| Kind      | Emitted when |
+|-----------|--------------|
+| `resolve` | An operator definition or aggregator selection runs, e.g. `(and: avg)` or `(!=: not =)`. The detail is the form being installed. |
+| `assign`  | A probability assignment runs: `((expr) has probability v)`. Detail is `<expr-key> ← <clamped value>`. |
+| `lookup`  | An equality `(L = R)` (or its inequality) finds a previously assigned probability. Detail is `<key> → <value>`. |
+| `eval`    | A top-level form finishes evaluating. Detail is `<form-key> → <summary>`, where the summary is `query <v>`, `type <t>`, or just the value. |
+
+### Determinism
+
+Trace output is reproducible: top-level forms are processed in source order,
+operator hooks fire in a fixed evaluation order, and numbers are normalized
+through the same `formatTraceValue` helper in both runtimes. Two consecutive
+runs on the same input produce identical traces, and the JavaScript and
+Rust implementations produce the same trace lines for the same input — both
+properties are exercised by the trace test suites.
+
