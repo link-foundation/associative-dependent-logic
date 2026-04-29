@@ -80,6 +80,7 @@ The exit code is `1` whenever any diagnostic is emitted, `0` otherwise.
 | `E004` | Unknown aggregator selector, e.g. `(and: bogus_agg)`. Valid selectors are `avg`, `min`, `max`, `product`/`prod`, `probabilistic_sum`/`ps`. |
 | `E005` | Empty meta-expression passed to a formalization helper. |
 | `E006` | LiNo top-level parse failure, e.g. unclosed paren in the whole file. |
+| `E007` | Import error: cycle in the file dependency graph, missing import target, or non-string import target. Triggered by `(import "<path>")` directives. |
 
 Codes are stable identifiers — they do not change between releases unless we
 explicitly note a breaking change in the changelog. The accompanying
