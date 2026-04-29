@@ -81,6 +81,8 @@ The exit code is `1` whenever any diagnostic is emitted, `0` otherwise.
 | `E005` | Empty meta-expression passed to a formalization helper. |
 | `E006` | LiNo top-level parse failure, e.g. unclosed paren in the whole file. |
 | `E007` | Import error: cycle in the file dependency graph, missing import target, or non-string import target. Triggered by `(import "<path>")` directives. |
+| `E008` | Shadowing warning: a top-level definition rebinds a name introduced by an earlier `(import …)`. Triggered, for example, by `(import "lib.lino") (myop: max)` when `lib.lino` already defines `myop`. The redefinition still takes effect — `E008` is informational, not fatal. |
+| `E009` | Namespace or alias error: invalid namespace name (empty or dotted, e.g. `(namespace foo.bar)`), or an alias collision between two `(import "..." as <alias>)` directives in the same file. |
 
 Codes are stable identifiers — they do not change between releases unless we
 explicitly note a breaking change in the changelog. The accompanying
