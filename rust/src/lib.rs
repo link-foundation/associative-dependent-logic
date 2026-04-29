@@ -616,6 +616,18 @@ pub struct Env {
     pub trace_events: Vec<TraceEvent>,
     pub current_span: Option<Span>,
     pub default_span: Span,
+    /// Namespace state (issue #34): a file can declare `(namespace foo)`, which
+    /// prefixes every name it subsequently introduces with `foo.`. Imports can
+    /// be aliased via `(import "x.lino" as a)`, which records `a` -> the
+    /// imported file's declared namespace so `a.name` resolves to that name.
+    /// `imported` tracks names that came from an import (not declared in the
+    /// importing file) so we can emit a shadowing warning (E008) when a later
+    /// top-level definition rebinds them.
+    pub namespace: Option<String>,
+    pub aliases: HashMap<String, String>,
+    pub imported: HashSet<String>,
+    pub shadow_diagnostics: Vec<Diagnostic>,
+    pub file_namespaces: HashMap<PathBuf, String>,
 }
 
 impl Env {
@@ -652,6 +664,11 @@ impl Env {
             trace_events: Vec::new(),
             current_span: None,
             default_span: Span::unknown(),
+            namespace: None,
+            aliases: HashMap::new(),
+            imported: HashSet::new(),
+            shadow_diagnostics: Vec::new(),
+            file_namespaces: HashMap::new(),
         };
 
         // Initialize truth constants: true, false, unknown, undefined
@@ -701,7 +718,67 @@ impl Env {
     }
 
     pub fn get_op(&self, name: &str) -> Option<&Op> {
-        self.ops.get(name)
+        if let Some(op) = self.ops.get(name) {
+            return Some(op);
+        }
+        let resolved = self.resolve_qualified(name);
+        if resolved != name {
+            return self.ops.get(&resolved);
+        }
+        None
+    }
+
+    pub fn has_op(&self, name: &str) -> bool {
+        if self.ops.contains_key(name) {
+            return true;
+        }
+        let resolved = self.resolve_qualified(name);
+        resolved != name && self.ops.contains_key(&resolved)
+    }
+
+    /// Apply the active namespace to a freshly declared name, e.g. inside
+    /// `(namespace classical)` the form `(and: min)` registers `classical.and`,
+    /// not `and`. Names that already contain a `.` are passed through.
+    /// Mirrors `Env.qualifyName` in `js/src/rml-links.mjs`.
+    pub fn qualify_name(&self, name: &str) -> String {
+        if let Some(ns) = &self.namespace {
+            if !name.contains('.') {
+                return format!("{}.{}", ns, name);
+            }
+        }
+        name.to_string()
+    }
+
+    /// Resolve a possibly-qualified name to its canonical storage key. Order:
+    ///   1. Alias prefix: `cl.foo` with alias `cl -> classical` becomes
+    ///      `classical.foo`.
+    ///   2. Active namespace: an unqualified name lives in `<ns>.<name>`.
+    ///   3. Bare name: returned unchanged.
+    /// Used by lookup helpers (operators, symbol probabilities) to find
+    /// namespaced bindings without forcing every call site to spell them out.
+    /// Mirrors `Env._resolveQualified` in `js/src/rml-links.mjs`.
+    pub fn resolve_qualified(&self, name: &str) -> String {
+        if let Some(dot_idx) = name.find('.') {
+            if dot_idx > 0 {
+                let prefix = &name[..dot_idx];
+                let rest = &name[dot_idx + 1..];
+                if let Some(target_ns) = self.aliases.get(prefix) {
+                    return format!("{}.{}", target_ns, rest);
+                }
+            }
+            return name.to_string();
+        }
+        if let Some(ns) = &self.namespace {
+            let qualified = format!("{}.{}", ns, name);
+            if self.ops.contains_key(&qualified)
+                || self.symbol_prob.contains_key(&qualified)
+                || self.terms.contains(&qualified)
+                || self.lambdas.contains_key(&qualified)
+            {
+                return qualified;
+            }
+        }
+        name.to_string()
     }
 
     pub fn set_expr_prob(&mut self, expr_node: &Node, p: f64) {
@@ -713,10 +790,16 @@ impl Env {
     }
 
     pub fn get_symbol_prob(&self, sym: &str) -> f64 {
-        self.symbol_prob
-            .get(sym)
-            .copied()
-            .unwrap_or_else(|| self.mid())
+        if let Some(&v) = self.symbol_prob.get(sym) {
+            return v;
+        }
+        let resolved = self.resolve_qualified(sym);
+        if resolved != sym {
+            if let Some(&v) = self.symbol_prob.get(&resolved) {
+                return v;
+            }
+        }
+        self.mid()
     }
 
     /// Push a trace event when tracing is enabled. The event's span is taken
@@ -747,14 +830,31 @@ impl Env {
     }
 
     pub fn get_lambda(&self, name: &str) -> Option<&Lambda> {
-        self.lambdas.get(name)
+        if let Some(l) = self.lambdas.get(name) {
+            return Some(l);
+        }
+        let resolved = self.resolve_qualified(name);
+        if resolved != name {
+            return self.lambdas.get(&resolved);
+        }
+        None
     }
 
     /// Apply an operator by name to the given values.
     pub fn apply_op(&self, name: &str, vals: &[f64]) -> f64 {
         let op = match self.ops.get(name) {
             Some(op) => op.clone(),
-            None => panic!("Unknown op: {}", name),
+            None => {
+                let resolved = self.resolve_qualified(name);
+                if resolved != name {
+                    match self.ops.get(&resolved) {
+                        Some(op) => op.clone(),
+                        None => panic!("Unknown op: {}", name),
+                    }
+                } else {
+                    panic!("Unknown op: {}", name)
+                }
+            }
         };
         match op {
             Op::Not => {
@@ -1426,7 +1526,7 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
             // Prefix: (not X), (and X Y ...), (or X Y ...)
             if let Node::Leaf(ref head) = children[0] {
                 let head_str = head.clone();
-                if env.ops.contains_key(&head_str) {
+                if env.has_op(&head_str) {
                     let vals: Vec<f64> = children[1..]
                         .iter()
                         .map(|a| eval_node(a, env).as_f64())
@@ -1464,44 +1564,7 @@ fn apply_named_op_on_nodes(env: &mut Env, op_name: &str, left: &Node, right: &No
 
 /// Process definition forms: (head: rhs...)
 fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
-    // Term definition: (a: a is a) → declare 'a' as a term
-    if rhs.len() == 3 {
-        if let (Node::Leaf(ref r0), Node::Leaf(ref r1), Node::Leaf(ref r2)) =
-            (&rhs[0], &rhs[1], &rhs[2])
-        {
-            if r1 == "is" && r0 == head && r2 == head {
-                env.terms.insert(head.to_string());
-                return EvalResult::Value(1.0);
-            }
-        }
-    }
-
-    // Prefix type notation: (name: TypeName name) → typed self-referential declaration
-    // e.g. (zero: Natural zero), (boolean: Type boolean), (true: Boolean true)
-    if rhs.len() == 2 {
-        if let Node::Leaf(ref last) = rhs[1] {
-            if last == head {
-                match &rhs[0] {
-                    Node::Leaf(ref type_name)
-                        if type_name.starts_with(|c: char| c.is_uppercase()) =>
-                    {
-                        env.terms.insert(head.to_string());
-                        env.types.insert(head.to_string(), type_name.clone());
-                        return EvalResult::Value(1.0);
-                    }
-                    Node::List(_) => {
-                        env.terms.insert(head.to_string());
-                        let type_key = key_of(&rhs[0]);
-                        env.types.insert(head.to_string(), type_key);
-                        eval_node(&rhs[0], env);
-                        return EvalResult::Value(1.0);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
+    // Configuration directives are file-level and never namespaced.
     // Range configuration: (range: lo hi)
     if head == "range" && rhs.len() == 2 {
         if let (Node::Leaf(ref lo_s), Node::Leaf(ref hi_s)) = (&rhs[0], &rhs[1]) {
@@ -1524,12 +1587,61 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         }
     }
 
+    // Bindings introduced inside `(namespace foo)` are stored under `foo.head`.
+    // The syntactic head (e.g. `a` in `(a: a is a)`) is still used to match
+    // patterns; only the storage key is qualified.
+    let store_name = env.qualify_name(head);
+    // Shadowing diagnostic (E008): if this name was already imported, warn.
+    if store_name != head || env.namespace.is_none() {
+        maybe_warn_shadow(env, &store_name);
+    } else {
+        maybe_warn_shadow(env, head);
+    }
+
+    // Term definition: (a: a is a) → declare 'a' as a term
+    if rhs.len() == 3 {
+        if let (Node::Leaf(ref r0), Node::Leaf(ref r1), Node::Leaf(ref r2)) =
+            (&rhs[0], &rhs[1], &rhs[2])
+        {
+            if r1 == "is" && r0 == head && r2 == head {
+                env.terms.insert(store_name.clone());
+                return EvalResult::Value(1.0);
+            }
+        }
+    }
+
+    // Prefix type notation: (name: TypeName name) → typed self-referential declaration
+    // e.g. (zero: Natural zero), (boolean: Type boolean), (true: Boolean true)
+    if rhs.len() == 2 {
+        if let Node::Leaf(ref last) = rhs[1] {
+            if last == head {
+                match &rhs[0] {
+                    Node::Leaf(ref type_name)
+                        if type_name.starts_with(|c: char| c.is_uppercase()) =>
+                    {
+                        env.terms.insert(store_name.clone());
+                        env.types.insert(store_name.clone(), type_name.clone());
+                        return EvalResult::Value(1.0);
+                    }
+                    Node::List(_) => {
+                        env.terms.insert(store_name.clone());
+                        let type_key = key_of(&rhs[0]);
+                        env.types.insert(store_name.clone(), type_key);
+                        eval_node(&rhs[0], env);
+                        return EvalResult::Value(1.0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     // Optional symbol prior: (a: 0.7)
     if rhs.len() == 1 {
         if let Node::Leaf(ref val_s) = rhs[0] {
             if is_num(val_s) {
                 let p: f64 = val_s.parse().unwrap_or(0.0);
-                env.set_symbol_prob(head, p);
+                env.set_symbol_prob(&store_name, p);
                 return EvalResult::Value(env.to_num(val_s));
             }
         }
@@ -1552,22 +1664,22 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         // Composition like: (!=: not =) or (=: =) (no-op)
         if rhs.len() == 2 {
             if let (Node::Leaf(ref outer), Node::Leaf(ref inner)) = (&rhs[0], &rhs[1]) {
-                if env.ops.contains_key(outer.as_str()) && env.ops.contains_key(inner.as_str()) {
+                if env.has_op(outer.as_str()) && env.has_op(inner.as_str()) {
                     env.define_op(
-                        head,
+                        &store_name,
                         Op::Compose {
                             outer: outer.clone(),
                             inner: inner.clone(),
                         },
                     );
-                    env.trace("resolve", format!("({}: {} {})", head, outer, inner));
+                    env.trace("resolve", format!("({}: {} {})", store_name, outer, inner));
                     return EvalResult::Value(1.0);
                 }
                 // Mirror JS behavior: surface a diagnostic for the missing op.
-                if !env.ops.contains_key(outer.as_str()) {
+                if !env.has_op(outer.as_str()) {
                     panic!("Unknown op: {}", outer);
                 }
-                if !env.ops.contains_key(inner.as_str()) {
+                if !env.has_op(inner.as_str()) {
                     panic!("Unknown op: {}", inner);
                 }
             }
@@ -1578,8 +1690,8 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         {
             if let Node::Leaf(ref sel) = rhs[0] {
                 if let Some(agg) = Aggregator::from_name(sel) {
-                    env.define_op(head, Op::Agg(agg));
-                    env.trace("resolve", format!("({}: {})", head, sel));
+                    env.define_op(&store_name, Op::Agg(agg));
+                    env.trace("resolve", format!("({}: {})", store_name, sel));
                     return EvalResult::Value(1.0);
                 } else {
                     panic!("Unknown aggregator \"{}\"", sel);
@@ -1594,7 +1706,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
             if first == "lambda" && rhs.len() == 3 {
                 if let Some((param_name, param_type)) = parse_binding(&rhs[1]) {
                     let body = rhs[2].clone();
-                    env.terms.insert(head.to_string());
+                    env.terms.insert(store_name.clone());
                     let body_key = key_of(&body);
                     let body_type =
                         env.get_type(&body_key)
@@ -1604,11 +1716,11 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
                                 other => key_of(other),
                             });
                     env.set_type(
-                        head,
+                        &store_name,
                         &format!("(Pi ({} {}) {})", param_type, param_name, body_type),
                     );
                     env.set_lambda(
-                        head,
+                        &store_name,
                         Lambda {
                             param: param_name,
                             param_type,
@@ -1639,9 +1751,9 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
 
         if !is_op {
             if let Node::List(_) = &rhs[0] {
-                env.terms.insert(head.to_string());
+                env.terms.insert(store_name.clone());
                 let type_key = key_of(&rhs[0]);
-                env.set_type(head, &type_key);
+                env.set_type(&store_name, &type_key);
                 eval_node(&rhs[0], env);
                 return EvalResult::Value(1.0);
             }
@@ -1652,13 +1764,47 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
     if rhs.len() == 1 {
         if let Node::Leaf(ref sym) = rhs[0] {
             let prob = env.get_symbol_prob(sym);
-            env.set_symbol_prob(head, prob);
-            return EvalResult::Value(env.get_symbol_prob(head));
+            env.set_symbol_prob(&store_name, prob);
+            return EvalResult::Value(env.get_symbol_prob(&store_name));
         }
     }
 
     // Else: ignore (keeps PoC minimal)
     EvalResult::Value(0.0)
+}
+
+/// Emit a shadowing warning (E008) if the name being defined was previously
+/// brought in via `(import ...)`. The import handler tracks names it added to
+/// the environment in `env.imported`; the importing file's own definitions are
+/// not in that set, so re-binding them locally never triggers the warning.
+/// Diagnostics are appended to `env.shadow_diagnostics` and surfaced by the
+/// outer `evaluate_inner` boundary alongside other diagnostics.
+fn maybe_warn_shadow(env: &mut Env, name: &str) {
+    // Resolve the name through alias mappings so a re-binding like `(cl.and: ...)`
+    // matches the canonical imported key `classical.and`.
+    let key = if env.imported.contains(name) {
+        name.to_string()
+    } else {
+        let resolved = env.resolve_qualified(name);
+        if resolved != name && env.imported.contains(&resolved) {
+            resolved
+        } else {
+            return;
+        }
+    };
+    // Only warn once per name to keep noise down; remove from imported so the
+    // shadow only fires the first time it's rebinding.
+    env.imported.remove(&key);
+    let span = env
+        .current_span
+        .clone()
+        .unwrap_or_else(|| env.default_span.clone());
+    let diag = Diagnostic::new(
+        "E008",
+        format!("Definition of \"{}\" shadows an imported binding", name),
+        span,
+    );
+    env.shadow_diagnostics.push(diag);
 }
 
 // ========== Meta-expression Adapter ==========
@@ -2145,8 +2291,13 @@ fn canonicalize_import(p: &Path) -> PathBuf {
 /// and evaluates its contents against the same `env`, threading the import
 /// context for cycle detection and caching. Returns a `Diagnostic` if the
 /// import itself fails (cycle, missing file, bad target).
+///
+/// When `alias` is Some, the imported file's declared namespace (or the alias
+/// itself if no namespace was declared) is registered as `aliases[alias] -> ns`
+/// so qualified references like `(? (alias.foo))` resolve into that namespace.
 fn handle_import(
     target_node: &Node,
+    alias: Option<&str>,
     span: &Span,
     importing_file: Option<&str>,
     env: &mut Env,
@@ -2172,6 +2323,21 @@ fn handle_import(
             span.clone(),
         ));
     }
+
+    // Validate alias collisions before reading the file.
+    if let Some(a) = alias {
+        if env.aliases.contains_key(a) || env.namespace.as_deref() == Some(a) {
+            return Some(Diagnostic::new(
+                "E009",
+                format!(
+                    "Import alias \"{}\" collides with an existing namespace or alias",
+                    a
+                ),
+                span.clone(),
+            ));
+        }
+    }
+
     let unresolved = resolve_import_path(&raw, importing_file);
     let resolved = canonicalize_import(&unresolved);
 
@@ -2190,6 +2356,16 @@ fn handle_import(
     }
 
     if ctx.loaded.contains(&resolved) {
+        // For cached re-imports, the imported namespace is already loaded
+        // into the env. We only need to wire up the alias.
+        if let Some(a) = alias {
+            let recorded_ns = env
+                .file_namespaces
+                .get(&resolved)
+                .cloned()
+                .unwrap_or_else(|| a.to_string());
+            env.aliases.insert(a.to_string(), recorded_ns);
+        }
         if options.trace {
             env.trace_events.push(TraceEvent::new(
                 "import",
@@ -2221,9 +2397,58 @@ fn handle_import(
         ));
     }
 
+    // Snapshot bindings so we can diff after the import to learn which names
+    // were introduced by the imported file. Used to surface E008 when a later
+    // top-level definition rebinds them.
+    let before_ops: HashSet<String> = env.ops.keys().cloned().collect();
+    let before_syms: HashSet<String> = env.symbol_prob.keys().cloned().collect();
+    let before_terms: HashSet<String> = env.terms.iter().cloned().collect();
+    let before_lambdas: HashSet<String> = env.lambdas.keys().cloned().collect();
+    let before_namespace = env.namespace.clone();
+
     let resolved_str = resolved.to_string_lossy().into_owned();
     let inner = evaluate_inner(&text, Some(&resolved_str), env, options, ctx);
     ctx.stack.pop();
+
+    // The imported file may have declared its own (namespace ...) — capture it
+    // before restoring the importing file's namespace so we can wire up the
+    // alias and remember the file's namespace for cached re-imports.
+    let imported_namespace = env.namespace.clone();
+    env.namespace = before_namespace;
+    if let Some(ns) = &imported_namespace {
+        env.file_namespaces.insert(resolved.clone(), ns.clone());
+    }
+
+    // Track which bindings the imported file added so a later top-level
+    // definition that rebinds them surfaces an E008 shadowing warning.
+    for k in env.ops.keys() {
+        if !before_ops.contains(k) {
+            env.imported.insert(k.clone());
+        }
+    }
+    for k in env.symbol_prob.keys() {
+        if !before_syms.contains(k) {
+            env.imported.insert(k.clone());
+        }
+    }
+    for k in env.terms.iter() {
+        if !before_terms.contains(k) {
+            env.imported.insert(k.clone());
+        }
+    }
+    for k in env.lambdas.keys() {
+        if !before_lambdas.contains(k) {
+            env.imported.insert(k.clone());
+        }
+    }
+
+    // Wire up the alias once the imported file has finished evaluating. If the
+    // imported file declared a namespace, alias maps to it; otherwise it maps
+    // to the alias itself (so qualified refs `alias.x` resolve to `alias.x`).
+    if let Some(a) = alias {
+        let target_ns = imported_namespace.unwrap_or_else(|| a.to_string());
+        env.aliases.insert(a.to_string(), target_ns);
+    }
 
     for diag in inner.diagnostics {
         diagnostics.push(diag);
@@ -2290,20 +2515,76 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
             .unwrap_or_else(|| Span::new(file.map(|s| s.to_string()), 1, 1, 0));
         env.current_span = Some(span.clone());
 
-        // Top-level (import <path>) directive — handled before regular
-        // evaluation so it can recursively call evaluate_inner against the
-        // same env while threading the import context.
+        // Top-level (namespace <name>) directive — sets the active namespace
+        // for all subsequent definitions in this file. The `(namespace foo)`
+        // form is itself never namespaced. (issue #34)
         if let Node::List(children) = &form {
             if children.len() == 2 {
-                if let Node::Leaf(head) = &children[0] {
-                    if head == "import" {
+                if let (Node::Leaf(h), Node::Leaf(n)) = (&children[0], &children[1]) {
+                    if h == "namespace" {
+                        if n.is_empty() || n.contains('.') {
+                            diagnostics.push(Diagnostic::new(
+                                "E009",
+                                format!("Invalid namespace name \"{}\"", n),
+                                span.clone(),
+                            ));
+                        } else {
+                            env.namespace = Some(n.clone());
+                            if options.trace {
+                                env.trace_events
+                                    .push(TraceEvent::new("namespace", n.clone(), span.clone()));
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Top-level (import <path>) and (import <path> as <alias>) directives —
+        // handled before regular evaluation so they can recursively call
+        // evaluate_inner against the same env while threading the import
+        // context.
+        if let Node::List(children) = &form {
+            if let Some(Node::Leaf(head)) = children.first() {
+                if head == "import" {
+                    if children.len() == 2 {
                         let target = children[1].clone();
-                        if let Some(diag) =
-                            handle_import(&target, &span, file, env, options, ctx, &mut diagnostics)
-                        {
+                        if let Some(diag) = handle_import(
+                            &target,
+                            None,
+                            &span,
+                            file,
+                            env,
+                            options,
+                            ctx,
+                            &mut diagnostics,
+                        ) {
                             diagnostics.push(diag);
                         }
                         continue;
+                    }
+                    if children.len() == 4 {
+                        if let (Node::Leaf(as_kw), Node::Leaf(alias_name)) =
+                            (&children[2], &children[3])
+                        {
+                            if as_kw == "as" {
+                                let target = children[1].clone();
+                                if let Some(diag) = handle_import(
+                                    &target,
+                                    Some(alias_name),
+                                    &span,
+                                    file,
+                                    env,
+                                    options,
+                                    ctx,
+                                    &mut diagnostics,
+                                ) {
+                                    diagnostics.push(diag);
+                                }
+                                continue;
+                            }
+                        }
                     }
                 }
             }
@@ -2355,6 +2636,16 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
     env.current_span = None;
 
     std::panic::set_hook(prev_hook);
+
+    // Surface any shadow diagnostics collected during this evaluation pass.
+    // Drain them so a nested evaluate_inner (called from handle_import) does
+    // not re-emit the same diagnostic at the outer boundary.
+    if !env.shadow_diagnostics.is_empty() {
+        let drained = std::mem::take(&mut env.shadow_diagnostics);
+        for d in drained {
+            diagnostics.push(d);
+        }
+    }
 
     let trace = if options.trace {
         std::mem::take(&mut env.trace_events)
