@@ -175,6 +175,16 @@ class Env {
     this.symbolProb = new Map();                // optional symbol priors if you want (x: 0.7)
     this.types = new Map();                     // key(expr) -> type expression (as string)
     this.lambdas = new Map();                   // name -> { param, paramType, body } for named lambdas
+    // Namespace state (issue #34): a file can declare `(namespace foo)`, which
+    // prefixes every name it subsequently introduces with `foo.`. Imports can
+    // be aliased via `(import "x.lino" as a)`, which records `a` -> the
+    // imported file's declared namespace so `a.name` resolves to that name.
+    // `imported` tracks names that came from an import (not declared in the
+    // importing file) so we can emit a shadowing warning (E008) when a later
+    // top-level definition rebinds them.
+    this.namespace = null;
+    this.aliases = new Map();
+    this.imported = new Set();
     // Optional tracer: when set, key evaluation events (operator resolutions,
     // assignment lookups, top-level reductions) are pushed via `trace(kind, detail)`.
     // The current top-level form span is stashed on the Env so leaf hooks can
@@ -275,8 +285,15 @@ class Env {
   }
 
   getOp(name){
-    if (!this.ops.has(name)) throw new RmlError('E001', `Unknown op: ${name}`);
-    return this.ops.get(name);
+    if (this.ops.has(name)) return this.ops.get(name);
+    const resolved = this._resolveQualified(name);
+    if (resolved !== name && this.ops.has(resolved)) return this.ops.get(resolved);
+    throw new RmlError('E001', `Unknown op: ${name}`);
+  }
+  hasOp(name){
+    if (this.ops.has(name)) return true;
+    const resolved = this._resolveQualified(name);
+    return resolved !== name && this.ops.has(resolved);
   }
   defineOp(name, fn){ this.ops.set(name, fn); }
 
@@ -298,9 +315,58 @@ class Env {
     return this.lambdas.get(name) || null;
   }
   setSymbolProb(sym, p){ this.symbolProb.set(sym, this.clamp(p)); }
-  getSymbolProb(sym){ return this.symbolProb.has(sym) ? this.symbolProb.get(sym) : this.mid; }
+  getSymbolProb(sym){
+    if (this.symbolProb.has(sym)) return this.symbolProb.get(sym);
+    const resolved = this._resolveQualified(sym);
+    if (resolved !== sym && this.symbolProb.has(resolved)) {
+      return this.symbolProb.get(resolved);
+    }
+    return this.mid;
+  }
   trace(kind, detail){
     if (this._tracer) this._tracer(kind, detail, this._currentSpan);
+  }
+
+  // ---------- Namespace helpers (issue #34) ----------
+  // Apply the active namespace to a freshly declared name, e.g. inside
+  // `(namespace classical)` the form `(and: min)` registers `classical.and`,
+  // not `and`. Names that already contain a `.` are passed through.
+  qualifyName(name) {
+    if (typeof name !== 'string') return name;
+    if (this.namespace && !name.includes('.')) return `${this.namespace}.${name}`;
+    return name;
+  }
+
+  // Resolve a possibly-qualified name to its canonical storage key. Order:
+  //   1. Alias prefix: `cl.foo` with alias `cl -> classical` becomes
+  //      `classical.foo`.
+  //   2. Active namespace: an unqualified name lives in `<ns>.<name>`.
+  //   3. Bare name: returned unchanged.
+  // Used by lookup helpers (operators, symbol probabilities) to find
+  // namespaced bindings without forcing every call site to spell them out.
+  _resolveQualified(name) {
+    if (typeof name !== 'string') return name;
+    const dotIdx = name.indexOf('.');
+    if (dotIdx > 0) {
+      const prefix = name.slice(0, dotIdx);
+      const rest = name.slice(dotIdx + 1);
+      if (this.aliases.has(prefix)) {
+        return `${this.aliases.get(prefix)}.${rest}`;
+      }
+      return name;
+    }
+    if (this.namespace) {
+      const qualified = `${this.namespace}.${name}`;
+      if (
+        this.ops.has(qualified) ||
+        this.symbolProb.has(qualified) ||
+        this.terms.has(qualified) ||
+        this.lambdas.has(qualified)
+      ) {
+        return qualified;
+      }
+    }
+    return name;
   }
 }
 
@@ -623,7 +689,7 @@ function evalNode(node, env){
 
   // Prefix: (not X), (and X Y ...), (or X Y ...)
   const [head, ...args] = node;
-  if (typeof head === 'string' && env.ops.has(head)) {
+  if (typeof head === 'string' && env.hasOp(head)) {
     const op = env.getOp(head);
     const vals = args.map(a => evalNode(a, env));
     return env.clamp(op(...vals));
@@ -631,7 +697,7 @@ function evalNode(node, env){
 
   // Fall through: prefix application (f x y ...) for named lambdas
   if (typeof head === 'string' && args.length >= 1) {
-    const lambda = env.getLambda(head);
+    const lambda = env.getLambda(head) || env.getLambda(env._resolveQualified(head));
     if (lambda) {
       // Apply first argument, then recursively apply rest
       let result = substitute(lambda.body, lambda.param, args[0]);
@@ -683,9 +749,35 @@ function _reinitOps(env) {
 }
 
 function defineForm(head, rhs, env){
+  // Configuration directives are file-level and never namespaced.
+  // Range configuration: (range: lo hi) — sets the truth value range
+  if (head === 'range' && rhs.length === 2 && isNum(rhs[0]) && isNum(rhs[1])) {
+    env.lo = parseFloat(rhs[0]);
+    env.hi = parseFloat(rhs[1]);
+    _reinitOps(env);
+    return 1;
+  }
+  // Valence configuration: (valence: N) — sets the number of truth values
+  // N=1: unary (trivial), N=2: binary (Boolean), N=3: ternary, N=0: continuous
+  if (head === 'valence' && rhs.length === 1 && isNum(rhs[0])) {
+    env.valence = parseInt(rhs[0], 10);
+    return 1;
+  }
+
+  // Bindings introduced inside `(namespace foo)` are stored under `foo.head`.
+  // The syntactic head (e.g. `a` in `(a: a is a)`) is still used to match
+  // patterns; only the storage key is qualified.
+  const storeName = env.qualifyName(head);
+  // Shadowing diagnostic (E008): if this name was already imported, warn.
+  if (storeName !== head || env.namespace === null) {
+    _maybeWarnShadow(env, storeName);
+  } else {
+    _maybeWarnShadow(env, head);
+  }
+
   // Term definition: (a: a is a)  → declare 'a' as a term (no probability assignment)
   if (rhs.length === 3 && typeof rhs[0]==='string' && rhs[1]==='is' && typeof rhs[2]==='string' && rhs[0]===head && rhs[2]===head) {
-    env.terms.add(head);
+    env.terms.add(storeName);
     return 1;
   }
 
@@ -695,8 +787,8 @@ function defineForm(head, rhs, env){
     const typeName = rhs[0];
     // Only if typeName starts with uppercase (type convention) and is not an operator
     if (/^[A-Z]/.test(typeName)) {
-      env.terms.add(head);
-      env.setType(head, typeName);
+      env.terms.add(storeName);
+      env.setType(storeName, typeName);
       return 1;
     }
   }
@@ -704,8 +796,8 @@ function defineForm(head, rhs, env){
   // Prefix type notation with complex type: (name: (Type 0) name) → typed self-referential declaration
   if (rhs.length === 2 && Array.isArray(rhs[0]) && typeof rhs[1] === 'string' && rhs[1] === head) {
     const typeExpr = rhs[0];
-    env.terms.add(head);
-    env.setType(head, typeExpr);
+    env.terms.add(storeName);
+    env.setType(storeName, typeExpr);
     evalNode(typeExpr, env);
     return 1;
   }
@@ -717,31 +809,16 @@ function defineForm(head, rhs, env){
     const isOp = ['=','!=','and','or','not','is','?:','both','neither'].includes(head) || /[=!]/.test(head);
     if (!isOp) {
       const typeExpr = rhs[0];
-      env.terms.add(head);
-      env.setType(head, typeExpr);
+      env.terms.add(storeName);
+      env.setType(storeName, typeExpr);
       evalNode(typeExpr, env);
       return 1;
     }
   }
 
-  // Range configuration: (range: lo hi) — sets the truth value range
-  if (head === 'range' && rhs.length === 2 && isNum(rhs[0]) && isNum(rhs[1])) {
-    env.lo = parseFloat(rhs[0]);
-    env.hi = parseFloat(rhs[1]);
-    _reinitOps(env);
-    return 1;
-  }
-
-  // Valence configuration: (valence: N) — sets the number of truth values
-  // N=1: unary (trivial), N=2: binary (Boolean), N=3: ternary, N=0: continuous
-  if (head === 'valence' && rhs.length === 1 && isNum(rhs[0])) {
-    env.valence = parseInt(rhs[0], 10);
-    return 1;
-  }
-
   // Optional symbol prior: (a: 0.7) — not required for your use-case, but allowed
   if (rhs.length === 1 && isNum(rhs[0])) {
-    env.setSymbolProb(head, parseFloat(rhs[0]));
+    env.setSymbolProb(storeName, parseFloat(rhs[0]));
     return env.toNum(rhs[0]);
   }
 
@@ -752,8 +829,8 @@ function defineForm(head, rhs, env){
     if (rhs.length === 2 && typeof rhs[0]==='string' && typeof rhs[1]==='string') {
       const outer = env.getOp(rhs[0]);
       const inner = env.getOp(rhs[1]);
-      env.defineOp(head, (...xs) => env.clamp( outer( inner(...xs) ) ));
-      env.trace('resolve', `(${head}: ${rhs[0]} ${rhs[1]})`);
+      env.defineOp(storeName, (...xs) => env.clamp( outer( inner(...xs) ) ));
+      env.trace('resolve', `(${storeName}: ${rhs[0]} ${rhs[1]})`);
       return 1;
     }
 
@@ -768,8 +845,8 @@ function defineForm(head, rhs, env){
         sel==='product' || sel==='prod' ? xs=>xs.reduce((a,b)=>a*b,1) :
         sel==='probabilistic_sum' || sel==='ps' ? xs=> 1 - xs.reduce((a,b)=>a*(1-b),1) : null;
       if (!agg) throw new RmlError('E004', `Unknown aggregator "${sel}"`);
-      env.defineOp(head, (...xs)=> xs.length? agg(xs) : lo);
-      env.trace('resolve', `(${head}: ${sel})`);
+      env.defineOp(storeName, (...xs)=> xs.length? agg(xs) : lo);
+      env.trace('resolve', `(${storeName}: ${sel})`);
       return 1;
     }
 
@@ -783,11 +860,11 @@ function defineForm(head, rhs, env){
       if (parsed) {
         const { paramName, paramType } = parsed;
         const body = rhs[2];
-        env.terms.add(head);
-        env.setLambda(head, paramName, paramType, body);
+        env.terms.add(storeName);
+        env.setLambda(storeName, paramName, paramType, body);
         const paramTypeKey = typeof paramType === 'string' ? paramType : keyOf(paramType);
         const bodyTypeKey = env.getType(body) || (typeof body === 'string' ? body : keyOf(body));
-        env.setType(head, '(Pi (' + paramTypeKey + ' ' + paramName + ') ' + bodyTypeKey + ')');
+        env.setType(storeName, '(Pi (' + paramTypeKey + ' ' + paramName + ') ' + bodyTypeKey + ')');
         return 1;
       }
     }
@@ -798,12 +875,45 @@ function defineForm(head, rhs, env){
 
   // Generic symbol alias like (x: y) just copies y's prior probability if any
   if (rhs.length===1 && typeof rhs[0]==='string') {
-    env.setSymbolProb(head, env.getSymbolProb(rhs[0]));
-    return env.getSymbolProb(head);
+    env.setSymbolProb(storeName, env.getSymbolProb(rhs[0]));
+    return env.getSymbolProb(storeName);
   }
 
   // Else: ignore (keeps PoC minimal)
   return 0;
+}
+
+// Emit a shadowing warning (E008) if the name being defined was previously
+// brought in via `(import ...)`. The import handler tracks names it added to
+// the environment in `env.imported`; the importing file's own definitions are
+// not in that set, so re-binding them locally never triggers the warning.
+// Diagnostics are appended to `env._shadowDiagnostics` and surfaced by the
+// outer `evaluate()` loop alongside other diagnostics.
+function _maybeWarnShadow(env, name) {
+  if (!env.imported) return;
+  // Resolve the name through alias mappings so a re-binding like `(cl.and: ...)`
+  // matches the canonical imported key `classical.and`.
+  let key = name;
+  if (!env.imported.has(key)) {
+    const resolved = env._resolveQualified(name);
+    if (resolved !== name && env.imported.has(resolved)) {
+      key = resolved;
+    } else {
+      return;
+    }
+  }
+  // Only warn once per name to keep noise down; remove from imported so the
+  // shadow only fires the first time it's rebinding.
+  env.imported.delete(key);
+  const span = env._currentSpan || { file: null, line: 1, col: 1, length: 0 };
+  const diag = new Diagnostic({
+    code: 'E008',
+    message: `Definition of "${name}" shadows an imported binding`,
+    span,
+  });
+  if (Array.isArray(env._shadowDiagnostics)) {
+    env._shadowDiagnostics.push(diag);
+  }
 }
 
 // ---------- Public LiNo helpers ----------
@@ -930,6 +1040,11 @@ function evaluate(code, options) {
   const importStack = opts._importStack || [];
   const importedFiles = opts._importedFiles || new Set();
 
+  // Shadowing diagnostics (E008) are appended to this array by `defineForm`
+  // when a top-level definition rebinds an imported name. Surfaced after the
+  // form-evaluation loop so they appear alongside other diagnostics.
+  if (!Array.isArray(env._shadowDiagnostics)) env._shadowDiagnostics = [];
+
   // Pre-compute spans for each top-level form so error reporting can attach
   // a real source location even when the parser/evaluator throw deep inside.
   const formSpans = computeFormSpans(sourceText, file);
@@ -955,10 +1070,40 @@ function evaluate(code, options) {
     const span = formSpans[idx] || { file, line: 1, col: 1, length: 0 };
     env._currentSpan = span;
 
-    // Handle (import <path>) at the top level — file-level directive, not a
-    // regular RML expression.
-    if (Array.isArray(form) && form.length === 2 && form[0] === 'import') {
-      const importDiag = handleImport(form[1], span, file, env, importStack, importedFiles, diagnostics, traceEnabled, trace);
+    // Handle (namespace <name>) at the top level — sets the active namespace
+    // for subsequent definitions in this file (issue #34).
+    if (Array.isArray(form) && form.length === 2 && form[0] === 'namespace' && typeof form[1] === 'string') {
+      const ns = form[1];
+      if (ns.includes('.')) {
+        diagnostics.push(new Diagnostic({
+          code: 'E009',
+          message: `Namespace name must not contain '.': "${ns}"`,
+          span,
+        }));
+      } else {
+        env.namespace = ns;
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: 'namespace', detail: ns, span }));
+        }
+      }
+      continue;
+    }
+
+    // Handle (import <path>) and (import <path> as <alias>) at the top level —
+    // file-level directives, not regular RML expressions.
+    if (Array.isArray(form) && form[0] === 'import') {
+      let importDiag = null;
+      if (form.length === 2) {
+        importDiag = handleImport(form[1], null, span, file, env, importStack, importedFiles, diagnostics, traceEnabled, trace);
+      } else if (form.length === 4 && form[2] === 'as' && typeof form[3] === 'string') {
+        importDiag = handleImport(form[1], form[3], span, file, env, importStack, importedFiles, diagnostics, traceEnabled, trace);
+      } else if (form.length === 2 || form.length >= 3) {
+        importDiag = new Diagnostic({
+          code: 'E007',
+          message: 'Import directive must be (import "<path>") or (import "<path>" as <alias>)',
+          span,
+        });
+      }
       if (importDiag) diagnostics.push(importDiag);
       continue;
     }
@@ -988,6 +1133,11 @@ function evaluate(code, options) {
   }
   env._currentSpan = null;
   env._tracer = null;
+  // Surface shadow diagnostics (E008) collected during defineForm calls.
+  if (Array.isArray(env._shadowDiagnostics) && env._shadowDiagnostics.length > 0) {
+    for (const d of env._shadowDiagnostics) diagnostics.push(d);
+    env._shadowDiagnostics.length = 0;
+  }
   const out = { results, diagnostics };
   if (traceEnabled) out.trace = trace;
   return out;
@@ -1015,7 +1165,11 @@ function _resolveImportPath(target, importingFile) {
 }
 
 // Process a top-level (import <path>) directive. Returns a Diagnostic or null.
-function handleImport(rawTarget, span, importingFile, env, importStack, importedFiles, diagnostics, traceEnabled, trace) {
+// `alias`, when non-null, comes from the `(import "<path>" as <alias>)` form
+// (issue #34): after the imported file finishes evaluating, the alias is
+// recorded in `env.aliases` mapping `alias -> imported namespace`, so
+// references like `<alias>.foo` resolve against that namespace.
+function handleImport(rawTarget, alias, span, importingFile, env, importStack, importedFiles, diagnostics, traceEnabled, trace) {
   const target = _unquotePath(rawTarget);
   if (typeof target !== 'string' || !target) {
     return new Diagnostic({
@@ -1023,6 +1177,22 @@ function handleImport(rawTarget, span, importingFile, env, importStack, imported
       message: 'Import target must be a string path',
       span,
     });
+  }
+  if (alias !== null && alias !== undefined) {
+    if (typeof alias !== 'string' || !alias || alias.includes('.')) {
+      return new Diagnostic({
+        code: 'E009',
+        message: `Import alias must be a non-empty bare identifier (got "${alias}")`,
+        span,
+      });
+    }
+    if (env.aliases.has(alias) || env.namespace === alias) {
+      return new Diagnostic({
+        code: 'E009',
+        message: `Import alias "${alias}" collides with an existing namespace or alias`,
+        span,
+      });
+    }
   }
   const resolved = _resolveImportPath(target, importingFile);
 
@@ -1038,9 +1208,16 @@ function handleImport(rawTarget, span, importingFile, env, importStack, imported
   }
 
   // Cache: each file is loaded once. Repeated imports (e.g. diamond pattern)
-  // are silent no-ops.
+  // are silent no-ops — but the alias still needs to register, since the
+  // imported namespace is already loaded into the env.
   if (importedFiles.has(resolved)) {
-    if (traceEnabled && trace) {
+    if (alias) {
+      const recordedNs = (env._fileNamespaces && env._fileNamespaces.get(resolved)) || alias;
+      env.aliases.set(alias, recordedNs);
+      if (traceEnabled && trace) {
+        trace.push(new TraceEvent({ kind: 'import', detail: `${resolved} as ${alias} (cached)`, span }));
+      }
+    } else if (traceEnabled && trace) {
       trace.push(new TraceEvent({ kind: 'import', detail: `${resolved} (cached)`, span }));
     }
     return null;
@@ -1060,8 +1237,17 @@ function handleImport(rawTarget, span, importingFile, env, importStack, imported
   importedFiles.add(resolved);
   importStack.push(resolved);
   if (traceEnabled && trace) {
-    trace.push(new TraceEvent({ kind: 'import', detail: resolved, span }));
+    trace.push(new TraceEvent({ kind: 'import', detail: alias ? `${resolved} as ${alias}` : resolved, span }));
   }
+
+  // Track names introduced by this import so the importing file can fire a
+  // shadowing diagnostic (E008) if it later rebinds them. Snapshot the
+  // current bindings before evaluating the imported file, then diff.
+  const beforeOps = new Set(env.ops.keys());
+  const beforeSyms = new Set(env.symbolProb.keys());
+  const beforeTerms = new Set(env.terms);
+  const beforeLambdas = new Set(env.lambdas.keys());
+  const beforeNamespace = env.namespace;
 
   const inner = evaluate(text, {
     env,
@@ -1071,7 +1257,36 @@ function handleImport(rawTarget, span, importingFile, env, importStack, imported
     _importedFiles: importedFiles,
   });
 
+  // The imported file may have declared its own (namespace ...) — capture it
+  // before restoring the importing file's namespace so we can wire up the
+  // alias and remember the file's namespace for cached re-imports.
+  const importedNamespace = env.namespace;
+  env.namespace = beforeNamespace;
+  if (importedNamespace) {
+    if (!env._fileNamespaces) env._fileNamespaces = new Map();
+    env._fileNamespaces.set(resolved, importedNamespace);
+  }
+
   importStack.pop();
+
+  // Record names added by the import for shadowing detection. Skip this when
+  // the import is itself nested inside another import — only the top-level
+  // file should warn.
+  if (importStack.length === 0 || (importingFile && importStack[importStack.length - 1] === importingFile)) {
+    for (const k of env.ops.keys()) if (!beforeOps.has(k)) env.imported.add(k);
+    for (const k of env.symbolProb.keys()) if (!beforeSyms.has(k)) env.imported.add(k);
+    for (const k of env.terms) if (!beforeTerms.has(k)) env.imported.add(k);
+    for (const k of env.lambdas.keys()) if (!beforeLambdas.has(k)) env.imported.add(k);
+  }
+
+  // Wire up the alias once the imported file has finished evaluating. If the
+  // imported file declared a namespace, alias maps to it; otherwise it maps
+  // to the alias name itself (so qualified references through the alias still
+  // work for namespace-less files — symbols defined as top-level become
+  // accessible via `<alias>.<name>` only if pre-existing under that key).
+  if (alias) {
+    env.aliases.set(alias, importedNamespace || alias);
+  }
 
   // Forward inner diagnostics so the importer surfaces errors from the
   // imported file with their original spans intact.
