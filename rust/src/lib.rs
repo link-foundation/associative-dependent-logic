@@ -2038,6 +2038,20 @@ pub fn evaluate_with_options(
     file: Option<&str>,
     options: EvaluateOptions,
 ) -> EvaluateResult {
+    let mut env = Env::new(options.env.clone());
+    env.trace_enabled = options.trace;
+    env.default_span = Span::new(file.map(|s| s.to_string()), 1, 1, 0);
+    evaluate_inner(text, file, &mut env, &options)
+}
+
+/// Variant of [`evaluate`] that runs against a caller-owned `Env` instead of
+/// allocating a fresh one.  Used by the REPL to preserve state across inputs.
+pub fn evaluate_with_env(text: &str, file: Option<&str>, env: &mut Env) -> EvaluateResult {
+    let options = EvaluateOptions::default();
+    evaluate_inner(text, file, env, &options)
+}
+
+fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &EvaluateOptions) -> EvaluateResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let spans = compute_form_spans(text, file);
 
@@ -2064,9 +2078,6 @@ pub fn evaluate_with_options(
         })
         .collect();
 
-    let mut env = Env::new(options.env);
-    env.trace_enabled = options.trace;
-    env.default_span = Span::new(file.map(|s| s.to_string()), 1, 1, 0);
     let mut results: Vec<RunResult> = Vec::new();
 
     // Silence the default panic hook while we deliberately catch evaluator
@@ -2100,7 +2111,7 @@ pub fn evaluate_with_options(
         } else {
             None
         };
-        let result = catch_unwind(AssertUnwindSafe(|| eval_node(&form, &mut env)));
+        let result = catch_unwind(AssertUnwindSafe(|| eval_node(&form, env)));
         match result {
             Ok(eval_res) => {
                 if options.trace {
@@ -2261,3 +2272,5 @@ pub fn run(text: &str, options: Option<EnvOptions>) -> Vec<f64> {
 
 // Tests are in the tests/ directory (integration tests).
 // To run: cargo test
+
+pub mod repl;

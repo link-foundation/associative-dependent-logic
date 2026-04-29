@@ -905,11 +905,14 @@ function computeFormSpans(text, file) {
 // New structured evaluator: returns { results, diagnostics }. Existing
 // callers can keep using `run`, which now delegates to this and surfaces only
 // the result list (preserving its previous signature for tests/CLI consumers).
+//
+// `options.env` may be an existing `Env` instance (used by the REPL to
+// preserve state across inputs) or a plain options object passed to `new Env`.
 function evaluate(code, options) {
   const opts = options || {};
   const file = opts.file || null;
   const sourceText = String(code);
-  const env = new Env(opts.env || opts);
+  const env = opts.env instanceof Env ? opts.env : new Env(opts.env || opts);
   const results = [];
   const diagnostics = [];
   const traceEnabled = !!opts.trace;
@@ -1170,8 +1173,10 @@ function run(text, options){
   return outs;
 }
 
-// CLI
-if (import.meta.url === `file://${process.argv[1]}`) {
+// CLI (runs only when invoked directly, not when imported as a library).
+// The REPL subcommand lives in `./rml-repl.mjs` so we can `await import` it
+// without triggering an ESM circular-dependency deadlock.
+async function runCli() {
   const argv = process.argv.slice(2);
   let trace = false;
   const positionals = [];
@@ -1179,13 +1184,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (arg === '--trace') trace = true;
     else positionals.push(arg);
   }
-  const file = positionals[0];
-  if (!file) {
-    console.error('Usage: node src/rml-links.mjs [--trace] <kb.lino>');
+  const arg = positionals[0];
+  if (!arg) {
+    console.error('Usage: rml [--trace] <kb.lino>   |   rml repl');
     process.exit(1);
   }
-  const text = fs.readFileSync(file, 'utf8');
-  const out = evaluate(text, { file, trace });
+  if (arg === 'repl') {
+    const replUrl = new URL('./rml-repl.mjs', import.meta.url).href;
+    const { runRepl } = await import(replUrl);
+    await runRepl();
+    return;
+  }
+  const text = fs.readFileSync(arg, 'utf8');
+  const out = evaluate(text, { file: arg, trace });
   if (trace && out.trace) {
     for (const event of out.trace) {
       console.error(formatTraceEvent(event));
@@ -1202,6 +1213,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.error(formatDiagnostic(diag, text));
   }
   if (out.diagnostics.length > 0) process.exit(1);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runCli().catch(err => {
+    console.error(err && err.stack ? err.stack : err);
+    process.exit(1);
+  });
 }
 
 export {
