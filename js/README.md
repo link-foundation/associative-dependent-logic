@@ -55,6 +55,10 @@ npm run demo
 ```javascript
 import {
   run,
+  evaluate,
+  formatDiagnostic,
+  Diagnostic,
+  RmlError,
   parseLino,
   tokenizeOne,
   parseOne,
@@ -76,6 +80,13 @@ const results = run(linoText);
 
 // Run with custom range and valence
 const results2 = run(linoText, { lo: -1, hi: 1, valence: 3 });
+
+// Structured evaluation: never throws, returns diagnostics for every error.
+// See ../docs/DIAGNOSTICS.md for the error-code table.
+const { results: out, diagnostics } = evaluate(linoText, { file: 'kb.lino' });
+for (const d of diagnostics) {
+  console.error(formatDiagnostic(d, linoText));
+}
 
 // Parse and evaluate individual expressions
 const env = new Env({ lo: 0, hi: 1, valence: 3 });

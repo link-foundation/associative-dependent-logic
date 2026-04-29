@@ -672,6 +672,15 @@ See language-specific documentation:
 - [JavaScript API](./js/README.md#api)
 - [Rust API](./rust/README.md#api)
 
+## Diagnostics
+
+Both implementations expose an `evaluate()` entry point that returns a list
+of results plus structured diagnostics — every parser, evaluator, and type
+checker error carries a stable code (`E001`, …), a message, and a 1-based
+source span. The CLIs print them as `file:line:col: Exxx: message` with a
+caret under the offending token. See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md)
+for the full code list and usage examples.
+
 ## References
 
 - [Many-valued logic](https://en.wikipedia.org/wiki/Many-valued_logic) — overview of logics with more than two truth values
