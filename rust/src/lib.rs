@@ -3162,3 +3162,4 @@ pub fn run(text: &str, options: Option<EnvOptions>) -> Vec<f64> {
 // To run: cargo test
 
 pub mod repl;
+pub mod check;

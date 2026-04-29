@@ -1,0 +1,5 @@
+(by structural-equality (a a))
+(by assigned-equality (b b))
+(by sum (by literal 1) (by literal 5))
+(by not (by literal 0))
+(by numeric-equality (1 2))
