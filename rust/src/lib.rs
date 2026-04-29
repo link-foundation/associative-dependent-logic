@@ -68,11 +68,73 @@ impl Diagnostic {
 }
 
 /// Result of `evaluate(src)`: a list of query results (numeric or type) plus
-/// any diagnostics emitted while parsing/evaluating.
+/// any diagnostics emitted while parsing/evaluating. When tracing is enabled
+/// via `evaluate_with_options`, `trace` carries the deterministic sequence of
+/// `TraceEvent` values recorded during evaluation; otherwise it is empty.
 #[derive(Debug, Clone, Default)]
 pub struct EvaluateResult {
     pub results: Vec<RunResult>,
     pub diagnostics: Vec<Diagnostic>,
+    pub trace: Vec<TraceEvent>,
+}
+
+/// Options for `evaluate_with_options` — bundles environment settings with
+/// runtime flags like `trace`. Keeps `evaluate()` backwards compatible.
+#[derive(Debug, Clone, Default)]
+pub struct EvaluateOptions {
+    pub env: Option<EnvOptions>,
+    pub trace: bool,
+}
+
+// ========== Trace events ==========
+// When `evaluate` is called with `EvaluateOptions { trace: true }` the
+// evaluator records a deterministic sequence of `TraceEvent` values describing
+// operator resolutions, assignment lookups, and reduction steps. The CLI's
+// `--trace` flag prints each one as `[span <file>:<line>:<col>] <kind> <details>`.
+// Mirrors `TraceEvent` / `formatTraceEvent` in `js/src/rml-links.mjs`.
+
+/// A single trace event emitted by the evaluator.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraceEvent {
+    pub kind: String,
+    pub detail: String,
+    pub span: Span,
+}
+
+impl TraceEvent {
+    pub fn new(kind: &str, detail: impl Into<String>, span: Span) -> Self {
+        Self {
+            kind: kind.to_string(),
+            detail: detail.into(),
+            span,
+        }
+    }
+}
+
+/// Format a trace event as `[span <file>:<line>:<col>] <kind> <details>`.
+pub fn format_trace_event(event: &TraceEvent) -> String {
+    let file = event.span.file.as_deref().unwrap_or("<input>");
+    format!(
+        "[span {}:{}:{}] {} {}",
+        file, event.span.line, event.span.col, event.kind, event.detail
+    )
+}
+
+/// Format a numeric value for trace output — strips trailing zeros so
+/// `1.000000` reads as `1` and `0.5` stays `0.5`. Mirrors `formatTraceValue`
+/// in the JavaScript implementation so cross-runtime traces match exactly.
+pub fn format_trace_value(v: f64) -> String {
+    if !v.is_finite() {
+        return v.to_string();
+    }
+    let rounded = format!("{:.6}", v);
+    // Trim trailing zeros and possibly the decimal point.
+    let trimmed = rounded.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-" {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Format a diagnostic for human-readable CLI output:
@@ -103,6 +165,12 @@ pub fn format_diagnostic(diag: &Diagnostic, source: Option<&str>) -> String {
 
 /// Compute (line, col) source positions for every top-level link in `text`.
 /// Mirrors `compute_form_spans` in the JavaScript implementation.
+///
+/// A "top-level link" is a parenthesized form not nested inside another; the
+/// position is the 1-based line/col of its opening `(`. Full-line `# ...`
+/// comments and inline `# ...` comments after a closing paren plus whitespace
+/// are skipped so that parens inside a comment don't disturb the depth
+/// counter.
 pub fn compute_form_spans(text: &str, file: Option<&str>) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut depth: i32 = 0;
@@ -111,6 +179,8 @@ pub fn compute_form_spans(text: &str, file: Option<&str>) -> Vec<Span> {
     let mut pending_start: Option<(usize, usize)> = None;
     let mut in_line_comment = false;
     let mut line_start_idx: usize = 0;
+    let mut last_closing_depth_zero_col: i32 = -1;
+    let mut saw_ws_after_close = false;
     let bytes = text.as_bytes();
     for (off, &b) in bytes.iter().enumerate() {
         let ch = b as char;
@@ -119,6 +189,8 @@ pub fn compute_form_spans(text: &str, file: Option<&str>) -> Vec<Span> {
             line += 1;
             col = 1;
             line_start_idx = off + 1;
+            last_closing_depth_zero_col = -1;
+            saw_ws_after_close = false;
             continue;
         }
         if in_line_comment {
@@ -126,9 +198,15 @@ pub fn compute_form_spans(text: &str, file: Option<&str>) -> Vec<Span> {
             continue;
         }
         if ch == '#' && depth == 0 {
-            // Determine if the line so far contains only whitespace.
+            // Full-line comment: line so far is all whitespace.
             let line_so_far = &text[line_start_idx..off];
             if line_so_far.chars().all(|c| c == ' ' || c == '\t') {
+                in_line_comment = true;
+                col += 1;
+                continue;
+            }
+            // Inline comment after `)` + whitespace: discard rest of line.
+            if last_closing_depth_zero_col >= 0 && saw_ws_after_close {
                 in_line_comment = true;
                 col += 1;
                 continue;
@@ -139,13 +217,24 @@ pub fn compute_form_spans(text: &str, file: Option<&str>) -> Vec<Span> {
                 pending_start = Some((line, col));
             }
             depth += 1;
+            saw_ws_after_close = false;
         } else if ch == ')' {
             depth -= 1;
             if depth == 0 {
                 if let Some((sl, sc)) = pending_start.take() {
                     spans.push(Span::new(file.map(|s| s.to_string()), sl, sc, 1));
                 }
+                last_closing_depth_zero_col = col as i32;
+                saw_ws_after_close = false;
             }
+        } else if ch == ' ' || ch == '\t' {
+            if last_closing_depth_zero_col >= 0 {
+                saw_ws_after_close = true;
+            }
+        } else {
+            // Any other character resets the inline-comment-eligible state.
+            last_closing_depth_zero_col = -1;
+            saw_ws_after_close = false;
         }
         col += 1;
     }
@@ -515,6 +604,16 @@ pub struct Env {
     pub ops: HashMap<String, Op>,
     pub types: HashMap<String, String>,
     pub lambdas: HashMap<String, Lambda>,
+    /// Tracing state. When `trace_enabled` is true, key evaluation events
+    /// (operator resolutions, assignment lookups, top-level reductions) are
+    /// appended to `trace_events`. The current top-level form span is stashed
+    /// on the Env so leaf hooks can attach a location without threading spans
+    /// through every helper. Mirrors the `_tracer`/`_currentSpan` design in
+    /// `js/src/rml-links.mjs`.
+    pub trace_enabled: bool,
+    pub trace_events: Vec<TraceEvent>,
+    pub current_span: Option<Span>,
+    pub default_span: Span,
 }
 
 impl Env {
@@ -547,6 +646,10 @@ impl Env {
             ops,
             types: HashMap::new(),
             lambdas: HashMap::new(),
+            trace_enabled: false,
+            trace_events: Vec::new(),
+            current_span: None,
+            default_span: Span::unknown(),
         };
 
         // Initialize truth constants: true, false, unknown, undefined
@@ -612,6 +715,21 @@ impl Env {
             .get(sym)
             .copied()
             .unwrap_or_else(|| self.mid())
+    }
+
+    /// Push a trace event when tracing is enabled. The event's span is taken
+    /// from `current_span` if set, else `default_span`. Mirrors `Env.trace`
+    /// in the JavaScript implementation.
+    pub fn trace(&mut self, kind: &str, detail: impl Into<String>) {
+        if !self.trace_enabled {
+            return;
+        }
+        let span = self
+            .current_span
+            .clone()
+            .unwrap_or_else(|| self.default_span.clone());
+        self.trace_events
+            .push(TraceEvent::new(kind, detail, span));
     }
 
     pub fn set_type(&mut self, expr: &str, type_expr: &str) {
@@ -685,7 +803,8 @@ impl Env {
     }
 
     /// Apply equality operator, checking assigned probabilities first.
-    pub fn apply_eq(&self, left: &Node, right: &Node) -> f64 {
+    /// Takes `&mut self` so it can emit `lookup` trace events.
+    pub fn apply_eq(&mut self, left: &Node, right: &Node) -> f64 {
         // Check prefix form: (= L R)
         let k_prefix = key_of(&Node::List(vec![
             Node::Leaf("=".to_string()),
@@ -693,6 +812,10 @@ impl Env {
             right.clone(),
         ]));
         if let Some(&v) = self.assign.get(&k_prefix) {
+            self.trace(
+                "lookup",
+                format!("{} → {}", k_prefix, format_trace_value(v)),
+            );
             return v;
         }
         // Check infix form: (L = R)
@@ -702,6 +825,10 @@ impl Env {
             right.clone(),
         ]));
         if let Some(&v) = self.assign.get(&k_infix) {
+            self.trace(
+                "lookup",
+                format!("{} → {}", k_infix, format_trace_value(v)),
+            );
             return v;
         }
         // Default: syntactic equality
@@ -713,7 +840,7 @@ impl Env {
     }
 
     /// Apply inequality operator: not(eq(L, R))
-    pub fn apply_neq(&self, left: &Node, right: &Node) -> f64 {
+    pub fn apply_neq(&mut self, left: &Node, right: &Node) -> f64 {
         let eq_val = self.apply_eq(left, right);
         self.apply_op("not", &[eq_val])
     }
@@ -934,6 +1061,12 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                     if w1 == "has" && w2 == "probability" && is_num(w3) {
                         let p: f64 = w3.parse().unwrap_or(0.0);
                         env.set_expr_prob(&children[0], p);
+                        let key = key_of(&children[0]);
+                        let clamped = env.clamp(p);
+                        env.trace(
+                            "assign",
+                            format!("{} ← {}", key, format_trace_value(clamped)),
+                        );
                         return EvalResult::Value(env.to_num(w3));
                     }
                 }
@@ -1114,9 +1247,8 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                                     || env.assign.contains_key(&k_infix)
                                     || is_structurally_same(&children[0], &children[2])
                                 {
-                                    return EvalResult::Value(
-                                        env.clamp(env.apply_neq(&children[0], &children[2])),
-                                    );
+                                    let neq = env.apply_neq(&children[0], &children[2]);
+                                    return EvalResult::Value(env.clamp(neq));
                                 }
                                 // No explicit assignment — try numeric comparison
                                 let l = eval_arith(&children[0], env);
@@ -1319,8 +1451,9 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
 }
 
 /// Helper for applying a named op when dealing with node-based equality.
-fn apply_named_op_on_nodes(env: &Env, op_name: &str, left: &Node, right: &Node) -> f64 {
-    match env.ops.get(op_name) {
+fn apply_named_op_on_nodes(env: &mut Env, op_name: &str, left: &Node, right: &Node) -> f64 {
+    let op = env.ops.get(op_name).cloned();
+    match op {
         Some(Op::Eq) => env.apply_eq(left, right),
         Some(Op::Neq) => env.apply_neq(left, right),
         _ => env.lo,
@@ -1425,6 +1558,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
                             inner: inner.clone(),
                         },
                     );
+                    env.trace("resolve", format!("({}: {} {})", head, outer, inner));
                     return EvalResult::Value(1.0);
                 }
                 // Mirror JS behavior: surface a diagnostic for the missing op.
@@ -1443,6 +1577,7 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
             if let Node::Leaf(ref sel) = rhs[0] {
                 if let Some(agg) = Aggregator::from_name(sel) {
                     env.define_op(head, Op::Agg(agg));
+                    env.trace("resolve", format!("({}: {})", head, sel));
                     return EvalResult::Value(1.0);
                 } else {
                     panic!("Unknown aggregator \"{}\"", sel);
@@ -1883,6 +2018,26 @@ pub enum RunResult {
 /// full code list.  Errors do not abort evaluation: independent forms
 /// continue to be processed after a failing one.
 pub fn evaluate(text: &str, file: Option<&str>, options: Option<EnvOptions>) -> EvaluateResult {
+    evaluate_with_options(
+        text,
+        file,
+        EvaluateOptions {
+            env: options,
+            trace: false,
+        },
+    )
+}
+
+/// Like `evaluate`, but takes structured `EvaluateOptions`. When
+/// `options.trace` is true the returned `EvaluateResult.trace` carries a
+/// deterministic sequence of `TraceEvent` values (operator resolutions,
+/// assignment lookups, top-level reductions) — one entry per event,
+/// in source order.
+pub fn evaluate_with_options(
+    text: &str,
+    file: Option<&str>,
+    options: EvaluateOptions,
+) -> EvaluateResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let spans = compute_form_spans(text, file);
 
@@ -1909,7 +2064,9 @@ pub fn evaluate(text: &str, file: Option<&str>, options: Option<EnvOptions>) -> 
         })
         .collect();
 
-    let mut env = Env::new(options);
+    let mut env = Env::new(options.env);
+    env.trace_enabled = options.trace;
+    env.default_span = Span::new(file.map(|s| s.to_string()), 1, 1, 0);
     let mut results: Vec<RunResult> = Vec::new();
 
     // Silence the default panic hook while we deliberately catch evaluator
@@ -1935,11 +2092,43 @@ pub fn evaluate(text: &str, file: Option<&str>, options: Option<EnvOptions>) -> 
             .get(idx)
             .cloned()
             .unwrap_or_else(|| Span::new(file.map(|s| s.to_string()), 1, 1, 0));
+        env.current_span = Some(span.clone());
+        // We need to capture the form so the eval-trace event can reference it
+        // by canonical key. Cloning is cheap: AST nodes are small strings.
+        let form_for_trace = if options.trace {
+            Some(form.clone())
+        } else {
+            None
+        };
         let result = catch_unwind(AssertUnwindSafe(|| eval_node(&form, &mut env)));
         match result {
-            Ok(EvalResult::Query(v)) => results.push(RunResult::Num(v)),
-            Ok(EvalResult::TypeQuery(s)) => results.push(RunResult::Type(s)),
-            Ok(_) => {}
+            Ok(eval_res) => {
+                if options.trace {
+                    if let Some(ref form_node) = form_for_trace {
+                        let form_key = key_of(form_node);
+                        let summary = match &eval_res {
+                            EvalResult::Query(v) => format!(
+                                "{} → query {}",
+                                form_key,
+                                format_trace_value(*v)
+                            ),
+                            EvalResult::TypeQuery(s) => {
+                                format!("{} → type {}", form_key, s)
+                            }
+                            EvalResult::Value(v) => {
+                                format!("{} → {}", form_key, format_trace_value(*v))
+                            }
+                        };
+                        env.trace_events
+                            .push(TraceEvent::new("eval", summary, span.clone()));
+                    }
+                }
+                match eval_res {
+                    EvalResult::Query(v) => results.push(RunResult::Num(v)),
+                    EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
+                    _ => {}
+                }
+            }
             Err(payload) => {
                 let (code, message) = decode_panic_payload(&payload);
                 diagnostics.push(Diagnostic::new(&code, message, span));
@@ -1947,11 +2136,20 @@ pub fn evaluate(text: &str, file: Option<&str>, options: Option<EnvOptions>) -> 
         }
     }
 
+    env.current_span = None;
+
     std::panic::set_hook(prev_hook);
+
+    let trace = if options.trace {
+        std::mem::take(&mut env.trace_events)
+    } else {
+        Vec::new()
+    };
 
     EvaluateResult {
         results,
         diagnostics,
+        trace,
     }
 }
 

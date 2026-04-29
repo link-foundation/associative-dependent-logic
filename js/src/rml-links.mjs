@@ -37,6 +37,25 @@ class RmlError extends Error {
   }
 }
 
+// ---------- Trace events ----------
+// When `trace: true` is passed to `evaluate()` the evaluator records a
+// deterministic sequence of `TraceEvent` objects describing operator
+// resolutions, assignment lookups, and reduction steps. The CLI's `--trace`
+// flag prints each one as `[span <file>:<line>:<col>] <kind> <details>`.
+class TraceEvent {
+  constructor({ kind, detail, span }) {
+    this.kind = kind;
+    this.detail = detail;
+    this.span = span || { file: null, line: 1, col: 1, length: 0 };
+  }
+}
+
+function formatTraceEvent(event) {
+  const span = event.span || { file: null, line: 1, col: 1, length: 0 };
+  const file = span.file || '<input>';
+  return `[span ${file}:${span.line}:${span.col}] ${event.kind} ${event.detail}`;
+}
+
 // Format a diagnostic for human-readable CLI output:
 //   <file>:<line>:<col>: <CODE>: <message>
 //       <source line>
@@ -155,6 +174,12 @@ class Env {
     this.symbolProb = new Map();                // optional symbol priors if you want (x: 0.7)
     this.types = new Map();                     // key(expr) -> type expression (as string)
     this.lambdas = new Map();                   // name -> { param, paramType, body } for named lambdas
+    // Optional tracer: when set, key evaluation events (operator resolutions,
+    // assignment lookups, top-level reductions) are pushed via `trace(kind, detail)`.
+    // The current top-level form span is stashed on the Env so leaf hooks can
+    // attach a location without threading spans through every helper.
+    this._tracer = null;
+    this._currentSpan = null;
 
     // Range: [lo, hi] — default [0, 1] (standard probabilistic)
     // Use [-1, 1] for balanced/symmetric range
@@ -183,9 +208,17 @@ class Env {
       '='  : (L,R,ctx)=> {
         // If assigned explicitly, use that (check both prefix and infix key forms)
         const kPrefix = keyOf(['=',L,R]);
-        if (this.assign.has(kPrefix)) return this.assign.get(kPrefix);
+        if (this.assign.has(kPrefix)) {
+          const v = this.assign.get(kPrefix);
+          this.trace('lookup', `${kPrefix} → ${formatTraceValue(v)}`);
+          return v;
+        }
         const kInfix = keyOf([L,'=',R]);
-        if (this.assign.has(kInfix)) return this.assign.get(kInfix);
+        if (this.assign.has(kInfix)) {
+          const v = this.assign.get(kInfix);
+          this.trace('lookup', `${kInfix} → ${formatTraceValue(v)}`);
+          return v;
+        }
         // Default: syntactic equality of terms/trees
         return isStructurallySame(L,R) ? this.hi : this.lo;
       },
@@ -265,6 +298,9 @@ class Env {
   }
   setSymbolProb(sym, p){ this.symbolProb.set(sym, this.clamp(p)); }
   getSymbolProb(sym){ return this.symbolProb.has(sym) ? this.symbolProb.get(sym) : this.mid; }
+  trace(kind, detail){
+    if (this._tracer) this._tracer(kind, detail, this._currentSpan);
+  }
 }
 
 // ---------- Binding parser ----------
@@ -350,6 +386,17 @@ function substitute(expr, name, replacement) {
 }
 
 // ---------- Eval ----------
+// Format a numeric value for trace output — strips trailing zeros so
+// `1.000000` reads as `1` and `0.5` stays `0.5`. Used both for assignment
+// values and for reduction results to keep trace lines reproducible.
+function formatTraceValue(v) {
+  if (typeof v !== 'number') return String(v);
+  if (!Number.isFinite(v)) return String(v);
+  const rounded = +v.toFixed(6);
+  const s = String(rounded);
+  return s;
+}
+
 // Evaluate a node in arithmetic context — numeric literals are NOT clamped to the logic range.
 function evalArith(node, env){
   if (typeof node === 'string' && isNum(node)) return parseFloat(node);
@@ -373,7 +420,9 @@ function evalNode(node, env){
 
   // Assignment: ((expr) has probability p)
   if (node.length === 4 && node[1] === 'has' && node[2] === 'probability' && isNum(node[3])) {
-    env.setExprProb(node[0], parseFloat(node[3]));
+    const p = parseFloat(node[3]);
+    env.setExprProb(node[0], p);
+    env.trace('assign', `${keyOf(node[0])} ← ${formatTraceValue(env.clamp(p))}`);
     return env.toNum(node[3]);
   }
 
@@ -610,9 +659,17 @@ function _reinitOps(env) {
   env.ops.set('neither', (...xs) => xs.length ? decRound(xs.reduce((a,b)=>a*b,1)) : env.lo);
   env.ops.set('=', (L,R,ctx) => {
     const kPrefix = keyOf(['=',L,R]);
-    if (env.assign.has(kPrefix)) return env.assign.get(kPrefix);
+    if (env.assign.has(kPrefix)) {
+      const v = env.assign.get(kPrefix);
+      env.trace('lookup', `${kPrefix} → ${formatTraceValue(v)}`);
+      return v;
+    }
     const kInfix = keyOf([L,'=',R]);
-    if (env.assign.has(kInfix)) return env.assign.get(kInfix);
+    if (env.assign.has(kInfix)) {
+      const v = env.assign.get(kInfix);
+      env.trace('lookup', `${kInfix} → ${formatTraceValue(v)}`);
+      return v;
+    }
     return isStructurallySame(L,R) ? env.hi : env.lo;
   });
   env.ops.set('!=', (...args) => env.getOp('not')( env.getOp('=')(...args) ));
@@ -695,6 +752,7 @@ function defineForm(head, rhs, env){
       const outer = env.getOp(rhs[0]);
       const inner = env.getOp(rhs[1]);
       env.defineOp(head, (...xs) => env.clamp( outer( inner(...xs) ) ));
+      env.trace('resolve', `(${head}: ${rhs[0]} ${rhs[1]})`);
       return 1;
     }
 
@@ -710,6 +768,7 @@ function defineForm(head, rhs, env){
         sel==='probabilistic_sum' || sel==='ps' ? xs=> 1 - xs.reduce((a,b)=>a*(1-b),1) : null;
       if (!agg) throw new RmlError('E004', `Unknown aggregator "${sel}"`);
       env.defineOp(head, (...xs)=> xs.length? agg(xs) : lo);
+      env.trace('resolve', `(${head}: ${sel})`);
       return 1;
     }
 
@@ -776,7 +835,9 @@ function parseLinoForms(text) {
 // A "top-level link" is a parenthesized form that is not nested inside another;
 // position is reported as 1-based line and column of its opening `(`.
 // Lines starting with `#` are treated as full-line comments and ignored, just
-// like `stripLinoComments` does.
+// like `stripLinoComments` does. Inline `# ...` comments that follow a closing
+// paren (matching `(\)[ \t]+)#.*$` in `stripLinoComments`) are also skipped so
+// parens inside the comment don't disturb the depth counter.
 function computeFormSpans(text, file) {
   const spans = [];
   const lines = text.split('\n');
@@ -786,20 +847,30 @@ function computeFormSpans(text, file) {
   let colNum = 1;
   let pendingStart = null; // {line, col, offset} for the next top-level link
   let inLineComment = false;
+  let lastClosingDepthZeroCol = -1;
+  let sawWsAfterClose = false;
   for (let off = 0; off < text.length; off++) {
     const ch = text[off];
     if (ch === '\n') {
       inLineComment = false;
       lineNum++;
       colNum = 1;
+      lastClosingDepthZeroCol = -1;
+      sawWsAfterClose = false;
       continue;
     }
     if (inLineComment) { colNum++; continue; }
     // Detect a full-line comment (line begins with optional whitespace + #).
     if (ch === '#' && depth === 0) {
-      // Check if the line so far contains only whitespace.
+      // Full-line comment: line so far is all whitespace.
       const lineSoFar = lines[lineNum - 1].slice(0, colNum - 1);
       if (/^[ \t]*$/.test(lineSoFar)) {
+        inLineComment = true;
+        colNum++;
+        continue;
+      }
+      // Inline comment after `)` + whitespace: discard rest of line.
+      if (lastClosingDepthZeroCol >= 0 && sawWsAfterClose) {
         inLineComment = true;
         colNum++;
         continue;
@@ -810,12 +881,21 @@ function computeFormSpans(text, file) {
         pendingStart = { line: lineNum, col: colNum };
       }
       depth++;
+      sawWsAfterClose = false;
     } else if (ch === ')') {
       depth--;
       if (depth === 0 && pendingStart) {
         spans.push({ file: file || null, line: pendingStart.line, col: pendingStart.col, length: 1 });
         pendingStart = null;
+        lastClosingDepthZeroCol = colNum;
+        sawWsAfterClose = false;
       }
+    } else if (ch === ' ' || ch === '\t') {
+      if (lastClosingDepthZeroCol >= 0) sawWsAfterClose = true;
+    } else {
+      // Any other character resets the inline-comment-eligible state.
+      lastClosingDepthZeroCol = -1;
+      sawWsAfterClose = false;
     }
     colNum++;
   }
@@ -832,6 +912,13 @@ function evaluate(code, options) {
   const env = new Env(opts.env || opts);
   const results = [];
   const diagnostics = [];
+  const traceEnabled = !!opts.trace;
+  const trace = traceEnabled ? [] : null;
+  if (traceEnabled) {
+    env._tracer = (kind, detail, span) => {
+      trace.push(new TraceEvent({ kind, detail, span: span || { file, line: 1, col: 1, length: 0 } }));
+    };
+  }
 
   // Pre-compute spans for each top-level form so error reporting can attach
   // a real source location even when the parser/evaluator throw deep inside.
@@ -845,7 +932,9 @@ function evaluate(code, options) {
       ? new Diagnostic({ code: err.code, message: err.message, span: { file, line: 1, col: 1, length: 0 } })
       : new Diagnostic({ code: 'E006', message: `LiNo parse failure: ${err && err.message ? err.message : String(err)}`, span: { file, line: 1, col: 1, length: 0 } });
     diagnostics.push(diag);
-    return { results, diagnostics };
+    const out = { results, diagnostics };
+    if (traceEnabled) out.trace = trace;
+    return out;
   }
 
   for (let idx = 0; idx < forms.length; idx++) {
@@ -854,8 +943,20 @@ function evaluate(code, options) {
       form = form[0];
     }
     const span = formSpans[idx] || { file, line: 1, col: 1, length: 0 };
+    env._currentSpan = span;
     try {
       const res = evalNode(form, env);
+      if (traceEnabled) {
+        const formKey = keyOf(form);
+        let summary;
+        if (res && res.query) {
+          const tag = res.typeQuery ? 'type' : 'query';
+          summary = `${formKey} → ${tag} ${formatTraceValue(res.value)}`;
+        } else {
+          summary = `${formKey} → ${formatTraceValue(res)}`;
+        }
+        trace.push(new TraceEvent({ kind: 'eval', detail: summary, span }));
+      }
       if (res && res.query) {
         results.push(res.value);
       }
@@ -866,7 +967,11 @@ function evaluate(code, options) {
       diagnostics.push(new Diagnostic({ code, message, span: diagSpan }));
     }
   }
-  return { results, diagnostics };
+  env._currentSpan = null;
+  env._tracer = null;
+  const out = { results, diagnostics };
+  if (traceEnabled) out.trace = trace;
+  return out;
 }
 
 // ---------- Meta-expression adapter ----------
@@ -1067,24 +1172,36 @@ function run(text, options){
 
 // CLI
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const file = process.argv[2];
+  const argv = process.argv.slice(2);
+  let trace = false;
+  const positionals = [];
+  for (const arg of argv) {
+    if (arg === '--trace') trace = true;
+    else positionals.push(arg);
+  }
+  const file = positionals[0];
   if (!file) {
-    console.error('Usage: node src/rml-links.mjs <kb.lino>');
+    console.error('Usage: node src/rml-links.mjs [--trace] <kb.lino>');
     process.exit(1);
   }
   const text = fs.readFileSync(file, 'utf8');
-  const { results, diagnostics } = evaluate(text, { file });
-  for (const v of results) {
+  const out = evaluate(text, { file, trace });
+  if (trace && out.trace) {
+    for (const event of out.trace) {
+      console.error(formatTraceEvent(event));
+    }
+  }
+  for (const v of out.results) {
     if (typeof v === 'string') {
       console.log(v);
     } else {
       console.log(String(+v.toFixed(6)).replace(/\.0+$/,''));
     }
   }
-  for (const diag of diagnostics) {
+  for (const diag of out.diagnostics) {
     console.error(formatDiagnostic(diag, text));
   }
-  if (diagnostics.length > 0) process.exit(1);
+  if (out.diagnostics.length > 0) process.exit(1);
 }
 
 export {
@@ -1092,7 +1209,9 @@ export {
   evaluate,
   Diagnostic,
   RmlError,
+  TraceEvent,
   formatDiagnostic,
+  formatTraceEvent,
   computeFormSpans,
   parseLino,
   tokenizeOne,
