@@ -13,6 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { Parser } from 'links-notation';
 
 // ---------- Structured Diagnostics ----------
@@ -1047,6 +1048,7 @@ function _queryRequestsProof(node) {
 // Callers may pass bare goal nodes in `goals`; `runTactics` normalises them
 // into goal objects before applying tactics.
 const DEFAULT_SIMPLIFY_MAX_STEPS = 100;
+const DEFAULT_SMT_TIMEOUT_MS = 5000;
 
 function _normaliseProofGoal(rawGoal, inheritedContext = []) {
   if (
@@ -1145,6 +1147,236 @@ function _goalWithContext(current, goal) {
 
 function _rewriteError(message) {
   return new RmlError('E039', message);
+}
+
+function _normaliseSmtSolverArgs(rawArgs) {
+  if (rawArgs === undefined || rawArgs === null) return [];
+  if (Array.isArray(rawArgs)) return rawArgs.map(String);
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim();
+    return trimmed ? trimmed.split(/\s+/) : [];
+  }
+  throw _rewriteError('SMT solver args must be an array or whitespace-separated string');
+}
+
+function _normaliseSmtTimeoutMs(rawTimeout) {
+  const timeout = rawTimeout === undefined || rawTimeout === null || rawTimeout === ''
+    ? DEFAULT_SMT_TIMEOUT_MS
+    : Number(String(rawTimeout));
+  if (!Number.isSafeInteger(timeout) || timeout < 0) {
+    throw _rewriteError(`SMT timeout must be a non-negative integer in milliseconds (got ${String(rawTimeout)})`);
+  }
+  return timeout;
+}
+
+function _normaliseSmtOptions(options = {}) {
+  const solver =
+    options.smtSolverPath ??
+    options.smtSolver ??
+    process.env.RML_SMT_SOLVER ??
+    null;
+  const solverArgs =
+    options.smtSolverArgs ??
+    options.smtArgs ??
+    process.env.RML_SMT_ARGS ??
+    [];
+  const timeout =
+    options.smtTimeoutMs ??
+    process.env.RML_SMT_TIMEOUT_MS ??
+    DEFAULT_SMT_TIMEOUT_MS;
+  return {
+    solver: solver === null || solver === undefined || String(solver).trim() === ''
+      ? null
+      : String(solver),
+    args: _normaliseSmtSolverArgs(solverArgs),
+    timeoutMs: _normaliseSmtTimeoutMs(timeout),
+  };
+}
+
+function _smtSolverProofName(smtOptions) {
+  if (!smtOptions || !smtOptions.solver) return 'unconfigured';
+  const base = path.basename(String(smtOptions.solver)) || String(smtOptions.solver);
+  const safe = base.replace(/\s+/g, '_');
+  return safe || 'solver';
+}
+
+function _smtTrustedNode(smtOptions) {
+  return ['by', 'smt-trusted', _smtSolverProofName(smtOptions)];
+}
+
+function _smtEscapeSymbol(raw) {
+  return `|${String(raw).replace(/\\/g, '\\\\').replace(/\|/g, '\\|')}|`;
+}
+
+function _smtDeclare(ctx, raw, sort) {
+  const key = String(raw);
+  const existing = ctx.declarations.get(key);
+  if (existing && existing !== sort) {
+    throw _rewriteError(`SMT symbol ${keyOf(key)} is used as both ${existing} and ${sort}`);
+  }
+  ctx.declarations.set(key, sort);
+  return _smtEscapeSymbol(key);
+}
+
+function _smtNumber(raw) {
+  const text = String(raw);
+  if (text.startsWith('-')) return `(- ${text.slice(1)})`;
+  return text;
+}
+
+function _smtLeaf(node, value) {
+  return typeof node === 'string' && node === value;
+}
+
+function _smtInfix(node, operators) {
+  return Array.isArray(node) &&
+    node.length === 3 &&
+    typeof node[1] === 'string' &&
+    operators.includes(node[1])
+    ? node[1]
+    : null;
+}
+
+function _smtIsBoolish(node) {
+  if (typeof node === 'string') return node === 'true' || node === 'false';
+  if (!Array.isArray(node) || node.length === 0) return false;
+  if (_smtInfix(node, ['=', '!=', 'and', 'or', '=>', 'implies'])) return true;
+  return typeof node[0] === 'string' && ['not', 'and', 'or', '=>', 'implies'].includes(node[0]);
+}
+
+function _smtTerm(node, ctx) {
+  if (typeof node === 'string') {
+    if (isNum(node)) return _smtNumber(node);
+    if (node === 'true' || node === 'false') {
+      throw _rewriteError(`SMT bridge cannot use Boolean constant ${node} as a Real term`);
+    }
+    return _smtDeclare(ctx, node, 'Real');
+  }
+  if (!Array.isArray(node) || node.length === 0) {
+    throw _rewriteError(`SMT bridge cannot translate term ${keyOf(node)}`);
+  }
+
+  const infix = _smtInfix(node, ['+', '-', '*', '/']);
+  if (infix) {
+    return `(${infix} ${_smtTerm(node[0], ctx)} ${_smtTerm(node[2], ctx)})`;
+  }
+  const head = node[0];
+  if (typeof head === 'string' && ['+', '-', '*', '/'].includes(head) && node.length >= 3) {
+    return `(${head} ${node.slice(1).map(arg => _smtTerm(arg, ctx)).join(' ')})`;
+  }
+
+  return _smtDeclare(ctx, keyOf(node), 'Real');
+}
+
+function _smtEquality(left, right, ctx) {
+  if (_smtIsBoolish(left) || _smtIsBoolish(right)) {
+    return `(= ${_smtFormula(left, ctx)} ${_smtFormula(right, ctx)})`;
+  }
+  return `(= ${_smtTerm(left, ctx)} ${_smtTerm(right, ctx)})`;
+}
+
+function _smtFormula(node, ctx) {
+  if (typeof node === 'string') {
+    if (node === 'true') return 'true';
+    if (node === 'false') return 'false';
+    if (isNum(node)) throw _rewriteError(`SMT bridge cannot use numeric literal ${node} as a Boolean formula`);
+    return _smtDeclare(ctx, node, 'Bool');
+  }
+  if (!Array.isArray(node) || node.length === 0) {
+    throw _rewriteError(`SMT bridge cannot translate formula ${keyOf(node)}`);
+  }
+
+  const infix = _smtInfix(node, ['=', '!=', 'and', 'or', '=>', 'implies']);
+  if (infix === '=') return _smtEquality(node[0], node[2], ctx);
+  if (infix === '!=') return `(not ${_smtEquality(node[0], node[2], ctx)})`;
+  if (infix === 'and' || infix === 'or') {
+    return `(${infix} ${_smtFormula(node[0], ctx)} ${_smtFormula(node[2], ctx)})`;
+  }
+  if (infix === '=>' || infix === 'implies') {
+    return `(=> ${_smtFormula(node[0], ctx)} ${_smtFormula(node[2], ctx)})`;
+  }
+
+  const head = node[0];
+  if (head === 'not' && node.length === 2) return `(not ${_smtFormula(node[1], ctx)})`;
+  if ((head === 'and' || head === 'or') && node.length >= 1) {
+    if (node.length === 1) return head === 'and' ? 'true' : 'false';
+    return `(${head} ${node.slice(1).map(arg => _smtFormula(arg, ctx)).join(' ')})`;
+  }
+  if ((head === '=>' || head === 'implies') && node.length === 3) {
+    return `(=> ${_smtFormula(node[1], ctx)} ${_smtFormula(node[2], ctx)})`;
+  }
+
+  return _smtDeclare(ctx, keyOf(node), 'Bool');
+}
+
+function smtLibForGoal(goal) {
+  const ctx = { declarations: new Map() };
+  const formula = _smtFormula(goal, ctx);
+  const declarations = [...ctx.declarations.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, sort]) => `(declare-const ${_smtEscapeSymbol(name)} ${sort})`);
+  return [
+    ...declarations,
+    `(assert (not ${formula}))`,
+    '(check-sat)',
+    '(exit)',
+    '',
+  ].join('\n');
+}
+
+function _smtProcessSummary(output) {
+  const text = String(output || '').trim();
+  if (!text) return '<no output>';
+  const firstLine = text.split(/\r?\n/)[0];
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}...` : firstLine;
+}
+
+function _parseSmtCheckSat(stdout, stderr) {
+  const combined = `${stdout || ''}\n${stderr || ''}`;
+  for (const line of combined.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === 'unsat' || trimmed === 'sat' || trimmed === 'unknown') return trimmed;
+  }
+  return null;
+}
+
+function _runSmtSolver(smtLib, smtOptions) {
+  if (!smtOptions.solver) {
+    return { status: 'error', reason: 'SMT solver path is not configured' };
+  }
+  const solverName = _smtSolverProofName(smtOptions);
+  const child = spawnSync(smtOptions.solver, smtOptions.args, {
+    input: smtLib,
+    encoding: 'utf8',
+    timeout: smtOptions.timeoutMs,
+    maxBuffer: 1024 * 1024,
+  });
+  if (child.error) {
+    if (child.error.code === 'ETIMEDOUT') {
+      return {
+        status: 'timeout',
+        reason: `SMT solver ${solverName} timed out after ${smtOptions.timeoutMs} ms`,
+      };
+    }
+    return {
+      status: 'error',
+      reason: `SMT solver ${solverName} failed to start: ${child.error.message}`,
+    };
+  }
+  if (child.status !== 0) {
+    return {
+      status: 'error',
+      reason: `SMT solver ${solverName} exited with status ${child.status}: ${_smtProcessSummary(child.stderr || child.stdout)}`,
+    };
+  }
+  const result = _parseSmtCheckSat(child.stdout, child.stderr);
+  if (!result) {
+    return {
+      status: 'error',
+      reason: `SMT solver ${solverName} did not return sat, unsat, or unknown`,
+    };
+  }
+  return { status: result, reason: `SMT solver ${solverName} returned ${result}` };
 }
 
 function _normaliseRewriteDirection(direction = 'forward') {
@@ -1265,6 +1497,7 @@ function _normaliseTacticOptions(options = {}) {
   return {
     rewriteRules: _normaliseRewriteRules(options.rewriteRules ?? options.rules ?? []),
     simplifyMaxSteps: _normaliseSimplifyMaxSteps(options),
+    smt: _normaliseSmtOptions(options),
   };
 }
 
@@ -1537,6 +1770,38 @@ function _applyTactic(state, tactic, recordTactic = tactic, tacticOptions = _nor
     return {
       ok: true,
       state: _replaceCurrentGoal(state, [_goalWithContext(current, simplified.node)], recordTactic),
+    };
+  }
+
+  if (name === 'smt') {
+    if (args.length !== 0) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, 'smt expects no arguments; configure the solver through tactic options'),
+      };
+    }
+    let smtLib;
+    try {
+      smtLib = smtLibForGoal(current.goal);
+    } catch (err) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, err.message),
+      };
+    }
+    const checked = _runSmtSolver(smtLib, tacticOptions.smt);
+    if (checked.status !== 'unsat') {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, checked.reason),
+      };
+    }
+    return {
+      ok: true,
+      state: _replaceCurrentGoal(state, [], _smtTrustedNode(tacticOptions.smt)),
     };
   }
 

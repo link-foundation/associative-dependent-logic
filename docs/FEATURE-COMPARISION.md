@@ -47,7 +47,7 @@ Core logical concepts are compared separately in
 | Built-in proof search | Part: query evaluation | Yes | N/A | No | Yes | Yes via tactics/plugins | Yes via tactics | Host | Host | Yes | Yes | Yes: automata decision procedure |
 | Search depth controls | No | Yes | N/A | No | Tool-dependent | Tactic-dependent | Tactic-dependent | Host | Host | Yes | Yes | Domain-dependent |
 | External ATP integration | No | No | N/A | No | Yes: Sledgehammer/ATPs/SMT | Plugins/tools | Ecosystem tools | Host | Host | No | No | No |
-| SMT integration | No | No | N/A | No | Yes | Plugins/tools | Ecosystem tools | Host | Host | No | No | No |
+| SMT integration | Part: `(by smt)` SMT-LIB trusted bridge | No | N/A | No | Yes | Plugins/tools | Ecosystem tools | Host | Host | No | No | No |
 | Model/counterexample finding | No | No | N/A | No | Yes: Nitpick/Quickcheck | Plugins/tools | Ecosystem/tools | Host | Host | No | No | Automata emptiness/domain feedback |
 | Totality automation | No | Yes | N/A | No | Yes for recursive definitions | Yes | Yes | Host | Host | Part | No | N/A |
 | Termination automation | No | Yes | N/A | No | Yes | Yes | Yes | Host | Host | Part | No | N/A |

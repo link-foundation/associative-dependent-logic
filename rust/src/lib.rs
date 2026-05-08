@@ -10,11 +10,15 @@
 // - Valence: (valence: N) to restrict truth values to N discrete levels (N=2 → Boolean, N=3 → ternary, etc.)
 // - Query: (? <expr>)
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub mod lean_export;
 pub use lean_export::{export_lean, lean_ident, LeanExportResult};
@@ -3456,6 +3460,7 @@ pub struct TacticRunResult {
 }
 
 const DEFAULT_SIMPLIFY_MAX_STEPS: usize = 100;
+const DEFAULT_SMT_TIMEOUT_MS: u64 = 5000;
 
 /// Direction for applying an equality rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3522,6 +3527,9 @@ pub struct SimplifyResult {
 pub struct TacticOptions {
     pub rewrite_rules: Vec<Node>,
     pub simplify_max_steps: usize,
+    pub smt_solver: Option<String>,
+    pub smt_solver_args: Vec<String>,
+    pub smt_timeout_ms: u64,
 }
 
 impl Default for TacticOptions {
@@ -3529,6 +3537,19 @@ impl Default for TacticOptions {
         Self {
             rewrite_rules: Vec::new(),
             simplify_max_steps: DEFAULT_SIMPLIFY_MAX_STEPS,
+            smt_solver: std::env::var("RML_SMT_SOLVER").ok(),
+            smt_solver_args: std::env::var("RML_SMT_ARGS")
+                .ok()
+                .map(|args| {
+                    args.split_whitespace()
+                        .map(|arg| arg.to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            smt_timeout_ms: std::env::var("RML_SMT_TIMEOUT_MS")
+                .ok()
+                .and_then(|raw| raw.parse::<u64>().ok())
+                .unwrap_or(DEFAULT_SMT_TIMEOUT_MS),
         }
     }
 }
@@ -3604,6 +3625,440 @@ fn replace_current_goal(
 
 fn rewrite_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new("E039", message, Span::unknown())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmtSort {
+    Bool,
+    Real,
+}
+
+impl SmtSort {
+    fn as_str(self) -> &'static str {
+        match self {
+            SmtSort::Bool => "Bool",
+            SmtSort::Real => "Real",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct SmtContext {
+    declarations: BTreeMap<String, SmtSort>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmtStatus {
+    Unsat,
+    Sat,
+    Unknown,
+    Timeout,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SmtRunResult {
+    status: SmtStatus,
+    reason: String,
+}
+
+fn smt_escape_symbol(raw: &str) -> String {
+    format!("|{}|", raw.replace('\\', "\\\\").replace('|', "\\|"))
+}
+
+fn smt_declare(ctx: &mut SmtContext, raw: String, sort: SmtSort) -> Result<String, String> {
+    if let Some(existing) = ctx.declarations.get(&raw) {
+        if *existing != sort {
+            return Err(format!(
+                "SMT symbol {} is used as both {} and {}",
+                raw,
+                existing.as_str(),
+                sort.as_str()
+            ));
+        }
+    }
+    ctx.declarations.insert(raw.clone(), sort);
+    Ok(smt_escape_symbol(&raw))
+}
+
+fn smt_number(raw: &str) -> String {
+    if let Some(rest) = raw.strip_prefix('-') {
+        format!("(- {})", rest)
+    } else {
+        raw.to_string()
+    }
+}
+
+fn smt_infix<'a>(node: &'a Node, operators: &[&str]) -> Option<&'a str> {
+    let Node::List(children) = node else {
+        return None;
+    };
+    if children.len() != 3 {
+        return None;
+    }
+    let Node::Leaf(op) = &children[1] else {
+        return None;
+    };
+    if operators.contains(&op.as_str()) {
+        Some(op.as_str())
+    } else {
+        None
+    }
+}
+
+fn smt_is_boolish(node: &Node) -> bool {
+    match node {
+        Node::Leaf(s) => s == "true" || s == "false",
+        Node::List(children) => {
+            if children.is_empty() {
+                return false;
+            }
+            if smt_infix(node, &["=", "!=", "and", "or", "=>", "implies"]).is_some() {
+                return true;
+            }
+            matches!(
+                &children[0],
+                Node::Leaf(head)
+                    if matches!(head.as_str(), "not" | "and" | "or" | "=>" | "implies")
+            )
+        }
+    }
+}
+
+fn smt_term(node: &Node, ctx: &mut SmtContext) -> Result<String, String> {
+    match node {
+        Node::Leaf(s) => {
+            if is_num(s) {
+                return Ok(smt_number(s));
+            }
+            if s == "true" || s == "false" {
+                return Err(format!(
+                    "SMT bridge cannot use Boolean constant {} as a Real term",
+                    s
+                ));
+            }
+            smt_declare(ctx, s.clone(), SmtSort::Real)
+        }
+        Node::List(children) => {
+            if children.is_empty() {
+                return Err(format!("SMT bridge cannot translate term {}", key_of(node)));
+            }
+            if let Some(op) = smt_infix(node, &["+", "-", "*", "/"]) {
+                return Ok(format!(
+                    "({} {} {})",
+                    op,
+                    smt_term(&children[0], ctx)?,
+                    smt_term(&children[2], ctx)?
+                ));
+            }
+            if let Node::Leaf(head) = &children[0] {
+                if ["+", "-", "*", "/"].contains(&head.as_str()) && children.len() >= 3 {
+                    let args = children[1..]
+                        .iter()
+                        .map(|arg| smt_term(arg, ctx))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(format!("({} {})", head, args.join(" ")));
+                }
+            }
+            smt_declare(ctx, key_of(node), SmtSort::Real)
+        }
+    }
+}
+
+fn smt_equality(left: &Node, right: &Node, ctx: &mut SmtContext) -> Result<String, String> {
+    if smt_is_boolish(left) || smt_is_boolish(right) {
+        return Ok(format!(
+            "(= {} {})",
+            smt_formula(left, ctx)?,
+            smt_formula(right, ctx)?
+        ));
+    }
+    Ok(format!(
+        "(= {} {})",
+        smt_term(left, ctx)?,
+        smt_term(right, ctx)?
+    ))
+}
+
+fn smt_formula(node: &Node, ctx: &mut SmtContext) -> Result<String, String> {
+    match node {
+        Node::Leaf(s) => {
+            if s == "true" {
+                return Ok("true".to_string());
+            }
+            if s == "false" {
+                return Ok("false".to_string());
+            }
+            if is_num(s) {
+                return Err(format!(
+                    "SMT bridge cannot use numeric literal {} as a Boolean formula",
+                    s
+                ));
+            }
+            smt_declare(ctx, s.clone(), SmtSort::Bool)
+        }
+        Node::List(children) => {
+            if children.is_empty() {
+                return Err(format!("SMT bridge cannot translate formula {}", key_of(node)));
+            }
+            match smt_infix(node, &["=", "!=", "and", "or", "=>", "implies"]) {
+                Some("=") => return smt_equality(&children[0], &children[2], ctx),
+                Some("!=") => {
+                    return Ok(format!(
+                        "(not {})",
+                        smt_equality(&children[0], &children[2], ctx)?
+                    ));
+                }
+                Some("and") | Some("or") => {
+                    let op = smt_infix(node, &["and", "or"]).unwrap();
+                    return Ok(format!(
+                        "({} {} {})",
+                        op,
+                        smt_formula(&children[0], ctx)?,
+                        smt_formula(&children[2], ctx)?
+                    ));
+                }
+                Some("=>") | Some("implies") => {
+                    return Ok(format!(
+                        "(=> {} {})",
+                        smt_formula(&children[0], ctx)?,
+                        smt_formula(&children[2], ctx)?
+                    ));
+                }
+                _ => {}
+            }
+
+            if let Node::Leaf(head) = &children[0] {
+                match head.as_str() {
+                    "not" if children.len() == 2 => {
+                        return Ok(format!("(not {})", smt_formula(&children[1], ctx)?));
+                    }
+                    "and" | "or" => {
+                        if children.len() == 1 {
+                            return Ok(if head == "and" {
+                                "true".to_string()
+                            } else {
+                                "false".to_string()
+                            });
+                        }
+                        let args = children[1..]
+                            .iter()
+                            .map(|arg| smt_formula(arg, ctx))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        return Ok(format!("({} {})", head, args.join(" ")));
+                    }
+                    "=>" | "implies" if children.len() == 3 => {
+                        return Ok(format!(
+                            "(=> {} {})",
+                            smt_formula(&children[1], ctx)?,
+                            smt_formula(&children[2], ctx)?
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+
+            smt_declare(ctx, key_of(node), SmtSort::Bool)
+        }
+    }
+}
+
+fn smt_lib_for_goal(goal: &Node) -> Result<String, String> {
+    let mut ctx = SmtContext::default();
+    let formula = smt_formula(goal, &mut ctx)?;
+    let mut lines = Vec::new();
+    for (name, sort) in ctx.declarations {
+        lines.push(format!(
+            "(declare-const {} {})",
+            smt_escape_symbol(&name),
+            sort.as_str()
+        ));
+    }
+    lines.push(format!("(assert (not {}))", formula));
+    lines.push("(check-sat)".to_string());
+    lines.push("(exit)".to_string());
+    lines.push(String::new());
+    Ok(lines.join("\n"))
+}
+
+fn smt_solver_proof_name(options: &TacticOptions) -> String {
+    let Some(solver) = options.smt_solver.as_deref() else {
+        return "unconfigured".to_string();
+    };
+    let base = Path::new(solver)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(solver);
+    let safe: String = base
+        .chars()
+        .map(|c| if c.is_whitespace() { '_' } else { c })
+        .collect();
+    if safe.is_empty() {
+        "solver".to_string()
+    } else {
+        safe
+    }
+}
+
+fn smt_trusted_node(options: &TacticOptions) -> Node {
+    Node::List(vec![
+        leaf("by"),
+        leaf("smt-trusted"),
+        Node::Leaf(smt_solver_proof_name(options)),
+    ])
+}
+
+fn smt_process_summary(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr_text = String::from_utf8_lossy(stderr);
+    let stdout_text = String::from_utf8_lossy(stdout);
+    let text = if stderr_text.trim().is_empty() {
+        stdout_text.trim()
+    } else {
+        stderr_text.trim()
+    };
+    if text.is_empty() {
+        return "<no output>".to_string();
+    }
+    let first = text.lines().next().unwrap_or(text);
+    if first.chars().count() > 200 {
+        format!("{}...", first.chars().take(200).collect::<String>())
+    } else {
+        first.to_string()
+    }
+}
+
+fn parse_smt_check_sat(stdout: &[u8], stderr: &[u8]) -> Option<SmtStatus> {
+    let stdout_text = String::from_utf8_lossy(stdout);
+    let stderr_text = String::from_utf8_lossy(stderr);
+    for line in stdout_text.lines().chain(stderr_text.lines()) {
+        match line.trim() {
+            "unsat" => return Some(SmtStatus::Unsat),
+            "sat" => return Some(SmtStatus::Sat),
+            "unknown" => return Some(SmtStatus::Unknown),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn run_smt_solver(smt_lib: &str, options: &TacticOptions) -> SmtRunResult {
+    let Some(solver) = options
+        .smt_solver
+        .as_deref()
+        .filter(|solver| !solver.trim().is_empty())
+    else {
+        return SmtRunResult {
+            status: SmtStatus::Error,
+            reason: "SMT solver path is not configured".to_string(),
+        };
+    };
+    let solver_name = smt_solver_proof_name(options);
+    let mut child = match Command::new(solver)
+        .args(&options.smt_solver_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            return SmtRunResult {
+                status: SmtStatus::Error,
+                reason: format!("SMT solver {} failed to start: {}", solver_name, err),
+            };
+        }
+    };
+
+    let mut stdin_error = None;
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(err) = stdin.write_all(smt_lib.as_bytes()) {
+            stdin_error = Some(err.to_string());
+        }
+    }
+
+    let started = Instant::now();
+    let timeout = Duration::from_millis(options.smt_timeout_ms);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let output = match child.wait_with_output() {
+                    Ok(output) => output,
+                    Err(err) => {
+                        return SmtRunResult {
+                            status: SmtStatus::Error,
+                            reason: format!(
+                                "SMT solver {} output collection failed: {}",
+                                solver_name, err
+                            ),
+                        };
+                    }
+                };
+                if !output.status.success() {
+                    return SmtRunResult {
+                        status: SmtStatus::Error,
+                        reason: format!(
+                            "SMT solver {} exited with status {}: {}",
+                            solver_name,
+                            output.status,
+                            smt_process_summary(&output.stdout, &output.stderr)
+                        ),
+                    };
+                }
+                let Some(status) = parse_smt_check_sat(&output.stdout, &output.stderr) else {
+                    let reason = stdin_error
+                        .map(|err| {
+                            format!(
+                                "SMT solver {} did not accept SMT-LIB input: {}",
+                                solver_name, err
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            format!(
+                                "SMT solver {} did not return sat, unsat, or unknown",
+                                solver_name
+                            )
+                        });
+                    return SmtRunResult {
+                        status: SmtStatus::Error,
+                        reason,
+                    };
+                };
+                return SmtRunResult {
+                    status,
+                    reason: format!(
+                        "SMT solver {} returned {}",
+                        solver_name,
+                        match status {
+                            SmtStatus::Unsat => "unsat",
+                            SmtStatus::Sat => "sat",
+                            SmtStatus::Unknown => "unknown",
+                            SmtStatus::Timeout | SmtStatus::Error => unreachable!(),
+                        }
+                    ),
+                };
+            }
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return SmtRunResult {
+                        status: SmtStatus::Timeout,
+                        reason: format!(
+                            "SMT solver {} timed out after {} ms",
+                            solver_name, options.smt_timeout_ms
+                        ),
+                    };
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => {
+                return SmtRunResult {
+                    status: SmtStatus::Error,
+                    reason: format!("SMT solver {} wait failed: {}", solver_name, err),
+                };
+            }
+        }
+    }
 }
 
 fn rewrite_sides(
@@ -4100,6 +4555,30 @@ fn apply_tactic(
                 state,
                 vec![goal_with_context(current, simplified.node)],
                 record_tactic,
+            ))
+        }
+        Some("smt") => {
+            if !args.is_empty() {
+                return Err(tactic_diagnostic(
+                    record_tactic,
+                    Some(current),
+                    "smt expects no arguments; configure the solver through tactic options",
+                ));
+            }
+            let smt_lib = smt_lib_for_goal(&current.goal)
+                .map_err(|reason| tactic_diagnostic(record_tactic, Some(current), reason))?;
+            let checked = run_smt_solver(&smt_lib, tactic_options);
+            if checked.status != SmtStatus::Unsat {
+                return Err(tactic_diagnostic(
+                    record_tactic,
+                    Some(current),
+                    checked.reason,
+                ));
+            }
+            Ok(replace_current_goal(
+                state,
+                Vec::new(),
+                &smt_trusted_node(tactic_options),
             ))
         }
         Some("exact") => {

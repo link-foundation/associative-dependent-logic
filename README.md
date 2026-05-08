@@ -451,6 +451,7 @@ and successful tactic history is stored as links in the proof state:
 (rewrite (a = b) in goal)
 (rewrite <- (a = b) in goal at 2)
 (simplify in goal)
+(by smt)
 (exact (p = q))
 (induction n
   (case zero (by reflexivity))
@@ -465,9 +466,18 @@ Programmatic APIs:
   return `TacticRunResult`; `rewrite(...)` and `simplify(...)` expose the
   rewrite engine.
 
+`(by smt)` serializes the current goal to an SMT-LIB check by asserting the
+negated goal and closes the goal only when the configured solver returns
+`unsat`. Successful runs record `(by smt-trusted <solver>)` in the proof
+state. JavaScript accepts `smtSolver`, `smtSolverArgs`, and `smtTimeoutMs`
+options; Rust accepts the corresponding `TacticOptions` fields
+`smt_solver`, `smt_solver_args`, and `smt_timeout_ms`. The environment
+variables `RML_SMT_SOLVER`, `RML_SMT_ARGS`, and `RML_SMT_TIMEOUT_MS` provide
+defaults in both runtimes.
+
 The built-in tactic set is `reflexivity`, `symmetry`, `transitivity`,
-`induction`, `suppose`, `introduce`, `by`, `rewrite`, `simplify`, and `exact`.
-Failed tactics emit `E039` diagnostics that include the current goal.
+`induction`, `suppose`, `introduce`, `by`, `rewrite`, `simplify`, `smt`, and
+`exact`. Failed tactics emit `E039` diagnostics that include the current goal.
 
 #### Type Queries
 

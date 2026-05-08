@@ -130,8 +130,10 @@ The tactic engine keeps proof steps as links:
 | `Env.registerDomainPlugin(name, plugin)` | `Env::register_domain_plugin(name, plugin)` | Register a `(domain <name> ...)` decision procedure. |
 
 Built-in tactics are `reflexivity`, `symmetry`, `transitivity`, `induction`,
-`suppose`, `introduce`, `by`, `rewrite`, `simplify`, and `exact`. A failed
-tactic emits `E039` and includes the current goal in the diagnostic message.
+`suppose`, `introduce`, `by`, `rewrite`, `simplify`, `smt`, and `exact`.
+`(by smt)` invokes a configured SMT-LIB solver and records successful external
+decisions as `(by smt-trusted <solver>)`. A failed tactic emits `E039` and
+includes the current goal in the diagnostic message.
 
 The default environment also registers the `automatic-sequences` domain
 plugin. It currently ships the classic `thue-morse-cube-free` decision and
