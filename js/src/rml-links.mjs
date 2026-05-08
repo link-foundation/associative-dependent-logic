@@ -5167,57 +5167,7 @@ function run(text, options){
 // The REPL subcommand lives in `./rml-repl.mjs` so we can `await import` it
 // without triggering an ESM circular-dependency deadlock.
 function _printMainUsage() {
-  console.error('Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export isabelle <kb.lino> [-o <out.thy>] [--theory <Name>]');
-}
-
-function runExportCli(args) {
-  const target = args[0];
-  if (!target) {
-    console.error('Usage: rml export isabelle <kb.lino> [-o <out.thy>] [--theory <Name>]');
-    process.exit(1);
-  }
-  if (target !== 'isabelle') {
-    console.error(`Unsupported export target "${target}". Supported targets: isabelle`);
-    process.exit(1);
-  }
-  const input = args[1];
-  if (!input) {
-    console.error('Usage: rml export isabelle <kb.lino> [-o <out.thy>] [--theory <Name>]');
-    process.exit(1);
-  }
-  let output = null;
-  let theoryName = null;
-  for (let i = 2; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '-o' || arg === '--output') {
-      output = args[++i];
-      if (!output) {
-        console.error(`${arg} requires a path`);
-        process.exit(1);
-      }
-    } else if (arg === '--theory') {
-      theoryName = args[++i];
-      if (!theoryName) {
-        console.error('--theory requires a theory name');
-        process.exit(1);
-      }
-    } else {
-      console.error(`Unknown export option "${arg}"`);
-      process.exit(1);
-    }
-  }
-
-  const source = fs.readFileSync(input, 'utf8');
-  const rendered = exportIsabelle(source, {
-    file: input,
-    outputFile: output,
-    theoryName: theoryName || _isabelleTheoryName(output || input),
-  });
-  if (output) {
-    fs.writeFileSync(output, rendered, 'utf8');
-  } else {
-    process.stdout.write(rendered);
-  }
+  console.error('Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export <lean|rocq|isabelle> <file.lino> [-o <file>] [--theory <Name>]');
 }
 
 async function runCli() {
@@ -5233,19 +5183,14 @@ async function runCli() {
     _printMainUsage();
     process.exit(1);
   }
+  if (arg === 'export') {
+    const status = await runExportCli(positionals.slice(1));
+    process.exit(status);
+  }
   if (arg === 'repl') {
     const replUrl = new URL('./rml-repl.mjs', import.meta.url).href;
     const { runRepl } = await import(replUrl);
     await runRepl();
-    return;
-  }
-  if (arg === 'export') {
-    try {
-      runExportCli(positionals.slice(1));
-    } catch (err) {
-      console.error(err && err.message ? err.message : String(err));
-      process.exit(1);
-    }
     return;
   }
   const text = fs.readFileSync(arg, 'utf8');
@@ -5266,6 +5211,71 @@ async function runCli() {
     console.error(formatDiagnostic(diag, text));
   }
   if (out.diagnostics.length > 0) process.exit(1);
+}
+
+async function runExportCli(args) {
+  const [target, input] = args;
+  if (args.length < 2 || (target !== 'lean' && target !== 'rocq' && target !== 'isabelle')) {
+    console.error('Usage: rml export <lean|rocq|isabelle> <file.lino> [-o <file>] [--theory <Name>]');
+    return 2;
+  }
+  let output = null;
+  let theoryName = null;
+  for (let i = 2; i < args.length; i++) {
+    if ((args[i] === '-o' || args[i] === '--output') && i + 1 < args.length) {
+      output = args[i + 1];
+      i++;
+      continue;
+    }
+    if (target === 'isabelle' && args[i] === '--theory' && i + 1 < args.length) {
+      theoryName = args[i + 1];
+      i++;
+      continue;
+    }
+    console.error(`Unknown export option: ${args[i]}`);
+    console.error(`Usage: rml export ${target} <file.lino> [-o <file>]${target === 'isabelle' ? ' [--theory <Name>]' : ''}`);
+    return 2;
+  }
+  if (target === 'lean' && !output) {
+    console.error('Usage: rml export lean <file.lino> -o <file.lean>');
+    return 2;
+  }
+  let text;
+  try {
+    text = fs.readFileSync(input, 'utf8');
+  } catch (err) {
+    console.error(`Error reading ${input}: ${err.message}`);
+    return 1;
+  }
+  let rendered;
+  if (target === 'lean') {
+    const { exportLean } = await import(new URL('./lean-export.mjs', import.meta.url).href);
+    const out = exportLean(text, { file: input });
+    if (out.diagnostics.length > 0) {
+      for (const diag of out.diagnostics) {
+        console.error(formatDiagnostic(diag, text));
+      }
+      return 1;
+    }
+    rendered = out.source;
+  } else if (target === 'rocq') {
+    const { exportRocq } = await import(new URL('./rml-rocq.mjs', import.meta.url).href);
+    rendered = exportRocq(text, { sourcePath: input });
+  } else {
+    rendered = exportIsabelle(text, {
+      file: input,
+      outputFile: output,
+      theoryName: theoryName || _isabelleTheoryName(output || input),
+    });
+  }
+  try {
+    if (output) fs.writeFileSync(output, rendered, 'utf8');
+    else process.stdout.write(rendered);
+  } catch (err) {
+    console.error(`Error writing ${output}: ${err.message}`);
+    return 1;
+  }
+  return 0;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

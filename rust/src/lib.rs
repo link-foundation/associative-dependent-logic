@@ -16,6 +16,9 @@ use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
+pub mod lean_export;
+pub use lean_export::{export_lean, lean_ident, LeanExportResult};
+
 // ========== Structured Diagnostics ==========
 // Every parser/evaluator error is reported as a `Diagnostic` with an error
 // code, human-readable message, and source span (file/line/col, 1-based).
@@ -7620,3 +7623,4 @@ pub fn run(text: &str, options: Option<EnvOptions>) -> Vec<f64> {
 pub mod repl;
 pub mod check;
 pub mod meta;
+pub mod rocq;
