@@ -65,8 +65,8 @@ import {
   Env,
   evalNode,
   runTactics,
-  search,
-  counterModel,
+  rewrite,
+  simplify,
   quantize,
   decRound,
   keyOf,
@@ -104,21 +104,15 @@ const tacticResult = runTactics(
 );
 // -> { state: { goals: [], proof: [['by', 'reflexivity']] }, diagnostics: [] }
 
-// Run bounded backwards search over available lemmas
-const searchProof = search(
-  parseOne(tokenizeOne('(a = c)')),
-  1,
-  [
-    parseOne(tokenizeOne('(ab of (a = b))')),
-    parseOne(tokenizeOne('(bc of (b = c))')),
-    parseOne(tokenizeOne('(trans of (Pi ((a = b) ab) (Pi ((b = c) bc) (a = c))))')),
-  ],
+const rewritten = rewrite(
+  parseOne(tokenizeOne('(b = b)')),
+  parseOne(tokenizeOne('(a = b)')),
+  { direction: 'backward' },
 );
-// -> (by apply trans (by exact ab) (by exact bc))
-
-// Exhaustively find a finite-valence counter-model, or null for a tautology
-const witness = counterModel(parseOne(tokenizeOne('(or p (not p))')), 3);
-// -> { valuation: { p: 0.5 }, value: 0.5, ... }
+const simplified = simplify(
+  parseOne(tokenizeOne('((f a) = (f a))')),
+  [parseOne(tokenizeOne('(a = b)'))],
+);
 
 // Quantize a value to N discrete levels
 const q = quantize(0.4, 3, 0, 1); // -> 0.5 (nearest ternary level)
@@ -152,7 +146,7 @@ The test suite covers:
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, definitional equality, capture-avoiding substitution, freshness, type queries
-- Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, exact, bounded search
+- Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, simplify, exact
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types
 
 ## Dependencies

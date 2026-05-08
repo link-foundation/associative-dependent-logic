@@ -422,8 +422,9 @@ and successful tactic history is stored as links in the proof state:
 (suppose (p = q))
 (introduce n)
 (rewrite (a = b) in goal)
+(rewrite <- (a = b) in goal at 2)
+(simplify in goal)
 (exact (p = q))
-(by search depth 2)
 (induction n
   (case zero (by reflexivity))
   (case (succ m) (by reflexivity)))
@@ -431,13 +432,14 @@ and successful tactic history is stored as links in the proof state:
 
 Programmatic APIs:
 
-- JavaScript: `runTactics(state, tactics)` returns `{ state, diagnostics }`.
-- Rust: `run_tactics(state, tactics)` returns `TacticRunResult`.
-- JavaScript/Rust: `search(goal, depth, lemmas)` returns a derivation tree
-  link, or `null` / `None` when bounded search cannot close the goal.
+- JavaScript: `runTactics(state, tactics, options)` returns `{ state, diagnostics }`;
+  `rewrite(goal, eq)` and `simplify(goal, rules)` expose the rewrite engine.
+- Rust: `run_tactics(state, tactics)` and `run_tactics_with_options(...)`
+  return `TacticRunResult`; `rewrite(...)` and `simplify(...)` expose the
+  rewrite engine.
 
 The built-in tactic set is `reflexivity`, `symmetry`, `transitivity`,
-`induction`, `suppose`, `introduce`, `by`, `rewrite`, `exact`, and `search`.
+`induction`, `suppose`, `introduce`, `by`, `rewrite`, `simplify`, and `exact`.
 Failed tactics emit `E039` diagnostics that include the current goal.
 
 #### Type Queries
@@ -733,7 +735,7 @@ The test suites cover:
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, definitional equality, type queries, prefix type notation
-- Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, exact, bounded search
+- Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, simplify, exact
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types, coexistence with universe hierarchy
 - Bayesian inference: Bayes' theorem, law of total probability, conditional probability, complement rule
 - Bayesian networks: joint probability (product), probabilistic sum (probabilistic_sum), multi-node networks, chain rule decomposition

@@ -123,12 +123,12 @@ The tactic engine keeps proof steps as links:
 
 | JavaScript | Rust | Purpose |
 |------------|------|---------|
-| `runTactics(state, tactics)` | `run_tactics(state, tactics)` | Apply link tactics to a proof state and return the updated state plus diagnostics. |
-| `search(goal, depth, lemmas)` | `search(goal, depth, lemmas)` | Run bounded backwards search and return a derivation-tree link on success. |
+| `runTactics(state, tactics, options)` | `run_tactics(state, tactics)` / `run_tactics_with_options(...)` | Apply link tactics to a proof state and return the updated state plus diagnostics. |
+| `rewrite(goal, eq)` / `simplify(goal, rules)` | `rewrite(...)` / `simplify(...)` | Apply a single equality rewrite or a guarded rewrite set directly. |
 | Goal state | `ProofState` / `ProofGoal` | Open goals, local context, and successful tactic links. |
 
 Built-in tactics are `reflexivity`, `symmetry`, `transitivity`, `induction`,
-`suppose`, `introduce`, `by`, `rewrite`, `exact`, and `search`. A failed
+`suppose`, `introduce`, `by`, `rewrite`, `simplify`, and `exact`. A failed
 tactic emits `E039` and includes the current goal in the diagnostic message.
 
 For consumers that start from a selected natural-language interpretation rather than a complete `.lino` file, the library also exposes a meta-expression adapter:

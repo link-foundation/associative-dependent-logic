@@ -56,8 +56,7 @@ Or after building:
 use rml::{
     run, evaluate, format_diagnostic, Diagnostic, EvaluateResult, RunResult, Span,
     tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round, subst,
-    run_tactics, search, ProofState,
-    counter_model,
+    run_tactics, rewrite, simplify, ProofState,
     formalize_selected_interpretation, evaluate_formalization,
     FormalizationRequest, Interpretation,
 };
@@ -87,20 +86,9 @@ let goal = parse_one(&tokenize_one("(a = a)")).unwrap();
 let tactic_result = run_tactics(ProofState::from_goals(vec![goal]), &[tactic]);
 // -> tactic_result.state.goals is empty, diagnostics is empty
 
-// Run bounded backwards search over available lemmas
-let search_goal = parse_one(&tokenize_one("(a = c)")).unwrap();
-let lemmas = vec![
-    parse_one(&tokenize_one("(ab of (a = b))")).unwrap(),
-    parse_one(&tokenize_one("(bc of (b = c))")).unwrap(),
-    parse_one(&tokenize_one("(trans of (Pi ((a = b) ab) (Pi ((b = c) bc) (a = c))))")).unwrap(),
-];
-let search_proof = search(&search_goal, 1, &lemmas).unwrap();
-// -> (by apply trans (by exact ab) (by exact bc))
-
-// Exhaustively find a finite-valence counter-model, or None for a tautology
-let formula = parse_one(&tokenize_one("(or p (not p))")).unwrap();
-let witness = counter_model(&formula, 3);
-// -> Some(CounterModel { valuation: [("p", 0.5)], value: 0.5, ... })
+let eq = parse_one(&tokenize_one("(a = b)")).unwrap();
+let rewritten = rewrite(&parse_one(&tokenize_one("(a = a)")).unwrap(), &eq).unwrap();
+let simplified = simplify(&parse_one(&tokenize_one("((f a) = (f a))")).unwrap(), &[eq]).unwrap();
 
 // Quantize a value to N discrete levels
 let q = quantize(0.4, 3, 0.0, 1.0); // -> 0.5 (nearest ternary level)
@@ -132,7 +120,7 @@ The test suite covers:
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, definitional equality, capture-avoiding substitution, freshness, type queries
-- Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, exact, bounded search
+- Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, simplify, exact
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types
 
 ## Implementation Notes

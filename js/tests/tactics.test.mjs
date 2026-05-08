@@ -8,7 +8,8 @@ import {
   keyOf,
   parseOne,
   runTactics,
-  search,
+  rewrite,
+  simplify,
   tokenizeOne,
 } from '../src/rml-links.mjs';
 
@@ -18,15 +19,6 @@ function link(src) {
 
 function state(...goals) {
   return { goals: goals.map(goal => link(goal)) };
-}
-
-function stateWithContext(goal, ...context) {
-  return {
-    goals: [{
-      goal: link(goal),
-      context: context.map(link),
-    }],
-  };
 }
 
 function goalKeys(proofState) {
@@ -112,6 +104,57 @@ describe('runTactics applies link tactics to proof states', () => {
     ]);
   });
 
+  it('rewrites in the requested direction', () => {
+    assert.strictEqual(
+      keyOf(rewrite(link('(b = b)'), link('(a = b)'), { direction: 'backward' })),
+      '(a = a)',
+    );
+
+    const out = runTactics(state('(b = b)'), [
+      link('(rewrite <- (a = b) in goal)'),
+      link('(by reflexivity)'),
+    ]);
+
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.state.goals, []);
+  });
+
+  it('rewrites only the selected occurrence', () => {
+    const out = runTactics(state('((pair a a) = (pair b a))'), [
+      link('(rewrite (a = b) in goal at 2)'),
+    ]);
+
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(goalKeys(out.state), ['((pair a b) = (pair b a))']);
+  });
+
+  it('simplifies the current goal with configured rewrite rules', () => {
+    assert.strictEqual(
+      keyOf(simplify(link('((f a) = (f a))'), [link('(a = b)')])),
+      '((f b) = (f b))',
+    );
+
+    const out = runTactics(
+      state('((f a) = (f a))'),
+      [link('(simplify in goal)'), link('(by reflexivity)')],
+      { rewriteRules: [link('(a = b)')] },
+    );
+
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.state.goals, []);
+  });
+
+  it('stops simplification when the termination guard is reached', () => {
+    assert.throws(
+      () => simplify(
+        link('(a = a)'),
+        [link('(a = b)'), link('(b = a)')],
+        { maxSteps: 3 },
+      ),
+      /termination guard/i,
+    );
+  });
+
   it('runs per-case tactic links during induction', () => {
     const out = runTactics(state('(n = n)'), [
       link(
@@ -134,39 +177,5 @@ describe('runTactics applies link tactics to proof states', () => {
     assert.strictEqual(out.diagnostics[0].code, 'E039');
     assert.match(out.diagnostics[0].message, /current goal: \(a = b\)/);
     assert.deepStrictEqual(goalKeys(out.state), ['(a = b)']);
-  });
-
-  it('search returns a bounded derivation tree from available lemmas', () => {
-    const lemmas = [
-      link('(ab of (a = b))'),
-      link('(bc of (b = c))'),
-      link('(trans of (Pi ((a = b) ab) (Pi ((b = c) bc) (a = c))))'),
-    ];
-
-    assert.strictEqual(search(link('(a = c)'), 0, lemmas), null);
-
-    const proof = search(link('(a = c)'), 1, lemmas);
-    assert.strictEqual(
-      keyOf(proof),
-      '(by apply trans (by exact ab) (by exact bc))',
-    );
-  });
-
-  it('closes a goal with (by search depth N)', () => {
-    const out = runTactics(
-      stateWithContext(
-        '(a = c)',
-        '(ab of (a = b))',
-        '(bc of (b = c))',
-        '(trans of (Pi ((a = b) ab) (Pi ((b = c) bc) (a = c))))',
-      ),
-      [link('(by search depth 1)')],
-    );
-
-    assert.deepStrictEqual(out.diagnostics, []);
-    assert.deepStrictEqual(out.state.goals, []);
-    assert.deepStrictEqual(out.state.proof.map(keyOf), [
-      '(by search depth 1 (by apply trans (by exact ab) (by exact bc)))',
-    ]);
   });
 });

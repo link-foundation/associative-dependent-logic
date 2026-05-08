@@ -544,7 +544,6 @@ const NON_VARIABLE_TOKENS = new Set([
   'define', 'case', 'measure', 'lex', 'terminating',
   'whnf', 'nf', 'normal-form',
   'template',
-  'counter-model',
   '+', '-', '*', '/', '=', '!=', 'and', 'or', 'not', 'both', 'neither', 'nor',
 ]);
 
@@ -643,135 +642,6 @@ function hasUnresolvedFreeVariables(expr, env) {
     if (!envCanEvaluateName(env, name)) return true;
   }
   return false;
-}
-
-const COUNTER_MODEL_CONSTANTS = new Set(['true', 'false', 'unknown', 'undefined']);
-
-function normaliseCounterModelFormula(formula) {
-  if (typeof formula === 'string') {
-    const text = formula.trim();
-    if (text.startsWith('(')) return parseOne(tokenizeOne(text));
-    return text;
-  }
-  return cloneTerm(formula);
-}
-
-function finiteTruthValues(valence, lo, hi) {
-  const n = Number(valence);
-  if (!Number.isInteger(n) || n < 2) {
-    throw new RmlError('E041', 'Counter-model search requires finite valence >= 2');
-  }
-  const step = (hi - lo) / (n - 1);
-  return Array.from({ length: n }, (_, i) => decRound(lo + step * i));
-}
-
-function counterModelVariables(formula, env) {
-  return [...freeVariables(formula)]
-    .filter(name => !COUNTER_MODEL_CONSTANTS.has(name))
-    .filter(name => !env.hasOp(name))
-    .sort();
-}
-
-function sameTruthValue(a, b) {
-  return Math.abs(a - b) < 1e-9;
-}
-
-function counterModel(formula, valence, options) {
-  const opts = options || {};
-  const formulaNode = normaliseCounterModelFormula(formula);
-  const n = Number(valence);
-  if (!Number.isInteger(n) || n < 2) {
-    throw new RmlError('E041', 'Counter-model search requires finite valence >= 2');
-  }
-  const env = opts.env instanceof Env ? opts.env : new Env({ ...opts, valence: n });
-  return counterModelInEnv(formulaNode, n, env);
-}
-
-function counterModelInEnv(formula, valence, env) {
-  const formulaNode = cloneTerm(formula);
-  const n = Number(valence);
-  if (!Number.isInteger(n) || n < 2) {
-    throw new RmlError('E041', 'Counter-model search requires finite valence >= 2');
-  }
-
-  const previousValence = env.valence;
-  const values = finiteTruthValues(n, env.lo, env.hi);
-  const variables = counterModelVariables(formulaNode, env);
-  const savedSymbols = variables.map(name => ({
-    name,
-    had: env.symbolProb.has(name),
-    value: env.symbolProb.get(name),
-  }));
-  const assignment = new Map();
-
-  function buildWitness(value) {
-    const valuation = {};
-    for (const name of variables) valuation[name] = assignment.get(name);
-    return {
-      formula: cloneTerm(formulaNode),
-      valence: n,
-      values: [...values],
-      variables: [...variables],
-      valuation,
-      value,
-    };
-  }
-
-  function evaluateCurrentAssignment() {
-    const raw = evalNode(formulaNode, env);
-    const value = raw && raw.query ? raw.value : isTermResult(raw) ? env.lo : raw;
-    const numeric = typeof value === 'number' ? value : env.lo;
-    return env.clamp(numeric);
-  }
-
-  function search(index) {
-    if (index === variables.length) {
-      const value = evaluateCurrentAssignment();
-      return sameTruthValue(value, env.hi) ? null : buildWitness(value);
-    }
-
-    const name = variables[index];
-    for (const value of values) {
-      assignment.set(name, value);
-      env.setSymbolProb(name, value);
-      const found = search(index + 1);
-      if (found) return found;
-    }
-    assignment.delete(name);
-    return null;
-  }
-
-  try {
-    env.valence = n;
-    return search(0);
-  } finally {
-    env.valence = previousValence;
-    for (const saved of savedSymbols) {
-      if (saved.had) env.symbolProb.set(saved.name, saved.value);
-      else env.symbolProb.delete(saved.name);
-    }
-  }
-}
-
-function formatCounterModel(witness) {
-  const valuation = [
-    'valuation',
-    ...witness.variables.map(name => [name, formatTraceValue(witness.valuation[name])]),
-  ];
-  return keyOf([
-    'counter-model',
-    witness.formula,
-    valuation,
-    ['value', formatTraceValue(witness.value)],
-  ]);
-}
-
-function formatNoCounterModel(formula, valence) {
-  return keyOf([
-    'no-counter-model',
-    cloneTerm(formula),
-    ['valence', String(valence)],
-  ]);
 }
 
 function collectNames(expr, out = new Set()) {
@@ -1154,12 +1024,14 @@ function _queryRequestsProof(node) {
   return parts.length >= 3 && parts[parts.length - 2] === 'with' && parts[parts.length - 1] === 'proof';
 }
 
-// ---------- Tactic engine (issue #55) ----------
+// ---------- Tactic engine (issues #55 and #56) ----------
 // Tactics are represented as ordinary links and operate on an explicit proof
 // state. The state shape is intentionally small and serialisable:
 //   { goals: [{ goal: Node, context: Node[] }], proof: Node[] }
 // Callers may pass bare goal nodes in `goals`; `runTactics` normalises them
 // into goal objects before applying tactics.
+const DEFAULT_SIMPLIFY_MAX_STEPS = 100;
+
 function _normaliseProofGoal(rawGoal, inheritedContext = []) {
   if (
     rawGoal &&
@@ -1255,18 +1127,174 @@ function _goalWithContext(current, goal) {
   };
 }
 
-function _rewriteAll(node, from, to) {
-  if (isStructurallySame(node, from)) {
-    return { node: cloneTerm(to), changed: true };
+function _rewriteError(message) {
+  return new RmlError('E039', message);
+}
+
+function _normaliseRewriteDirection(direction = 'forward') {
+  if (direction === undefined || direction === null) return 'forward';
+  const raw = String(direction);
+  if (raw === 'forward' || raw === 'left-to-right' || raw === '->') return 'forward';
+  if (raw === 'backward' || raw === 'right-to-left' || raw === '<-' || raw === 'reverse') {
+    return 'backward';
   }
-  if (!Array.isArray(node)) return { node: cloneTerm(node), changed: false };
-  let changed = false;
-  const rewritten = node.map(child => {
-    const r = _rewriteAll(child, from, to);
-    if (r.changed) changed = true;
-    return r.node;
+  throw _rewriteError(`unknown rewrite direction "${raw}"`);
+}
+
+function _normaliseRewriteOccurrence(occurrence = 'all') {
+  if (occurrence === undefined || occurrence === null || occurrence === 'all') {
+    return { kind: 'all' };
+  }
+  if (occurrence === 'first') return { kind: 'index', index: 1 };
+  const index = typeof occurrence === 'number' ? occurrence : Number(String(occurrence));
+  if (Number.isSafeInteger(index) && index >= 1) return { kind: 'index', index };
+  throw _rewriteError(`rewrite occurrence must be "all", "first", or a positive integer (got ${keyOf(occurrence)})`);
+}
+
+function _rewriteSides(eqNode, direction) {
+  const eq = _asEquality(eqNode);
+  if (!eq) throw _rewriteError('rewrite expects an equality link');
+  if (_normaliseRewriteDirection(direction) === 'backward') {
+    return { from: eq.right, to: eq.left };
+  }
+  return { from: eq.left, to: eq.right };
+}
+
+function _rewriteNode(node, from, to, occurrence) {
+  const selected = _normaliseRewriteOccurrence(occurrence);
+  let seen = 0;
+  let count = 0;
+
+  function walk(current) {
+    if (isStructurallySame(current, from)) {
+      seen += 1;
+      if (selected.kind === 'all' || seen === selected.index) {
+        count += 1;
+        return cloneTerm(to);
+      }
+    }
+    if (!Array.isArray(current)) return cloneTerm(current);
+    return current.map(walk);
+  }
+
+  const rewritten = walk(node);
+  return { node: rewritten, changed: count > 0, count, seen };
+}
+
+function _rewriteDetailed(goal, eq, options = {}) {
+  const goalNode = parseTermInput(goal);
+  const eqNode = parseTermInput(eq);
+  const { from, to } = _rewriteSides(eqNode, options.direction);
+  return _rewriteNode(goalNode, from, to, options.occurrence);
+}
+
+function rewrite(goal, eq, options = {}) {
+  return _rewriteDetailed(goal, eq, options).node;
+}
+
+function _normaliseRewriteRules(rules) {
+  if (rules === undefined || rules === null) return [];
+  if (typeof rules === 'string') return parseLinoForms(rules);
+  const parsed = parseTermInput(rules);
+  if (_asEquality(parsed)) return [parsed];
+  if (!Array.isArray(rules)) return [parsed];
+  return rules.map(rule => {
+    const node = parseTermInput(rule);
+    if (!_asEquality(node)) {
+      throw _rewriteError(`simplify expects equality rewrite rules (got ${keyOf(node)})`);
+    }
+    return node;
   });
-  return { node: rewritten, changed };
+}
+
+function _normaliseSimplifyMaxSteps(options = {}) {
+  const raw = options.maxSteps ?? options.simplifyMaxSteps ?? DEFAULT_SIMPLIFY_MAX_STEPS;
+  const maxSteps = typeof raw === 'number' ? raw : Number(String(raw));
+  if (!Number.isSafeInteger(maxSteps) || maxSteps < 0) {
+    throw _rewriteError(`simplify maxSteps must be a non-negative integer (got ${String(raw)})`);
+  }
+  return maxSteps;
+}
+
+function _simplifyDetailed(goal, rules, options = {}) {
+  const ruleNodes = _normaliseRewriteRules(rules);
+  const maxSteps = _normaliseSimplifyMaxSteps(options);
+  let node = parseTermInput(goal);
+  let changed = false;
+  let steps = 0;
+
+  while (true) {
+    let applied = false;
+    for (const rule of ruleNodes) {
+      const rewritten = _rewriteDetailed(node, rule, { direction: options.direction });
+      if (!rewritten.changed) continue;
+      if (steps >= maxSteps) {
+        throw _rewriteError(`simplify termination guard reached after ${maxSteps} rewrite steps`);
+      }
+      node = rewritten.node;
+      steps += 1;
+      changed = true;
+      applied = true;
+      break;
+    }
+    if (!applied) return { node, changed, steps };
+  }
+}
+
+function simplify(goal, rules, options = {}) {
+  return _simplifyDetailed(goal, rules, options).node;
+}
+
+function _normaliseTacticOptions(options = {}) {
+  return {
+    rewriteRules: _normaliseRewriteRules(options.rewriteRules ?? options.rules ?? []),
+    simplifyMaxSteps: _normaliseSimplifyMaxSteps(options),
+  };
+}
+
+function _parseRewriteTactic(args) {
+  let index = 0;
+  let direction = 'forward';
+  if (args[index] === '->' || args[index] === '<-') {
+    direction = args[index];
+    index += 1;
+  }
+  if (args.length < index + 3 || args[index + 1] !== 'in' || args[index + 2] !== 'goal') {
+    throw _rewriteError('rewrite expects `(rewrite [->|<-] (L = R) in goal [at N])`');
+  }
+  const eq = args[index];
+  index += 3;
+  let occurrence = 'all';
+  if (index < args.length) {
+    if (args[index] !== 'at' || index + 2 !== args.length) {
+      throw _rewriteError('rewrite expects optional occurrence selector `at N`');
+    }
+    occurrence = args[index + 1];
+  }
+  return { eq, direction, occurrence };
+}
+
+function _parseSimplifyTactic(args) {
+  if (args.length < 2 || args[0] !== 'in' || args[1] !== 'goal') {
+    throw _rewriteError('simplify expects `(simplify in goal)`');
+  }
+  let index = 2;
+  let rules = null;
+  let maxSteps = null;
+  while (index < args.length) {
+    if (args[index] === 'using' && index + 1 < args.length) {
+      rules = _normaliseRewriteRules(args[index + 1]);
+      index += 2;
+      continue;
+    }
+    if ((args[index] === 'max' || args[index] === 'limit') && index + 1 < args.length) {
+      maxSteps = Number(String(args[index + 1]));
+      index += 2;
+      continue;
+    }
+    throw _rewriteError('simplify expects optional `using <rules>` and `max <steps>` clauses');
+  }
+  return { rules, maxSteps };
 }
 
 function _typeAscription(node) {
@@ -1290,117 +1318,13 @@ function _exactClosesGoal(arg, goal) {
   });
 }
 
-function _searchLemma(lemma) {
-  const ascription = _typeAscription(lemma);
-  if (ascription) {
-    return {
-      term: cloneTerm(ascription.term),
-      statement: cloneTerm(ascription.type),
-    };
-  }
-  if (
-    Array.isArray(lemma) &&
-    lemma.length === 2 &&
-    typeof lemma[0] === 'string' &&
-    lemma[0].endsWith(':')
-  ) {
-    return {
-      term: lemma[0].slice(0, -1),
-      statement: cloneTerm(lemma[1]),
-    };
-  }
-  return {
-    term: cloneTerm(lemma),
-    statement: cloneTerm(lemma),
-  };
-}
-
-function _piPremisesAndConclusion(statement) {
-  const premises = [];
-  let current = statement;
-  while (Array.isArray(current) && current.length === 3 && current[0] === 'Pi') {
-    const binding = parseBinding(current[1]);
-    if (!binding) return null;
-    premises.push(cloneTerm(binding.paramType));
-    current = current[2];
-  }
-  return {
-    premises,
-    conclusion: cloneTerm(current),
-  };
-}
-
-function _reflexivityProof(goal) {
-  const eq = _asEquality(goal);
-  if (eq && isStructurallySame(eq.left, eq.right)) {
-    return _wrap('reflexivity');
-  }
-  return null;
-}
-
-function _searchWithLemmas(goal, depth, lemmas) {
-  const reflexive = _reflexivityProof(goal);
-  if (reflexive) return reflexive;
-
-  for (const lemma of lemmas) {
-    if (isStructurallySame(lemma.statement, goal)) {
-      return _wrap('exact', lemma.term);
-    }
-  }
-
-  if (depth <= 0) return null;
-
-  for (const lemma of lemmas) {
-    const rule = _piPremisesAndConclusion(lemma.statement);
-    if (!rule || rule.premises.length === 0 || !isStructurallySame(rule.conclusion, goal)) {
-      continue;
-    }
-    const subProofs = [];
-    let solved = true;
-    for (const premise of rule.premises) {
-      const subProof = _searchWithLemmas(premise, depth - 1, lemmas);
-      if (!subProof) {
-        solved = false;
-        break;
-      }
-      subProofs.push(subProof);
-    }
-    if (solved) return _wrap('apply', lemma.term, ...subProofs);
-  }
-
-  return null;
-}
-
-function _parseSearchDepth(value) {
-  if (Number.isInteger(value) && value >= 0) return value;
-  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value);
-  return null;
-}
-
-function _recordSearchProof(recordTactic, proof) {
-  const recorded = cloneTerm(recordTactic);
-  if (Array.isArray(recorded)) return [...recorded, cloneTerm(proof)];
-  return [recorded, cloneTerm(proof)];
-}
-
-function search(goal, depth, lemmas = []) {
-  const parsedDepth = _parseSearchDepth(depth);
-  if (parsedDepth === null) return null;
-  const lemmaList = Array.isArray(lemmas) ? lemmas : [lemmas];
-  return _searchWithLemmas(
-    cloneTerm(goal),
-    parsedDepth,
-    lemmaList.map(_searchLemma),
-  );
-}
-
-function _applyTactic(state, tactic, recordTactic = tactic) {
+function _applyTactic(state, tactic, recordTactic = tactic, tacticOptions = _normaliseTacticOptions()) {
   const name = _tacticName(tactic);
   const args = _tacticArgs(tactic);
 
   if (name === 'by') {
-    if (args.length === 1) return _applyTactic(state, args[0], recordTactic);
-    if (args.length > 1) return _applyTactic(state, args, recordTactic);
+    if (args.length === 1) return _applyTactic(state, args[0], recordTactic, tacticOptions);
+    if (args.length > 1) return _applyTactic(state, args, recordTactic, tacticOptions);
     return {
       ok: false,
       state,
@@ -1414,36 +1338,6 @@ function _applyTactic(state, tactic, recordTactic = tactic) {
       ok: false,
       state,
       diagnostic: _tacticDiagnostic(recordTactic, null, 'no open goals'),
-    };
-  }
-
-  if (name === 'search') {
-    if (args.length !== 2 || args[0] !== 'depth') {
-      return {
-        ok: false,
-        state,
-        diagnostic: _tacticDiagnostic(recordTactic, current, 'search expects `(search depth N)`'),
-      };
-    }
-    const depth = _parseSearchDepth(args[1]);
-    if (depth === null) {
-      return {
-        ok: false,
-        state,
-        diagnostic: _tacticDiagnostic(recordTactic, current, 'search depth must be a non-negative integer'),
-      };
-    }
-    const proof = search(current.goal, depth, current.context);
-    if (!proof) {
-      return {
-        ok: false,
-        state,
-        diagnostic: _tacticDiagnostic(recordTactic, current, `search found no derivation within depth ${depth}`),
-      };
-    }
-    return {
-      ok: true,
-      state: _replaceCurrentGoal(state, [], _recordSearchProof(recordTactic, proof)),
     };
   }
 
@@ -1556,32 +1450,77 @@ function _applyTactic(state, tactic, recordTactic = tactic) {
   }
 
   if (name === 'rewrite') {
-    if (args.length !== 3 || args[1] !== 'in' || args[2] !== 'goal') {
+    let parsed;
+    try {
+      parsed = _parseRewriteTactic(args);
+    } catch (err) {
       return {
         ok: false,
         state,
-        diagnostic: _tacticDiagnostic(recordTactic, current, 'rewrite expects `(rewrite (L = R) in goal)`'),
+        diagnostic: _tacticDiagnostic(recordTactic, current, err.message),
       };
     }
-    const eq = _asEquality(args[0]);
-    if (!eq) {
+    let rewritten;
+    try {
+      rewritten = _rewriteDetailed(current.goal, parsed.eq, {
+        direction: parsed.direction,
+        occurrence: parsed.occurrence,
+      });
+    } catch (err) {
       return {
         ok: false,
         state,
-        diagnostic: _tacticDiagnostic(recordTactic, current, 'rewrite expects an equality link'),
+        diagnostic: _tacticDiagnostic(recordTactic, current, err.message),
       };
     }
-    const rewritten = _rewriteAll(current.goal, eq.left, eq.right);
     if (!rewritten.changed) {
+      const { from } = _rewriteSides(parsed.eq, parsed.direction);
       return {
         ok: false,
         state,
-        diagnostic: _tacticDiagnostic(recordTactic, current, `rewrite did not find ${keyOf(eq.left)} in the current goal`),
+        diagnostic: _tacticDiagnostic(recordTactic, current, `rewrite did not find ${keyOf(from)} in the current goal`),
       };
     }
     return {
       ok: true,
       state: _replaceCurrentGoal(state, [_goalWithContext(current, rewritten.node)], recordTactic),
+    };
+  }
+
+  if (name === 'simplify') {
+    let parsed;
+    try {
+      parsed = _parseSimplifyTactic(args);
+    } catch (err) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, err.message),
+      };
+    }
+    const rules = parsed.rules ?? tacticOptions.rewriteRules;
+    if (rules.length === 0) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, 'simplify expects at least one configured rewrite rule'),
+      };
+    }
+    let simplified;
+    try {
+      simplified = _simplifyDetailed(current.goal, rules, {
+        maxSteps: parsed.maxSteps ?? tacticOptions.simplifyMaxSteps,
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, err.message),
+      };
+    }
+    return {
+      ok: true,
+      state: _replaceCurrentGoal(state, [_goalWithContext(current, simplified.node)], recordTactic),
     };
   }
 
@@ -1630,7 +1569,7 @@ function _applyTactic(state, tactic, recordTactic = tactic) {
         openGoals.push(caseGoal);
         continue;
       }
-      const nested = _runTacticsInternal({ goals: [caseGoal], proof: [] }, caseTactics);
+      const nested = _runTacticsInternal({ goals: [caseGoal], proof: [] }, caseTactics, tacticOptions);
       if (nested.diagnostics.length > 0) {
         return { ok: false, state, diagnostic: nested.diagnostics[0] };
       }
@@ -1653,11 +1592,11 @@ function _applyTactic(state, tactic, recordTactic = tactic) {
   };
 }
 
-function _runTacticsInternal(state, tactics) {
+function _runTacticsInternal(state, tactics, tacticOptions = _normaliseTacticOptions()) {
   let next = _cloneProofState(state);
   const diagnostics = [];
   for (const tactic of _normaliseTacticList(tactics)) {
-    const applied = _applyTactic(next, tactic, tactic);
+    const applied = _applyTactic(next, tactic, tactic, tacticOptions);
     if (!applied.ok) {
       diagnostics.push(applied.diagnostic);
       break;
@@ -1667,8 +1606,8 @@ function _runTacticsInternal(state, tactics) {
   return { state: next, diagnostics };
 }
 
-function runTactics(state, tactics) {
-  return _runTacticsInternal(_normaliseProofState(state), tactics);
+function runTactics(state, tactics, options = {}) {
+  return _runTacticsInternal(_normaliseProofState(state), tactics, _normaliseTacticOptions(options));
 }
 
 // Evaluate a node in arithmetic context — numeric literals are NOT clamped to the logic range.
@@ -3294,21 +3233,6 @@ function evalNode(node, env){
     return 1;
   }
 
-  // Counter-model search: (counter-model formula)
-  // Uses the current finite valence and returns a printable witness link when
-  // some valuation makes the formula evaluate below the top truth value.
-  if (node[0] === 'counter-model') {
-    if (node.length !== 2) {
-      throw new RmlError('E041', 'Counter-model form must be `(counter-model <formula>)`');
-    }
-    const witness = counterModel(node[1], env.valence, { env });
-    return {
-      query: true,
-      value: witness ? formatCounterModel(witness) : formatNoCounterModel(node[1], env.valence),
-      typeQuery: true,
-    };
-  }
-
   // Query: (? expr) with optional `with proof` suffix (issue #35).
   // The suffix is a per-query opt-in for derivation output; the actual proof
   // is built by `buildProof` in `evaluate()`. Stripping it here keeps the
@@ -4891,9 +4815,8 @@ export {
   evalNode,
   buildProof,
   runTactics,
-  search,
-  counterModel,
-  formatCounterModel,
+  rewrite,
+  simplify,
   quantize,
   decRound,
   keyOf,

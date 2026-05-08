@@ -702,7 +702,6 @@ pub struct TemplateDecl {
 }
 
 /// The evaluation environment: holds terms, assignments, operators, and range/valence config.
-#[derive(Clone)]
 pub struct Env {
     pub terms: HashSet<String>,
     pub assign: HashMap<String, f64>,
@@ -1372,7 +1371,6 @@ fn non_variable_token(s: &str) -> bool {
             | "nf"
             | "normal-form"
             | "template"
-            | "counter-model"
             | "+"
             | "-"
             | "*"
@@ -1512,163 +1510,6 @@ fn has_unresolved_free_variables(expr: &Node, env: &Env) -> bool {
     free_variables(expr)
         .iter()
         .any(|name| !env_can_evaluate_name(env, name))
-}
-
-/// A falsifying finite-valence valuation for a formula.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CounterModel {
-    pub formula: Node,
-    pub valence: u32,
-    pub values: Vec<f64>,
-    pub variables: Vec<String>,
-    pub valuation: Vec<(String, f64)>,
-    pub value: f64,
-}
-
-fn finite_truth_values(valence: u32, lo: f64, hi: f64) -> Vec<f64> {
-    if valence < 2 {
-        return Vec::new();
-    }
-    let step = (hi - lo) / (valence as f64 - 1.0);
-    (0..valence)
-        .map(|i| dec_round(lo + step * i as f64))
-        .collect()
-}
-
-fn counter_model_variables(formula: &Node, env: &Env) -> Vec<String> {
-    let constants: HashSet<&str> = ["true", "false", "unknown", "undefined"]
-        .iter()
-        .copied()
-        .collect();
-    let mut variables: Vec<String> = free_variables(formula)
-        .into_iter()
-        .filter(|name| !constants.contains(name.as_str()))
-        .filter(|name| !env.has_op(name))
-        .collect();
-    variables.sort();
-    variables
-}
-
-fn same_truth_value(a: f64, b: f64) -> bool {
-    (a - b).abs() < 1e-9
-}
-
-/// Search all finite valuations for a formula and return the first one whose
-/// result is below the top truth value. Returns `None` when no counter-model
-/// exists or when `valence < 2`.
-pub fn counter_model(formula: &Node, valence: u32) -> Option<CounterModel> {
-    if valence < 2 {
-        return None;
-    }
-    let options = EnvOptions {
-        valence,
-        ..EnvOptions::default()
-    };
-    let mut env = Env::new(Some(options));
-    counter_model_in_env(formula, valence, &mut env)
-}
-
-fn counter_model_in_env(formula: &Node, valence: u32, env: &mut Env) -> Option<CounterModel> {
-    if valence < 2 {
-        return None;
-    }
-
-    let formula = formula.clone();
-    let values = finite_truth_values(valence, env.lo, env.hi);
-    let variables = counter_model_variables(&formula, env);
-    let mut assignment = vec![env.lo; variables.len()];
-
-    fn search(
-        index: usize,
-        formula: &Node,
-        valence: u32,
-        values: &[f64],
-        variables: &[String],
-        assignment: &mut [f64],
-        env: &mut Env,
-    ) -> Option<CounterModel> {
-        if index == variables.len() {
-            let raw = eval_node(formula, env).as_f64();
-            let value = env.clamp(raw);
-            if same_truth_value(value, env.hi) {
-                return None;
-            }
-            let valuation = variables
-                .iter()
-                .cloned()
-                .zip(assignment.iter().copied())
-                .collect();
-            return Some(CounterModel {
-                formula: formula.clone(),
-                valence,
-                values: values.to_vec(),
-                variables: variables.to_vec(),
-                valuation,
-                value,
-            });
-        }
-
-        let name = &variables[index];
-        for value in values {
-            assignment[index] = *value;
-            env.set_symbol_prob(name, *value);
-            if let Some(found) = search(
-                index + 1,
-                formula,
-                valence,
-                values,
-                variables,
-                assignment,
-                env,
-            ) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    let mut search_env = env.clone();
-    search_env.valence = valence;
-    search(
-        0,
-        &formula,
-        valence,
-        &values,
-        &variables,
-        &mut assignment,
-        &mut search_env,
-    )
-}
-
-/// Format a counter-model as a printable LiNo witness link.
-pub fn format_counter_model(witness: &CounterModel) -> String {
-    let mut valuation_children = vec![Node::Leaf("valuation".to_string())];
-    for (name, value) in &witness.valuation {
-        valuation_children.push(Node::List(vec![
-            Node::Leaf(name.clone()),
-            Node::Leaf(format_trace_value(*value)),
-        ]));
-    }
-    key_of(&Node::List(vec![
-        Node::Leaf("counter-model".to_string()),
-        witness.formula.clone(),
-        Node::List(valuation_children),
-        Node::List(vec![
-            Node::Leaf("value".to_string()),
-            Node::Leaf(format_trace_value(witness.value)),
-        ]),
-    ]))
-}
-
-fn format_no_counter_model(formula: &Node, valence: u32) -> String {
-    key_of(&Node::List(vec![
-        Node::Leaf("no-counter-model".to_string()),
-        formula.clone(),
-        Node::List(vec![
-            Node::Leaf("valence".to_string()),
-            Node::Leaf(valence.to_string()),
-        ]),
-    ]))
 }
 
 fn collect_names(expr: &Node, out: &mut HashSet<String>) {
@@ -3536,7 +3377,7 @@ pub fn build_proof(node: &Node, env: &Env) -> Node {
     }
 }
 
-// ========== Tactic engine (issue #55) ==========
+// ========== Tactic engine (issues #55 and #56) ==========
 // Tactics are ordinary links that transform an explicit proof state. Keeping
 // goals, local assumptions, and tactic history as `Node` values preserves the
 // project invariant that proof steps are links.
@@ -3578,6 +3419,84 @@ impl ProofState {
 pub struct TacticRunResult {
     pub state: ProofState,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+const DEFAULT_SIMPLIFY_MAX_STEPS: usize = 100;
+
+/// Direction for applying an equality rewrite rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewriteDirection {
+    Forward,
+    Backward,
+}
+
+/// Which occurrence of the left-hand side to rewrite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewriteOccurrence {
+    All,
+    Index(usize),
+}
+
+/// Options for a single rewrite pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RewriteOptions {
+    pub direction: RewriteDirection,
+    pub occurrence: RewriteOccurrence,
+}
+
+impl Default for RewriteOptions {
+    fn default() -> Self {
+        Self {
+            direction: RewriteDirection::Forward,
+            occurrence: RewriteOccurrence::All,
+        }
+    }
+}
+
+/// Result of a single rewrite pass.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RewriteResult {
+    pub node: Node,
+    pub changed: bool,
+    pub count: usize,
+}
+
+/// Options for repeated simplification with a rewrite set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SimplifyOptions {
+    pub max_steps: usize,
+}
+
+impl Default for SimplifyOptions {
+    fn default() -> Self {
+        Self {
+            max_steps: DEFAULT_SIMPLIFY_MAX_STEPS,
+        }
+    }
+}
+
+/// Result of simplification by repeated rewrite passes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SimplifyResult {
+    pub node: Node,
+    pub changed: bool,
+    pub steps: usize,
+}
+
+/// Options supplied to tactic execution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TacticOptions {
+    pub rewrite_rules: Vec<Node>,
+    pub simplify_max_steps: usize,
+}
+
+impl Default for TacticOptions {
+    fn default() -> Self {
+        Self {
+            rewrite_rules: Vec::new(),
+            simplify_max_steps: DEFAULT_SIMPLIFY_MAX_STEPS,
+        }
+    }
 }
 
 fn tactic_name(tactic: &Node) -> Option<&str> {
@@ -3649,27 +3568,123 @@ fn replace_current_goal(
     ProofState { goals, proof }
 }
 
-fn rewrite_all(node: &Node, from: &Node, to: &Node) -> (Node, bool) {
+fn rewrite_diagnostic(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new("E039", message, Span::unknown())
+}
+
+fn rewrite_sides(
+    eq: &Node,
+    direction: RewriteDirection,
+) -> Result<(&Node, &Node), Diagnostic> {
+    let Some((left, right)) = as_equality(eq) else {
+        return Err(rewrite_diagnostic("rewrite expects an equality link"));
+    };
+    Ok(match direction {
+        RewriteDirection::Forward => (left, right),
+        RewriteDirection::Backward => (right, left),
+    })
+}
+
+fn rewrite_node(
+    node: &Node,
+    from: &Node,
+    to: &Node,
+    occurrence: RewriteOccurrence,
+    seen: &mut usize,
+    count: &mut usize,
+) -> Node {
     if is_structurally_same(node, from) {
-        return (to.clone(), true);
-    }
-    match node {
-        Node::Leaf(_) => (node.clone(), false),
-        Node::List(children) => {
-            let mut changed = false;
-            let rewritten: Vec<Node> = children
-                .iter()
-                .map(|child| {
-                    let (next, child_changed) = rewrite_all(child, from, to);
-                    if child_changed {
-                        changed = true;
-                    }
-                    next
-                })
-                .collect();
-            (Node::List(rewritten), changed)
+        *seen += 1;
+        let selected = match occurrence {
+            RewriteOccurrence::All => true,
+            RewriteOccurrence::Index(index) => *seen == index,
+        };
+        if selected {
+            *count += 1;
+            return to.clone();
         }
     }
+    match node {
+        Node::Leaf(_) => node.clone(),
+        Node::List(children) => Node::List(
+            children
+                .iter()
+                .map(|child| rewrite_node(child, from, to, occurrence, seen, count))
+                .collect(),
+        ),
+    }
+}
+
+/// Rewrite `goal` once using equality `eq` and explicit options.
+pub fn rewrite_with_options(
+    goal: &Node,
+    eq: &Node,
+    options: RewriteOptions,
+) -> Result<RewriteResult, Diagnostic> {
+    let (from, to) = rewrite_sides(eq, options.direction)?;
+    let mut seen = 0;
+    let mut count = 0;
+    let node = rewrite_node(
+        goal,
+        from,
+        to,
+        options.occurrence,
+        &mut seen,
+        &mut count,
+    );
+    Ok(RewriteResult {
+        node,
+        changed: count > 0,
+        count,
+    })
+}
+
+/// Rewrite `goal` once using equality `eq` from left to right.
+pub fn rewrite(goal: &Node, eq: &Node) -> Result<Node, Diagnostic> {
+    rewrite_with_options(goal, eq, RewriteOptions::default()).map(|result| result.node)
+}
+
+/// Repeatedly apply `rules` until no rule changes the term or the guard fires.
+pub fn simplify_with_options(
+    goal: &Node,
+    rules: &[Node],
+    options: SimplifyOptions,
+) -> Result<SimplifyResult, Diagnostic> {
+    let mut node = goal.clone();
+    let mut changed = false;
+    let mut steps = 0;
+    loop {
+        let mut applied = false;
+        for rule in rules {
+            let rewritten = rewrite_with_options(&node, rule, RewriteOptions::default())?;
+            if !rewritten.changed {
+                continue;
+            }
+            if steps >= options.max_steps {
+                return Err(rewrite_diagnostic(format!(
+                    "simplify termination guard reached after {} rewrite steps",
+                    options.max_steps
+                )));
+            }
+            node = rewritten.node;
+            steps += 1;
+            changed = true;
+            applied = true;
+            break;
+        }
+        if !applied {
+            return Ok(SimplifyResult {
+                node,
+                changed,
+                steps,
+            });
+        }
+    }
+}
+
+/// Repeatedly apply `rules` until no rule changes the term.
+pub fn simplify(goal: &Node, rules: &[Node]) -> Result<Node, Diagnostic> {
+    simplify_with_options(goal, rules, SimplifyOptions::default()).map(|result| result.node)
 }
 
 fn type_ascription(node: &Node) -> Option<(&Node, &Node)> {
@@ -3708,147 +3723,155 @@ fn exact_closes_goal(arg: &Node, goal: &ProofGoal) -> bool {
     })
 }
 
-#[derive(Clone)]
-struct SearchLemma {
-    term: Node,
-    statement: Node,
+fn is_leaf(node: &Node, value: &str) -> bool {
+    matches!(node, Node::Leaf(s) if s == value)
 }
 
-fn search_lemma(lemma: &Node) -> SearchLemma {
-    if let Some((term, typ)) = type_ascription(lemma) {
-        return SearchLemma {
-            term: term.clone(),
-            statement: typ.clone(),
-        };
-    }
-    if let Node::List(children) = lemma {
-        if children.len() == 2 {
-            if let Node::Leaf(name) = &children[0] {
-                if name.ends_with(':') {
-                    return SearchLemma {
-                        term: Node::Leaf(name[..name.len() - 1].to_string()),
-                        statement: children[1].clone(),
-                    };
-                }
-            }
-        }
-    }
-    SearchLemma {
-        term: lemma.clone(),
-        statement: lemma.clone(),
+fn parse_rewrite_direction(node: &Node) -> Option<RewriteDirection> {
+    match node {
+        Node::Leaf(s) if s == "->" => Some(RewriteDirection::Forward),
+        Node::Leaf(s) if s == "<-" => Some(RewriteDirection::Backward),
+        _ => None,
     }
 }
 
-fn pi_premises_and_conclusion(statement: &Node) -> Option<(Vec<Node>, Node)> {
-    let mut premises = Vec::new();
-    let mut current = statement.clone();
-    loop {
-        let Node::List(children) = &current else {
-            return Some((premises, current));
-        };
-        if children.len() != 3 || !matches!(&children[0], Node::Leaf(head) if head == "Pi") {
-            return Some((premises, current));
-        }
-        let (_, param_type_key) = parse_binding(&children[1])?;
-        premises.push(type_key_to_node(&param_type_key));
-        current = children[2].clone();
-    }
-}
-
-fn reflexivity_proof(goal: &Node) -> Option<Node> {
-    let (left, right) = as_equality(goal)?;
-    if is_structurally_same(left, right) {
-        return Some(wrap_proof("reflexivity", Vec::new()));
-    }
-    None
-}
-
-fn search_with_lemmas(goal: &Node, depth: usize, lemmas: &[SearchLemma]) -> Option<Node> {
-    if let Some(proof) = reflexivity_proof(goal) {
-        return Some(proof);
-    }
-
-    for lemma in lemmas {
-        if is_structurally_same(&lemma.statement, goal) {
-            return Some(wrap_proof("exact", vec![lemma.term.clone()]));
-        }
-    }
-
-    if depth == 0 {
-        return None;
-    }
-
-    for lemma in lemmas {
-        let Some((premises, conclusion)) = pi_premises_and_conclusion(&lemma.statement) else {
-            continue;
-        };
-        if premises.is_empty() || !is_structurally_same(&conclusion, goal) {
-            continue;
-        }
-        let mut subproofs = Vec::new();
-        let mut solved = true;
-        for premise in premises {
-            if let Some(subproof) = search_with_lemmas(&premise, depth - 1, lemmas) {
-                subproofs.push(subproof);
-            } else {
-                solved = false;
-                break;
-            }
-        }
-        if solved {
-            let mut subs = vec![lemma.term.clone()];
-            subs.extend(subproofs);
-            return Some(wrap_proof("apply", subs));
-        }
-    }
-
-    None
-}
-
-/// Depth-bounded backwards search over a goal and the available lemma links.
-///
-/// Direct lemmas and reflexive equality close at depth 0. Applying a `Pi`
-/// lemma consumes one unit of depth and recursively solves its premises.
-pub fn search(goal: &Node, depth: usize, lemmas: &[Node]) -> Option<Node> {
-    let search_lemmas: Vec<SearchLemma> = lemmas.iter().map(search_lemma).collect();
-    search_with_lemmas(goal, depth, &search_lemmas)
-}
-
-fn parse_search_depth(args: &[Node]) -> Option<usize> {
-    if args.len() != 2 || !matches!(&args[0], Node::Leaf(s) if s == "depth") {
-        return None;
-    }
-    let Node::Leaf(depth) = &args[1] else {
-        return None;
+fn parse_rewrite_occurrence(node: &Node) -> Result<RewriteOccurrence, String> {
+    let Node::Leaf(raw) = node else {
+        return Err(format!(
+            "rewrite occurrence must be \"all\", \"first\", or a positive integer (got {})",
+            key_of(node)
+        ));
     };
-    depth.parse::<usize>().ok()
+    if raw == "all" {
+        return Ok(RewriteOccurrence::All);
+    }
+    if raw == "first" {
+        return Ok(RewriteOccurrence::Index(1));
+    }
+    let Ok(index) = raw.parse::<usize>() else {
+        return Err(format!(
+            "rewrite occurrence must be \"all\", \"first\", or a positive integer (got {})",
+            key_of(node)
+        ));
+    };
+    if index == 0 {
+        return Err(format!(
+            "rewrite occurrence must be \"all\", \"first\", or a positive integer (got {})",
+            key_of(node)
+        ));
+    }
+    Ok(RewriteOccurrence::Index(index))
 }
 
-fn record_search_proof(record_tactic: &Node, proof: &Node) -> Node {
-    match record_tactic {
-        Node::List(children) => {
-            let mut recorded = children.clone();
-            recorded.push(proof.clone());
-            Node::List(recorded)
-        }
-        _ => Node::List(vec![record_tactic.clone(), proof.clone()]),
+struct ParsedRewriteTactic<'a> {
+    eq: &'a Node,
+    direction: RewriteDirection,
+    occurrence: RewriteOccurrence,
+}
+
+fn parse_rewrite_tactic(args: &[Node]) -> Result<ParsedRewriteTactic<'_>, String> {
+    let mut index = 0;
+    let mut direction = RewriteDirection::Forward;
+    if let Some(next_direction) = args.first().and_then(parse_rewrite_direction) {
+        direction = next_direction;
+        index += 1;
     }
+    if args.len() < index + 3
+        || !is_leaf(&args[index + 1], "in")
+        || !is_leaf(&args[index + 2], "goal")
+    {
+        return Err("rewrite expects `(rewrite [->|<-] (L = R) in goal [at N])`".to_string());
+    }
+    let eq = &args[index];
+    index += 3;
+    let mut occurrence = RewriteOccurrence::All;
+    if index < args.len() {
+        if !is_leaf(&args[index], "at") || index + 2 != args.len() {
+            return Err("rewrite expects optional occurrence selector `at N`".to_string());
+        }
+        occurrence = parse_rewrite_occurrence(&args[index + 1])?;
+    }
+    Ok(ParsedRewriteTactic {
+        eq,
+        direction,
+        occurrence,
+    })
+}
+
+fn rewrite_rules_from_node(node: &Node) -> Result<Vec<Node>, String> {
+    if as_equality(node).is_some() {
+        return Ok(vec![node.clone()]);
+    }
+    let Node::List(children) = node else {
+        return Err(format!(
+            "simplify expects equality rewrite rules (got {})",
+            key_of(node)
+        ));
+    };
+    let mut rules = Vec::with_capacity(children.len());
+    for child in children {
+        if as_equality(child).is_none() {
+            return Err(format!(
+                "simplify expects equality rewrite rules (got {})",
+                key_of(child)
+            ));
+        }
+        rules.push(child.clone());
+    }
+    Ok(rules)
+}
+
+struct ParsedSimplifyTactic {
+    rules: Option<Vec<Node>>,
+    max_steps: Option<usize>,
+}
+
+fn parse_simplify_tactic(args: &[Node]) -> Result<ParsedSimplifyTactic, String> {
+    if args.len() < 2 || !is_leaf(&args[0], "in") || !is_leaf(&args[1], "goal") {
+        return Err("simplify expects `(simplify in goal)`".to_string());
+    }
+    let mut index = 2;
+    let mut rules = None;
+    let mut max_steps = None;
+    while index < args.len() {
+        if is_leaf(&args[index], "using") && index + 1 < args.len() {
+            rules = Some(rewrite_rules_from_node(&args[index + 1])?);
+            index += 2;
+            continue;
+        }
+        if (is_leaf(&args[index], "max") || is_leaf(&args[index], "limit"))
+            && index + 1 < args.len()
+        {
+            let Node::Leaf(raw) = &args[index + 1] else {
+                return Err("simplify max step count must be a non-negative integer".to_string());
+            };
+            let Ok(parsed) = raw.parse::<usize>() else {
+                return Err("simplify max step count must be a non-negative integer".to_string());
+            };
+            max_steps = Some(parsed);
+            index += 2;
+            continue;
+        }
+        return Err("simplify expects optional `using <rules>` and `max <steps>` clauses".to_string());
+    }
+    Ok(ParsedSimplifyTactic { rules, max_steps })
 }
 
 fn apply_tactic(
     state: &ProofState,
     tactic: &Node,
     record_tactic: &Node,
+    tactic_options: &TacticOptions,
 ) -> Result<ProofState, Diagnostic> {
     let name = tactic_name(tactic);
     let args = tactic_args(tactic);
 
     if name == Some("by") {
         if args.len() == 1 {
-            return apply_tactic(state, &args[0], record_tactic);
+            return apply_tactic(state, &args[0], record_tactic, tactic_options);
         }
         if args.len() > 1 {
-            return apply_tactic(state, &Node::List(args.to_vec()), record_tactic);
+            return apply_tactic(state, &Node::List(args.to_vec()), record_tactic, tactic_options);
         }
         return Err(tactic_diagnostic(
             record_tactic,
@@ -3862,27 +3885,6 @@ fn apply_tactic(
     };
 
     match name {
-        Some("search") => {
-            let Some(depth) = parse_search_depth(args) else {
-                return Err(tactic_diagnostic(
-                    record_tactic,
-                    Some(current),
-                    "search expects `(search depth N)`",
-                ));
-            };
-            let Some(proof) = search(&current.goal, depth, &current.context) else {
-                return Err(tactic_diagnostic(
-                    record_tactic,
-                    Some(current),
-                    format!("search found no derivation within depth {}", depth),
-                ));
-            };
-            Ok(replace_current_goal(
-                state,
-                Vec::new(),
-                &record_search_proof(record_tactic, &proof),
-            ))
-        }
         Some("reflexivity") => {
             let Some((left, right)) = as_equality(&current.goal) else {
                 return Err(tactic_diagnostic(
@@ -4011,34 +4013,58 @@ fn apply_tactic(
             ))
         }
         Some("rewrite") => {
-            if args.len() != 3
-                || !matches!(&args[1], Node::Leaf(s) if s == "in")
-                || !matches!(&args[2], Node::Leaf(s) if s == "goal")
-            {
+            let parsed = parse_rewrite_tactic(args)
+                .map_err(|reason| tactic_diagnostic(record_tactic, Some(current), reason))?;
+            let rewritten = rewrite_with_options(
+                &current.goal,
+                parsed.eq,
+                RewriteOptions {
+                    direction: parsed.direction,
+                    occurrence: parsed.occurrence,
+                },
+            )
+            .map_err(|diag| tactic_diagnostic(record_tactic, Some(current), diag.message))?;
+            if !rewritten.changed {
+                let (from, _) = rewrite_sides(parsed.eq, parsed.direction)
+                    .map_err(|diag| tactic_diagnostic(record_tactic, Some(current), diag.message))?;
                 return Err(tactic_diagnostic(
                     record_tactic,
                     Some(current),
-                    "rewrite expects `(rewrite (L = R) in goal)`",
-                ));
-            }
-            let Some((left, right)) = as_equality(&args[0]) else {
-                return Err(tactic_diagnostic(
-                    record_tactic,
-                    Some(current),
-                    "rewrite expects an equality link",
-                ));
-            };
-            let (rewritten, changed) = rewrite_all(&current.goal, left, right);
-            if !changed {
-                return Err(tactic_diagnostic(
-                    record_tactic,
-                    Some(current),
-                    format!("rewrite did not find {} in the current goal", key_of(left)),
+                    format!("rewrite did not find {} in the current goal", key_of(from)),
                 ));
             }
             Ok(replace_current_goal(
                 state,
-                vec![goal_with_context(current, rewritten)],
+                vec![goal_with_context(current, rewritten.node)],
+                record_tactic,
+            ))
+        }
+        Some("simplify") => {
+            let parsed = parse_simplify_tactic(args)
+                .map_err(|reason| tactic_diagnostic(record_tactic, Some(current), reason))?;
+            let rules = parsed
+                .rules
+                .as_deref()
+                .unwrap_or_else(|| tactic_options.rewrite_rules.as_slice());
+            if rules.is_empty() {
+                return Err(tactic_diagnostic(
+                    record_tactic,
+                    Some(current),
+                    "simplify expects at least one configured rewrite rule",
+                ));
+            }
+            let max_steps = parsed
+                .max_steps
+                .unwrap_or(tactic_options.simplify_max_steps);
+            let simplified = simplify_with_options(
+                &current.goal,
+                rules,
+                SimplifyOptions { max_steps },
+            )
+            .map_err(|diag| tactic_diagnostic(record_tactic, Some(current), diag.message))?;
+            Ok(replace_current_goal(
+                state,
+                vec![goal_with_context(current, simplified.node)],
                 record_tactic,
             ))
         }
@@ -4101,12 +4127,13 @@ fn apply_tactic(
                     open_goals.push(case_goal);
                     continue;
                 }
-                let nested = run_tactics(
+                let nested = run_tactics_with_options(
                     ProofState {
                         goals: vec![case_goal],
                         proof: Vec::new(),
                     },
                     case_tactics,
+                    tactic_options.clone(),
                 );
                 if let Some(diag) = nested.diagnostics.first() {
                     return Err(diag.clone());
@@ -4154,12 +4181,16 @@ pub fn parse_tactic_links(text: &str) -> Vec<Node> {
         .collect()
 }
 
-/// Apply link tactics to a proof state, stopping at the first failing tactic.
-pub fn run_tactics(state: ProofState, tactics: &[Node]) -> TacticRunResult {
+/// Apply link tactics with configured rewrite rules, stopping at the first failing tactic.
+pub fn run_tactics_with_options(
+    state: ProofState,
+    tactics: &[Node],
+    options: TacticOptions,
+) -> TacticRunResult {
     let mut next = state;
     let mut diagnostics = Vec::new();
     for tactic in tactics {
-        match apply_tactic(&next, tactic, tactic) {
+        match apply_tactic(&next, tactic, tactic, &options) {
             Ok(applied) => next = applied,
             Err(diag) => {
                 diagnostics.push(diag);
@@ -4171,6 +4202,11 @@ pub fn run_tactics(state: ProofState, tactics: &[Node]) -> TacticRunResult {
         state: next,
         diagnostics,
     }
+}
+
+/// Apply link tactics to a proof state, stopping at the first failing tactic.
+pub fn run_tactics(state: ProofState, tactics: &[Node]) -> TacticRunResult {
+    run_tactics_with_options(state, tactics, TacticOptions::default())
 }
 
 // ---------- Mode declarations (issue #43, D15) ----------
@@ -5914,29 +5950,6 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 }
             }
 
-            // Counter-model search: (counter-model formula)
-            // Uses the current finite valence and returns a printable witness
-            // link when a valuation makes the formula evaluate below top.
-            if let Node::Leaf(ref first) = children[0] {
-                if first == "counter-model" {
-                    if children.len() != 2 {
-                        panic!(
-                            "Counter-model error: Counter-model form must be `(counter-model <formula>)`"
-                        );
-                    }
-                    if env.valence < 2 {
-                        panic!(
-                            "Counter-model error: Counter-model search requires finite valence >= 2"
-                        );
-                    }
-                    let value = match counter_model_in_env(&children[1], env.valence, env) {
-                        Some(witness) => format_counter_model(&witness),
-                        None => format_no_counter_model(&children[1], env.valence),
-                    };
-                    return EvalResult::TypeQuery(value);
-                }
-            }
-
             // Query: (? expr) or (? expr with proof)
             // The trailing `with proof` keyword pair is consumed here so it
             // does not interfere with evaluation; `evaluate_inner` looks at
@@ -7579,11 +7592,6 @@ fn decode_panic_payload(payload: &Box<dyn std::any::Any + Send>) -> (String, Str
         (
             "E040".to_string(),
             raw_msg.replacen("Template expansion error: ", "", 1),
-        )
-    } else if raw_msg.starts_with("Counter-model error:") {
-        (
-            "E041".to_string(),
-            raw_msg.replacen("Counter-model error: ", "", 1),
         )
     } else {
         ("E000".to_string(), raw_msg)
