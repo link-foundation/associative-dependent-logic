@@ -413,6 +413,21 @@ Both systems can coexist — use `(Type: Type Type)` for the self-referential ap
 (? (identity 0.7))               # -> 0.7
 ```
 
+#### Program Extraction
+
+Typed lambda programs that do not use probabilistic operators can be extracted
+to JavaScript or Rust:
+
+```bash
+rml extract js program.lino > program.mjs
+rml extract rust program.lino > program.rs
+```
+
+Extraction erases LiNo type annotations, turns named lambda definitions into
+plain functions, and converts equality queries into generated tests. Programs
+that contain probability assignments or logical/probabilistic operators are
+rejected instead of being silently compiled.
+
 #### Normalization
 
 Two surface-form drivers expose the typed-fragment normalizer. `whnf`

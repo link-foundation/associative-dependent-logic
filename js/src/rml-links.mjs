@@ -5340,6 +5340,304 @@ function evaluateFormalization(formalization, options = {}) {
   };
 }
 
+// ---------- Program extraction (issue #66) ----------
+const EXTRACT_JS_RESERVED = new Set([
+  'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+  'default', 'delete', 'do', 'else', 'export', 'extends', 'finally', 'for',
+  'function', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'return',
+  'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void', 'while',
+  'with', 'yield',
+]);
+
+const EXTRACT_RUST_RESERVED = new Set([
+  'as', 'break', 'const', 'continue', 'crate', 'else', 'enum', 'extern',
+  'false', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod',
+  'move', 'mut', 'pub', 'ref', 'return', 'self', 'Self', 'static', 'struct',
+  'super', 'trait', 'true', 'type', 'unsafe', 'use', 'where', 'while', 'async',
+  'await', 'dyn',
+]);
+
+const EXTRACT_LOGIC_TOKENS = new Set(['and', 'or', 'not', 'both', 'neither', 'has', 'probability']);
+const EXTRACT_SPECIAL_FORMS = new Set([
+  'range', 'valence', 'mode', 'relation', 'world', 'total', 'coverage',
+  'terminating', 'coinductive', 'template', 'import', 'namespace',
+]);
+
+function normalizeExtractTarget(target) {
+  if (target === 'js' || target === 'javascript') return 'js';
+  if (target === 'rust' || target === 'rs') return 'rust';
+  throw new RmlError('E041', `Unknown extraction target "${target}"`);
+}
+
+function extractIdentifier(name, target, used) {
+  const reserved = target === 'rust' ? EXTRACT_RUST_RESERVED : EXTRACT_JS_RESERVED;
+  let out = String(name).replace(/[^A-Za-z0-9_]/g, '_');
+  if (!out || /^[0-9]/.test(out)) out = '_' + out;
+  if (reserved.has(out)) out = out + '_';
+  const base = out;
+  let i = 2;
+  while (used.has(out)) {
+    out = `${base}_${i}`;
+    i++;
+  }
+  used.add(out);
+  return out;
+}
+
+function extractNumberLiteral(token, target) {
+  const raw = String(token);
+  if (target === 'rust' && /^-?\d+$/.test(raw)) return `${raw}.0`;
+  return raw;
+}
+
+function extractCompileError(message) {
+  return new RmlError('E041', message);
+}
+
+function isProbabilityAssignment(node) {
+  return Array.isArray(node) &&
+    node.length === 4 &&
+    node[1] === 'has' &&
+    node[2] === 'probability';
+}
+
+function isQueryForm(node) {
+  return Array.isArray(node) && node[0] === '?';
+}
+
+function isLambdaDefinition(node) {
+  return Array.isArray(node) &&
+    node.length >= 3 &&
+    typeof node[0] === 'string' &&
+    node[0].endsWith(':') &&
+    node[1] === 'lambda' &&
+    Array.isArray(node[2]);
+}
+
+function isTypeOnlyForm(node) {
+  if (!Array.isArray(node) || node.length === 0) return true;
+  if (node[0] === 'Type' || node[0] === 'Prop' || node[0] === 'Pi') return true;
+  if (typeof node[0] !== 'string' || !node[0].endsWith(':')) return false;
+  const head = node[0].slice(0, -1);
+  const rhs = node.slice(1);
+  if (rhs.length === 2 && rhs[1] === head) return true;
+  if (rhs.length === 3 && rhs[0] === head && rhs[1] === 'is' && rhs[2] === head) return true;
+  if (rhs.length === 1 && Array.isArray(rhs[0])) return true;
+  return false;
+}
+
+function containsExtractLogic(node) {
+  if (typeof node === 'string') return EXTRACT_LOGIC_TOKENS.has(node);
+  if (!Array.isArray(node)) return false;
+  if (isProbabilityAssignment(node)) return true;
+  return node.some(containsExtractLogic);
+}
+
+function extractLambdaDeclaration(form) {
+  const name = form[0].slice(0, -1);
+  const bindings = parseBindings(form[2]);
+  if (!bindings || bindings.length === 0) {
+    throw extractCompileError(`Cannot extract "${name}": malformed lambda binding`);
+  }
+  if (form.length !== 4) {
+    throw extractCompileError(`Cannot extract "${name}": lambda definitions must have one body`);
+  }
+  return {
+    name,
+    params: bindings.map(b => b.paramName),
+    body: form[3],
+  };
+}
+
+function collectApplySpine(node) {
+  const args = [];
+  let head = node;
+  while (Array.isArray(head) && head.length === 3 && head[0] === 'apply') {
+    args.unshift(head[2]);
+    head = head[1];
+  }
+  return { head, args };
+}
+
+function makeExtractNameMap(names, target) {
+  const used = new Set();
+  const map = new Map();
+  for (const name of names) {
+    map.set(name, extractIdentifier(name, target, used));
+  }
+  return map;
+}
+
+function compileExtractExpr(node, ctx) {
+  if (typeof node === 'string') {
+    if (isNum(node)) return extractNumberLiteral(node, ctx.target);
+    if (ctx.locals.has(node)) return ctx.locals.get(node);
+    if (ctx.nameMap.has(node)) return ctx.nameMap.get(node);
+    throw extractCompileError(`Cannot extract unresolved symbol "${node}"`);
+  }
+  if (!Array.isArray(node) || node.length === 0) {
+    throw extractCompileError(`Cannot extract malformed expression "${keyOf(node)}"`);
+  }
+  if (containsExtractLogic(node)) {
+    throw extractCompileError(`Cannot extract probabilistic or logical expression "${keyOf(node)}"`);
+  }
+  if (node.length === 3 && typeof node[1] === 'string' && ['+', '-', '*', '/'].includes(node[1])) {
+    return `(${compileExtractExpr(node[0], ctx)} ${node[1]} ${compileExtractExpr(node[2], ctx)})`;
+  }
+  if (node.length === 3 && node[0] === 'apply') {
+    const { head, args } = collectApplySpine(node);
+    if (typeof head !== 'string') {
+      throw extractCompileError(`Cannot extract higher-order application "${keyOf(node)}"`);
+    }
+    const fn = compileExtractExpr(head, ctx);
+    return `${fn}(${args.map(arg => compileExtractExpr(arg, ctx)).join(', ')})`;
+  }
+  if (typeof node[0] === 'string' && ctx.nameMap.has(node[0])) {
+    const fn = ctx.nameMap.get(node[0]);
+    return `${fn}(${node.slice(1).map(arg => compileExtractExpr(arg, ctx)).join(', ')})`;
+  }
+  throw extractCompileError(`Cannot extract expression "${keyOf(node)}"`);
+}
+
+function parseExtractQuery(form) {
+  const parts = _stripWithProof(form.slice(1));
+  const target = parts.length === 1 ? parts[0] : parts;
+  if (Array.isArray(target) && target.length === 3 && target[1] === '=') {
+    return { left: target[0], right: target[2] };
+  }
+  throw extractCompileError(`Cannot extract query "${keyOf(form)}"; expected (? (<left> = <right>))`);
+}
+
+function parseExtractProgram(code) {
+  const forms = parseLinoForms(String(code));
+  const lambdas = [];
+  const tests = [];
+  for (const form of forms) {
+    if (isProbabilityAssignment(form)) {
+      throw extractCompileError('Cannot extract probability assignments');
+    }
+    if (isLambdaDefinition(form)) {
+      if (containsExtractLogic(form[3])) {
+        throw extractCompileError(`Cannot extract probabilistic or logical lambda "${form[0].slice(0, -1)}"`);
+      }
+      lambdas.push(extractLambdaDeclaration(form));
+      continue;
+    }
+    if (isQueryForm(form)) {
+      tests.push(parseExtractQuery(form));
+      continue;
+    }
+    if (Array.isArray(form) && typeof form[0] === 'string') {
+      const head = form[0].endsWith(':') ? form[0].slice(0, -1) : form[0];
+      if (EXTRACT_SPECIAL_FORMS.has(head) || ['and', 'or', 'not', 'both', 'neither', '=', '!='].includes(head)) {
+        throw extractCompileError(`Cannot extract unsupported form "${keyOf(form)}"`);
+      }
+    }
+    if (!isTypeOnlyForm(form)) {
+      throw extractCompileError(`Cannot extract unsupported form "${keyOf(form)}"`);
+    }
+  }
+  if (lambdas.length === 0) {
+    throw extractCompileError('Cannot extract program: no lambda definitions found');
+  }
+  return { lambdas, tests };
+}
+
+function compileJavaScriptProgram(parsed) {
+  const nameMap = makeExtractNameMap(parsed.lambdas.map(l => l.name), 'js');
+  const lines = [
+    '// Generated by rml extract js. Do not edit by hand.',
+    "import { pathToFileURL } from 'node:url';",
+    '',
+  ];
+  for (const lambda of parsed.lambdas) {
+    const used = new Set(nameMap.values());
+    const locals = new Map();
+    for (const param of lambda.params) {
+      locals.set(param, extractIdentifier(param, 'js', used));
+    }
+    const ctx = { target: 'js', nameMap, locals };
+    const params = lambda.params.map(param => locals.get(param)).join(', ');
+    lines.push(`export function ${nameMap.get(lambda.name)}(${params}) {`);
+    lines.push(`  return ${compileExtractExpr(lambda.body, ctx)};`);
+    lines.push('}');
+    lines.push('');
+  }
+  lines.push('function __rmlApproxEq(left, right) {');
+  lines.push('  return Object.is(left, right) || Math.abs(left - right) <= 1e-9;');
+  lines.push('}');
+  lines.push('');
+  lines.push('export function __runRmlExtractedTests() {');
+  if (parsed.tests.length === 0) {
+    lines.push('  return true;');
+  } else {
+    parsed.tests.forEach((test, idx) => {
+      const ctx = { target: 'js', nameMap, locals: new Map() };
+      const left = compileExtractExpr(test.left, ctx);
+      const right = compileExtractExpr(test.right, ctx);
+      lines.push(`  if (!__rmlApproxEq(${left}, ${right})) {`);
+      lines.push(`    throw new Error('RML extracted test ${idx + 1} failed');`);
+      lines.push('  }');
+    });
+    lines.push('  return true;');
+  }
+  lines.push('}');
+  lines.push('');
+  lines.push("if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {");
+  lines.push('  __runRmlExtractedTests();');
+  lines.push('}');
+  lines.push('');
+  return lines.join('\n');
+}
+
+function compileRustProgram(parsed) {
+  const nameMap = makeExtractNameMap(parsed.lambdas.map(l => l.name), 'rust');
+  const lines = ['// Generated by rml extract rust. Do not edit by hand.', ''];
+  for (const lambda of parsed.lambdas) {
+    const used = new Set(nameMap.values());
+    const locals = new Map();
+    for (const param of lambda.params) {
+      locals.set(param, extractIdentifier(param, 'rust', used));
+    }
+    const ctx = { target: 'rust', nameMap, locals };
+    const params = lambda.params.map(param => `${locals.get(param)}: f64`).join(', ');
+    lines.push(`pub fn ${nameMap.get(lambda.name)}(${params}) -> f64 {`);
+    lines.push(`    ${compileExtractExpr(lambda.body, ctx)}`);
+    lines.push('}');
+    lines.push('');
+  }
+  if (parsed.tests.length > 0) {
+    lines.push('#[cfg(test)]');
+    lines.push('mod tests {');
+    lines.push('    use super::*;');
+    lines.push('');
+    lines.push('    fn rml_approx_eq(left: f64, right: f64) -> bool {');
+    lines.push('        (left - right).abs() <= 1e-9');
+    lines.push('    }');
+    lines.push('');
+    parsed.tests.forEach((test, idx) => {
+      const ctx = { target: 'rust', nameMap, locals: new Map() };
+      const left = compileExtractExpr(test.left, ctx);
+      const right = compileExtractExpr(test.right, ctx);
+      lines.push('    #[test]');
+      lines.push(`    fn rml_query_${idx + 1}() {`);
+      lines.push(`        assert!(rml_approx_eq(${left}, ${right}), "RML query ${idx + 1} failed");`);
+      lines.push('    }');
+      lines.push('');
+    });
+    lines.push('}');
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function extractProgram(code, target = 'js') {
+  const normalized = normalizeExtractTarget(target);
+  const parsed = parseExtractProgram(code);
+  return normalized === 'js' ? compileJavaScriptProgram(parsed) : compileRustProgram(parsed);
+}
+
+
 // ---------- Isabelle/HOL exporter ----------
 // The exporter targets the simply typed fragment shared by RML's prototype
 // type layer and Isabelle/HOL: type declarations, constants, simple Pi-types,
@@ -5763,7 +6061,7 @@ function run(text, options){
 // The REPL subcommand lives in `./rml-repl.mjs` so we can `await import` it
 // without triggering an ESM circular-dependency deadlock.
 function _printMainUsage() {
-  console.error('Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export <lean|rocq|isabelle> <file.lino> [-o <file>] [--theory <Name>]');
+  console.error('Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml extract <js|rust> <kb.lino>   |   rml export <lean|rocq|isabelle> <file.lino> [-o <file>] [--theory <Name>]');
 }
 
 async function runCli() {
@@ -5778,6 +6076,23 @@ async function runCli() {
   if (!arg) {
     _printMainUsage();
     process.exit(1);
+  }
+  if (arg === 'extract') {
+    const target = positionals[1];
+    const file = positionals[2];
+    if (!target || !file) {
+      console.error('Usage: rml extract <js|rust> <kb.lino>');
+      process.exit(1);
+    }
+    const text = fs.readFileSync(file, 'utf8');
+    try {
+      process.stdout.write(extractProgram(text, target));
+      process.stdout.write('\n');
+    } catch (err) {
+      console.error(err && err.message ? err.message : String(err));
+      process.exit(1);
+    }
+    return;
   }
   if (arg === 'export') {
     const status = await runExportCli(positionals.slice(1));
@@ -5928,5 +6243,6 @@ export {
   decideAutomaticSequenceTheorem,
   formalizeSelectedInterpretation,
   evaluateFormalization,
+  extractProgram,
   exportIsabelle,
 };

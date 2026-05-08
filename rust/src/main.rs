@@ -1,8 +1,8 @@
 // RML CLI — run a LiNo knowledge base or launch the interactive REPL
 use rml::repl::run_repl;
 use rml::{
-    evaluate_with_options, export_lean, format_diagnostic, format_trace_event, rocq::export_rocq,
-    EnvOptions, EvaluateOptions, RunResult,
+    evaluate_with_options, export_lean, extract_program, format_diagnostic, format_trace_event,
+    rocq::export_rocq, EnvOptions, EvaluateOptions, ExtractTarget, RunResult,
 };
 use std::env;
 use std::fs;
@@ -22,11 +22,14 @@ fn main() -> ExitCode {
     }
     if positionals.is_empty() {
         eprintln!(
-            "Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export <lean|rocq> <file.lino> [-o <file>]"
+            "Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml extract <js|rust> <kb.lino>   |   rml export <lean|rocq> <file.lino> [-o <file>]"
         );
         return ExitCode::from(1);
     }
     let arg = &positionals[0];
+    if arg == "extract" {
+        return run_extract(&positionals);
+    }
     if arg == "export" {
         return run_export_cli(&positionals[1..]);
     }
@@ -90,6 +93,38 @@ fn main() -> ExitCode {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+fn run_extract(positionals: &[String]) -> ExitCode {
+    if positionals.len() != 3 {
+        eprintln!("Usage: rml extract <js|rust> <kb.lino>");
+        return ExitCode::from(1);
+    }
+    let target = match ExtractTarget::from_name(&positionals[1]) {
+        Some(target) => target,
+        None => {
+            eprintln!("Unknown extraction target: {}", positionals[1]);
+            return ExitCode::from(1);
+        }
+    };
+    let file = &positionals[2];
+    let text = match fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error reading {}: {}", file, e);
+            return ExitCode::from(1);
+        }
+    };
+    match extract_program(&text, target) {
+        Ok(source) => {
+            println!("{}", source);
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("{}", message);
+            ExitCode::from(1)
+        }
     }
 }
 

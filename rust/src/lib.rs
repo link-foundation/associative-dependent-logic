@@ -7998,6 +7998,658 @@ pub fn evaluate_formalization(formalization: &Formalization) -> FormalizationEva
     }
 }
 
+// ========== Program extraction (issue #66) ==========
+
+/// Supported source-code generation targets for `extract_program`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractTarget {
+    JavaScript,
+    Rust,
+}
+
+impl ExtractTarget {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "js" | "javascript" => Some(Self::JavaScript),
+            "rust" | "rs" => Some(Self::Rust),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ExtractLambda {
+    name: String,
+    params: Vec<String>,
+    body: Node,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractTest {
+    left: Node,
+    right: Node,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractProgram {
+    lambdas: Vec<ExtractLambda>,
+    tests: Vec<ExtractTest>,
+}
+
+struct ExtractContext<'a> {
+    target: ExtractTarget,
+    name_map: &'a HashMap<String, String>,
+    locals: &'a HashMap<String, String>,
+}
+
+fn extract_compile_error(message: impl Into<String>) -> String {
+    message.into()
+}
+
+fn extract_is_probability_assignment(node: &Node) -> bool {
+    if let Node::List(children) = node {
+        if children.len() == 4 {
+            if let (Node::Leaf(w1), Node::Leaf(w2)) = (&children[1], &children[2]) {
+                return w1 == "has" && w2 == "probability";
+            }
+        }
+    }
+    false
+}
+
+fn extract_is_query_form(node: &Node) -> bool {
+    matches!(node, Node::List(children) if matches!(children.first(), Some(Node::Leaf(head)) if head == "?"))
+}
+
+fn extract_is_lambda_definition(node: &Node) -> bool {
+    if let Node::List(children) = node {
+        if children.len() >= 3 {
+            return matches!(&children[0], Node::Leaf(head) if head.ends_with(':'))
+                && matches!(&children[1], Node::Leaf(head) if head == "lambda")
+                && matches!(&children[2], Node::List(_));
+        }
+    }
+    false
+}
+
+fn extract_is_type_only_form(node: &Node) -> bool {
+    let children = match node {
+        Node::List(children) => children,
+        Node::Leaf(_) => return true,
+    };
+    if children.is_empty() {
+        return true;
+    }
+    if matches!(&children[0], Node::Leaf(head) if head == "Type" || head == "Prop" || head == "Pi")
+    {
+        return true;
+    }
+    let head = match &children[0] {
+        Node::Leaf(head) if head.ends_with(':') => &head[..head.len() - 1],
+        _ => return false,
+    };
+    let rhs = &children[1..];
+    if rhs.len() == 2 {
+        if let Node::Leaf(last) = &rhs[1] {
+            if last == head {
+                return true;
+            }
+        }
+    }
+    if rhs.len() == 3 {
+        if let (Node::Leaf(r0), Node::Leaf(r1), Node::Leaf(r2)) = (&rhs[0], &rhs[1], &rhs[2]) {
+            if r0 == head && r1 == "is" && r2 == head {
+                return true;
+            }
+        }
+    }
+    rhs.len() == 1 && matches!(&rhs[0], Node::List(_))
+}
+
+fn extract_logic_token(token: &str) -> bool {
+    matches!(
+        token,
+        "and" | "or" | "not" | "both" | "neither" | "has" | "probability"
+    )
+}
+
+fn extract_contains_logic(node: &Node) -> bool {
+    match node {
+        Node::Leaf(s) => extract_logic_token(s),
+        Node::List(children) => {
+            extract_is_probability_assignment(node) || children.iter().any(extract_contains_logic)
+        }
+    }
+}
+
+fn extract_special_form(head: &str) -> bool {
+    matches!(
+        head,
+        "range"
+            | "valence"
+            | "mode"
+            | "relation"
+            | "world"
+            | "total"
+            | "coverage"
+            | "terminating"
+            | "coinductive"
+            | "template"
+            | "import"
+            | "namespace"
+    )
+}
+
+fn extract_parse_forms(text: &str) -> Result<Vec<Node>, String> {
+    let mut forms = Vec::new();
+    for link in parse_lino(text) {
+        let trimmed = link.trim();
+        if trimmed.starts_with("(#") && trimmed.chars().nth(2).map_or(false, |c| c.is_whitespace())
+        {
+            continue;
+        }
+        let toks = tokenize_one(&link);
+        let node = parse_one(&toks).map_err(extract_compile_error)?;
+        forms.push(desugar_hoas(node));
+    }
+    Ok(forms)
+}
+
+fn extract_lambda_declaration(form: &Node) -> Result<ExtractLambda, String> {
+    let children = match form {
+        Node::List(children) => children,
+        _ => return Err(extract_compile_error("Malformed lambda definition")),
+    };
+    let name = match &children[0] {
+        Node::Leaf(head) if head.ends_with(':') => head[..head.len() - 1].to_string(),
+        _ => return Err(extract_compile_error("Malformed lambda definition head")),
+    };
+    if children.len() != 4 {
+        return Err(extract_compile_error(format!(
+            "Cannot extract \"{}\": lambda definitions must have one body",
+            name
+        )));
+    }
+    let bindings = parse_bindings(&children[2]).ok_or_else(|| {
+        extract_compile_error(format!(
+            "Cannot extract \"{}\": malformed lambda binding",
+            name
+        ))
+    })?;
+    Ok(ExtractLambda {
+        name,
+        params: bindings.into_iter().map(|(param, _)| param).collect(),
+        body: children[3].clone(),
+    })
+}
+
+fn extract_parse_query(form: &Node) -> Result<ExtractTest, String> {
+    let children = match form {
+        Node::List(children) => children,
+        _ => {
+            return Err(extract_compile_error(format!(
+                "Cannot extract query \"{}\"",
+                key_of(form)
+            )))
+        }
+    };
+    let parts = strip_with_proof(&children[1..]);
+    let target = if parts.len() == 1 {
+        parts[0].clone()
+    } else {
+        Node::List(parts.to_vec())
+    };
+    if let Node::List(target_children) = target {
+        if target_children.len() == 3 {
+            if matches!(&target_children[1], Node::Leaf(op) if op == "=") {
+                return Ok(ExtractTest {
+                    left: target_children[0].clone(),
+                    right: target_children[2].clone(),
+                });
+            }
+        }
+    }
+    Err(extract_compile_error(format!(
+        "Cannot extract query \"{}\"; expected (? (<left> = <right>))",
+        key_of(form)
+    )))
+}
+
+fn extract_parse_program(text: &str) -> Result<ExtractProgram, String> {
+    let forms = extract_parse_forms(text)?;
+    let mut lambdas = Vec::new();
+    let mut tests = Vec::new();
+    for form in forms {
+        if extract_is_probability_assignment(&form) {
+            return Err(extract_compile_error(
+                "Cannot extract probability assignments",
+            ));
+        }
+        if extract_is_lambda_definition(&form) {
+            let lambda = extract_lambda_declaration(&form)?;
+            if extract_contains_logic(&lambda.body) {
+                return Err(extract_compile_error(format!(
+                    "Cannot extract probabilistic or logical lambda \"{}\"",
+                    lambda.name
+                )));
+            }
+            lambdas.push(lambda);
+            continue;
+        }
+        if extract_is_query_form(&form) {
+            tests.push(extract_parse_query(&form)?);
+            continue;
+        }
+        if let Node::List(children) = &form {
+            if let Some(Node::Leaf(raw_head)) = children.first() {
+                let head = raw_head.strip_suffix(':').unwrap_or(raw_head.as_str());
+                if extract_special_form(head)
+                    || matches!(head, "and" | "or" | "not" | "both" | "neither" | "=" | "!=")
+                {
+                    return Err(extract_compile_error(format!(
+                        "Cannot extract unsupported form \"{}\"",
+                        key_of(&form)
+                    )));
+                }
+            }
+        }
+        if !extract_is_type_only_form(&form) {
+            return Err(extract_compile_error(format!(
+                "Cannot extract unsupported form \"{}\"",
+                key_of(&form)
+            )));
+        }
+    }
+    if lambdas.is_empty() {
+        return Err(extract_compile_error(
+            "Cannot extract program: no lambda definitions found",
+        ));
+    }
+    Ok(ExtractProgram { lambdas, tests })
+}
+
+fn extract_identifier(name: &str, target: ExtractTarget, used: &mut HashSet<String>) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if out.is_empty() || out.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    let reserved = match target {
+        ExtractTarget::JavaScript => matches!(
+            out.as_str(),
+            "await"
+                | "break"
+                | "case"
+                | "catch"
+                | "class"
+                | "const"
+                | "continue"
+                | "debugger"
+                | "default"
+                | "delete"
+                | "do"
+                | "else"
+                | "export"
+                | "extends"
+                | "finally"
+                | "for"
+                | "function"
+                | "if"
+                | "import"
+                | "in"
+                | "instanceof"
+                | "let"
+                | "new"
+                | "return"
+                | "super"
+                | "switch"
+                | "this"
+                | "throw"
+                | "try"
+                | "typeof"
+                | "var"
+                | "void"
+                | "while"
+                | "with"
+                | "yield"
+        ),
+        ExtractTarget::Rust => matches!(
+            out.as_str(),
+            "as" | "break"
+                | "const"
+                | "continue"
+                | "crate"
+                | "else"
+                | "enum"
+                | "extern"
+                | "false"
+                | "fn"
+                | "for"
+                | "if"
+                | "impl"
+                | "in"
+                | "let"
+                | "loop"
+                | "match"
+                | "mod"
+                | "move"
+                | "mut"
+                | "pub"
+                | "ref"
+                | "return"
+                | "self"
+                | "Self"
+                | "static"
+                | "struct"
+                | "super"
+                | "trait"
+                | "true"
+                | "type"
+                | "unsafe"
+                | "use"
+                | "where"
+                | "while"
+                | "async"
+                | "await"
+                | "dyn"
+        ),
+    };
+    if reserved {
+        out.push('_');
+    }
+    let base = out.clone();
+    let mut i = 2usize;
+    while used.contains(&out) {
+        out = format!("{}_{}", base, i);
+        i += 1;
+    }
+    used.insert(out.clone());
+    out
+}
+
+fn extract_name_map(names: &[String], target: ExtractTarget) -> HashMap<String, String> {
+    let mut used = HashSet::new();
+    let mut out = HashMap::new();
+    for name in names {
+        out.insert(name.clone(), extract_identifier(name, target, &mut used));
+    }
+    out
+}
+
+fn extract_number_literal(token: &str, target: ExtractTarget) -> String {
+    if target == ExtractTarget::Rust && token.parse::<i64>().is_ok() {
+        format!("{}.0", token)
+    } else {
+        token.to_string()
+    }
+}
+
+fn extract_collect_apply_spine<'a>(node: &'a Node) -> (&'a Node, Vec<&'a Node>) {
+    let mut args = Vec::new();
+    let mut head = node;
+    loop {
+        match head {
+            Node::List(children)
+                if children.len() == 3
+                    && matches!(&children[0], Node::Leaf(apply) if apply == "apply") =>
+            {
+                args.push(&children[2]);
+                head = &children[1];
+            }
+            _ => break,
+        }
+    }
+    args.reverse();
+    (head, args)
+}
+
+fn extract_compile_expr(node: &Node, ctx: &ExtractContext<'_>) -> Result<String, String> {
+    match node {
+        Node::Leaf(s) => {
+            if is_num(s) {
+                return Ok(extract_number_literal(s, ctx.target));
+            }
+            if let Some(local) = ctx.locals.get(s) {
+                return Ok(local.clone());
+            }
+            if let Some(name) = ctx.name_map.get(s) {
+                return Ok(name.clone());
+            }
+            Err(extract_compile_error(format!(
+                "Cannot extract unresolved symbol \"{}\"",
+                s
+            )))
+        }
+        Node::List(children) => {
+            if children.is_empty() {
+                return Err(extract_compile_error(
+                    "Cannot extract malformed expression \"()\"",
+                ));
+            }
+            if extract_contains_logic(node) {
+                return Err(extract_compile_error(format!(
+                    "Cannot extract probabilistic or logical expression \"{}\"",
+                    key_of(node)
+                )));
+            }
+            if children.len() == 3 {
+                if let Node::Leaf(op) = &children[1] {
+                    if matches!(op.as_str(), "+" | "-" | "*" | "/") {
+                        return Ok(format!(
+                            "({} {} {})",
+                            extract_compile_expr(&children[0], ctx)?,
+                            op,
+                            extract_compile_expr(&children[2], ctx)?
+                        ));
+                    }
+                }
+            }
+            if children.len() == 3 && matches!(&children[0], Node::Leaf(head) if head == "apply") {
+                let (head, args) = extract_collect_apply_spine(node);
+                let fn_name = match head {
+                    Node::Leaf(_) => extract_compile_expr(head, ctx)?,
+                    _ => {
+                        return Err(extract_compile_error(format!(
+                            "Cannot extract higher-order application \"{}\"",
+                            key_of(node)
+                        )))
+                    }
+                };
+                let compiled_args: Result<Vec<String>, String> = args
+                    .iter()
+                    .map(|arg| extract_compile_expr(arg, ctx))
+                    .collect();
+                return Ok(format!("{}({})", fn_name, compiled_args?.join(", ")));
+            }
+            if let Some(Node::Leaf(head)) = children.first() {
+                if let Some(fn_name) = ctx.name_map.get(head) {
+                    let compiled_args: Result<Vec<String>, String> = children[1..]
+                        .iter()
+                        .map(|arg| extract_compile_expr(arg, ctx))
+                        .collect();
+                    return Ok(format!("{}({})", fn_name, compiled_args?.join(", ")));
+                }
+            }
+            Err(extract_compile_error(format!(
+                "Cannot extract expression \"{}\"",
+                key_of(node)
+            )))
+        }
+    }
+}
+
+fn compile_javascript_program(program: &ExtractProgram) -> Result<String, String> {
+    let names: Vec<String> = program.lambdas.iter().map(|l| l.name.clone()).collect();
+    let name_map = extract_name_map(&names, ExtractTarget::JavaScript);
+    let mut lines = vec![
+        "// Generated by rml extract js. Do not edit by hand.".to_string(),
+        "import { pathToFileURL } from 'node:url';".to_string(),
+        String::new(),
+    ];
+    for lambda in &program.lambdas {
+        let mut used: HashSet<String> = name_map.values().cloned().collect();
+        let mut locals = HashMap::new();
+        for param in &lambda.params {
+            locals.insert(
+                param.clone(),
+                extract_identifier(param, ExtractTarget::JavaScript, &mut used),
+            );
+        }
+        let ctx = ExtractContext {
+            target: ExtractTarget::JavaScript,
+            name_map: &name_map,
+            locals: &locals,
+        };
+        let params = lambda
+            .params
+            .iter()
+            .map(|param| locals.get(param).cloned().unwrap_or_else(|| param.clone()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "export function {}({}) {{",
+            name_map.get(&lambda.name).unwrap(),
+            params
+        ));
+        lines.push(format!(
+            "  return {};",
+            extract_compile_expr(&lambda.body, &ctx)?
+        ));
+        lines.push("}".to_string());
+        lines.push(String::new());
+    }
+    lines.push("function __rmlApproxEq(left, right) {".to_string());
+    lines.push("  return Object.is(left, right) || Math.abs(left - right) <= 1e-9;".to_string());
+    lines.push("}".to_string());
+    lines.push(String::new());
+    lines.push("export function __runRmlExtractedTests() {".to_string());
+    if program.tests.is_empty() {
+        lines.push("  return true;".to_string());
+    } else {
+        for (idx, test) in program.tests.iter().enumerate() {
+            let locals = HashMap::new();
+            let ctx = ExtractContext {
+                target: ExtractTarget::JavaScript,
+                name_map: &name_map,
+                locals: &locals,
+            };
+            lines.push(format!(
+                "  if (!__rmlApproxEq({}, {})) {{",
+                extract_compile_expr(&test.left, &ctx)?,
+                extract_compile_expr(&test.right, &ctx)?
+            ));
+            lines.push(format!(
+                "    throw new Error('RML extracted test {} failed');",
+                idx + 1
+            ));
+            lines.push("  }".to_string());
+        }
+        lines.push("  return true;".to_string());
+    }
+    lines.push("}".to_string());
+    lines.push(String::new());
+    lines.push(
+        "if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {"
+            .to_string(),
+    );
+    lines.push("  __runRmlExtractedTests();".to_string());
+    lines.push("}".to_string());
+    lines.push(String::new());
+    Ok(lines.join("\n"))
+}
+
+fn compile_rust_program(program: &ExtractProgram) -> Result<String, String> {
+    let names: Vec<String> = program.lambdas.iter().map(|l| l.name.clone()).collect();
+    let name_map = extract_name_map(&names, ExtractTarget::Rust);
+    let mut lines = vec![
+        "// Generated by rml extract rust. Do not edit by hand.".to_string(),
+        String::new(),
+    ];
+    for lambda in &program.lambdas {
+        let mut used: HashSet<String> = name_map.values().cloned().collect();
+        let mut locals = HashMap::new();
+        for param in &lambda.params {
+            locals.insert(
+                param.clone(),
+                extract_identifier(param, ExtractTarget::Rust, &mut used),
+            );
+        }
+        let ctx = ExtractContext {
+            target: ExtractTarget::Rust,
+            name_map: &name_map,
+            locals: &locals,
+        };
+        let params = lambda
+            .params
+            .iter()
+            .map(|param| format!("{}: f64", locals.get(param).unwrap()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "pub fn {}({}) -> f64 {{",
+            name_map.get(&lambda.name).unwrap(),
+            params
+        ));
+        lines.push(format!("    {}", extract_compile_expr(&lambda.body, &ctx)?));
+        lines.push("}".to_string());
+        lines.push(String::new());
+    }
+    if !program.tests.is_empty() {
+        lines.push("#[cfg(test)]".to_string());
+        lines.push("mod tests {".to_string());
+        lines.push("    use super::*;".to_string());
+        lines.push(String::new());
+        lines.push("    fn rml_approx_eq(left: f64, right: f64) -> bool {".to_string());
+        lines.push("        (left - right).abs() <= 1e-9".to_string());
+        lines.push("    }".to_string());
+        lines.push(String::new());
+        for (idx, test) in program.tests.iter().enumerate() {
+            let locals = HashMap::new();
+            let ctx = ExtractContext {
+                target: ExtractTarget::Rust,
+                name_map: &name_map,
+                locals: &locals,
+            };
+            lines.push("    #[test]".to_string());
+            lines.push(format!("    fn rml_query_{}() {{", idx + 1));
+            lines.push(format!(
+                "        assert!(rml_approx_eq({}, {}), \"RML query {} failed\");",
+                extract_compile_expr(&test.left, &ctx)?,
+                extract_compile_expr(&test.right, &ctx)?,
+                idx + 1
+            ));
+            lines.push("    }".to_string());
+            lines.push(String::new());
+        }
+        lines.push("}".to_string());
+        lines.push(String::new());
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Extract a typed, non-probabilistic lambda program to JavaScript or Rust.
+///
+/// The supported fragment erases RML type annotations, compiles named lambda
+/// definitions to exported functions, compiles `apply` and arithmetic to
+/// ordinary calls/expressions, and turns equality queries into generated
+/// tests. Probabilistic assignments and logical/probabilistic operators are
+/// rejected instead of being given misleading target-language semantics.
+pub fn extract_program(text: &str, target: ExtractTarget) -> Result<String, String> {
+    let parsed = extract_parse_program(text)?;
+    match target {
+        ExtractTarget::JavaScript => compile_javascript_program(&parsed),
+        ExtractTarget::Rust => compile_rust_program(&parsed),
+    }
+}
+
 // ========== Runner ==========
 
 /// A result from running a query: either a numeric value or a type string.
