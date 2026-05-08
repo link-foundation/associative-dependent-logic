@@ -318,6 +318,8 @@ class Env {
     this.defineOp('-', (a,b)=> decRound(a - b));
     this.defineOp('*', (a,b)=> decRound(a * b));
     this.defineOp('/', (a,b)=> b === 0 ? 0 : decRound(a / b));
+    this.defineOp('<', (a,b)=> a < b ? this.hi : this.lo);
+    this.defineOp('<=', (a,b)=> a <= b ? this.hi : this.lo);
 
     // Initialize truth constants: true, false, unknown, undefined
     // These are predefined symbol probabilities based on the current range.
@@ -392,7 +394,10 @@ class Env {
   }
   getType(exprNode){
     const key = typeof exprNode === 'string' ? exprNode : keyOf(exprNode);
-    return this.types.get(key) || null;
+    if (this.types.has(key)) return this.types.get(key);
+    const resolved = this._resolveQualified(key);
+    if (resolved !== key && this.types.has(resolved)) return this.types.get(resolved);
+    return null;
   }
   setLambda(name, param, paramType, body){
     this.lambdas.set(name, { param, paramType, body });
@@ -447,6 +452,7 @@ class Env {
         this.ops.has(qualified) ||
         this.symbolProb.has(qualified) ||
         this.terms.has(qualified) ||
+        this.types.has(qualified) ||
         this.lambdas.has(qualified) ||
         this.templates.has(qualified)
       ) {
@@ -561,7 +567,7 @@ const NON_VARIABLE_TOKENS = new Set([
   'define', 'case', 'measure', 'lex', 'terminating',
   'whnf', 'nf', 'normal-form',
   'template',
-  '+', '-', '*', '/', '=', '!=', 'and', 'or', 'not', 'both', 'neither', 'nor',
+  '+', '-', '*', '/', '<', '<=', '=', '!=', 'and', 'or', 'not', 'both', 'neither', 'nor',
 ]);
 
 function cloneTerm(node) {
@@ -3888,6 +3894,14 @@ function evalNode(node, env){
     return op(L,R);
   }
 
+  // Numeric comparisons: (A < B), (A <= B)
+  if (node.length === 3 && typeof node[1] === 'string' && ['<','<='].includes(node[1])) {
+    const op = env.getOp(node[1]);
+    const L = evalArith(node[0], env);
+    const R = evalArith(node[2], env);
+    return env.clamp(op(L,R));
+  }
+
   // Infix AND/OR/BOTH/NEITHER: ((A) and (B))  /  ((A) or (B))  /  ((A) both (B))  /  ((A) neither (B))
   if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='and' || node[1]==='or' || node[1]==='both' || node[1]==='neither')) {
     const op = env.getOp(node[1]);
@@ -4093,6 +4107,8 @@ function _reinitOps(env) {
   env.ops.set('-', (a,b) => decRound(a - b));
   env.ops.set('*', (a,b) => decRound(a * b));
   env.ops.set('/', (a,b) => b === 0 ? 0 : decRound(a / b));
+  env.ops.set('<', (a,b) => a < b ? env.hi : env.lo);
+  env.ops.set('<=', (a,b) => a <= b ? env.hi : env.lo);
   // Re-initialize truth constants for new range
   env._initTruthConstants();
 }

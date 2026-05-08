@@ -142,6 +142,17 @@ ZF-style axiom schemas from the `set-theory` namespace:
 (? (st.axiom-extensionality a b))
 ```
 
+The [arithmetic library](./lib/arithmetic/core.lino) exports Peano naturals,
+addition/order templates, and decimal-precision lemmas from the `arithmetic`
+namespace:
+
+```lino
+(import "lib/arithmetic/core.lino" as ar)
+(? ((plus zero zero) = zero))
+(? (ar.less-than zero (succ zero)))
+(? (ar.decimal-sum-equals 0.1 0.2 0.3))
+```
+
 ### Isabelle export
 
 ```bash

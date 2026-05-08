@@ -660,6 +660,9 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    /// Numeric comparisons: <, <=
+    Less,
+    LessOrEqual,
 }
 
 // ========== Environment ==========
@@ -915,6 +918,8 @@ impl Env {
         ops.insert("-".to_string(), Op::Sub);
         ops.insert("*".to_string(), Op::Mul);
         ops.insert("/".to_string(), Op::Div);
+        ops.insert("<".to_string(), Op::Less);
+        ops.insert("<=".to_string(), Op::LessOrEqual);
 
         let mut env = Self {
             terms: HashSet::new(),
@@ -1057,6 +1062,7 @@ impl Env {
             if self.ops.contains_key(&qualified)
                 || self.symbol_prob.contains_key(&qualified)
                 || self.terms.contains(&qualified)
+                || self.types.contains_key(&qualified)
                 || self.lambdas.contains_key(&qualified)
                 || self.templates.contains_key(&qualified)
             {
@@ -1107,7 +1113,14 @@ impl Env {
     }
 
     pub fn get_type(&self, expr: &str) -> Option<&String> {
-        self.types.get(expr)
+        if let Some(recorded) = self.types.get(expr) {
+            return Some(recorded);
+        }
+        let resolved = self.resolve_qualified(expr);
+        if resolved != expr {
+            return self.types.get(&resolved);
+        }
+        None
     }
 
     pub fn set_lambda(&mut self, name: &str, lambda: Lambda) {
@@ -1186,6 +1199,20 @@ impl Env {
                     0.0
                 }
             }
+            Op::Less => {
+                if vals.len() >= 2 && vals[0] < vals[1] {
+                    self.hi
+                } else {
+                    self.lo
+                }
+            }
+            Op::LessOrEqual => {
+                if vals.len() >= 2 && vals[0] <= vals[1] {
+                    self.hi
+                } else {
+                    self.lo
+                }
+            }
         }
     }
 
@@ -1222,6 +1249,8 @@ impl Env {
         self.ops.insert("-".to_string(), Op::Sub);
         self.ops.insert("*".to_string(), Op::Mul);
         self.ops.insert("/".to_string(), Op::Div);
+        self.ops.insert("<".to_string(), Op::Less);
+        self.ops.insert("<=".to_string(), Op::LessOrEqual);
         // Re-initialize truth constants for new range
         self.init_truth_constants();
     }
@@ -1413,6 +1442,8 @@ fn non_variable_token(s: &str) -> bool {
             | "-"
             | "*"
             | "/"
+            | "<"
+            | "<="
             | "="
             | "!="
             | "and"
@@ -7099,6 +7130,17 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                         let l = eval_arith(&children[0], env);
                         let r = eval_arith(&children[2], env);
                         return EvalResult::Value(env.apply_op(op_name, &[l, r]));
+                    }
+                }
+            }
+
+            // Infix numeric comparisons: (A < B), (A <= B)
+            if children.len() == 3 {
+                if let Node::Leaf(ref op_name) = children[1] {
+                    if op_name == "<" || op_name == "<=" {
+                        let l = eval_arith(&children[0], env);
+                        let r = eval_arith(&children[2], env);
+                        return EvalResult::Value(env.clamp(env.apply_op(op_name, &[l, r])));
                     }
                 }
             }
