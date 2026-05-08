@@ -35,6 +35,15 @@ Or use the npm script (runs `../examples/demo.lino`):
 npm run demo
 ```
 
+### Exporting Isabelle/HOL
+
+```bash
+node src/rml-links.mjs export isabelle ../examples/isabelle-typed-fragment.lino -o Isabelle_Typed_Fragment.thy
+```
+
+The supported subset is documented in
+[`../docs/ISABELLE-EXPORT.md`](../docs/ISABELLE-EXPORT.md).
+
 ### Example
 
 ```lino
@@ -77,6 +86,7 @@ import {
   substitute,
   formalizeSelectedInterpretation,
   evaluateFormalization,
+  exportIsabelle,
 } from './src/rml-links.mjs';
 
 // Run a complete LiNo knowledge base
