@@ -1,0 +1,112 @@
+# Algebra standard library.
+#
+# This file exports operation laws and algebraic structure schemas under the
+# `algebra` namespace. It covers magma, semigroup, monoid, group, abelian
+# group, and unital ring definitions. Import it with an alias such as:
+#
+#   (import "lib/algebra/core.lino" as al)
+#   (? (al.group (carrier G) (op times) (identity e) (inverse inv)))
+#   (? (al.ring R plus zero neg times one))
+
+(namespace algebra)
+
+(valence: 2)
+(and: min)
+(or: max)
+(not: not)
+(!=: not =)
+
+(template (closed-under carrier operation)
+  (forall (carrier left)
+    (forall (carrier right)
+      ((operation left right) of carrier))))
+
+(template (associative carrier operation)
+  (forall (carrier left)
+    (forall (carrier middle)
+      (forall (carrier right)
+        (= (operation (operation left middle) right)
+           (operation left (operation middle right)))))))
+
+(template (commutative carrier operation)
+  (forall (carrier left)
+    (forall (carrier right)
+      (= (operation left right) (operation right left)))))
+
+(template (left-identity-law carrier operation identity)
+  (forall (carrier element)
+    (= (operation identity element) element)))
+
+(template (right-identity-law carrier operation identity)
+  (forall (carrier element)
+    (= (operation element identity) element)))
+
+(template (identity-element carrier operation identity)
+  (algebra.and
+    (algebra.left-identity-law carrier operation identity)
+    (algebra.right-identity-law carrier operation identity)))
+
+(template (left-inverse-law carrier operation identity inverse)
+  (forall (carrier element)
+    (= (operation (inverse element) element) identity)))
+
+(template (right-inverse-law carrier operation identity inverse)
+  (forall (carrier element)
+    (= (operation element (inverse element)) identity)))
+
+(template (inverse-operation carrier operation identity inverse)
+  (algebra.and
+    (algebra.left-inverse-law carrier operation identity inverse)
+    (algebra.right-inverse-law carrier operation identity inverse)))
+
+(template (magma carrier operation)
+  (algebra.closed-under carrier operation))
+
+(template (semigroup carrier operation)
+  (algebra.and
+    (algebra.magma carrier operation)
+    (algebra.associative carrier operation)))
+
+(template (monoid carrier operation identity)
+  (algebra.and
+    (algebra.semigroup carrier operation)
+    (algebra.identity-element carrier operation identity)))
+
+(template (group carrier operation identity inverse)
+  (algebra.and
+    (algebra.monoid carrier operation identity)
+    (algebra.inverse-operation carrier operation identity inverse)))
+
+(template (abelian-group carrier operation identity inverse)
+  (algebra.and
+    (algebra.group carrier operation identity inverse)
+    (algebra.commutative carrier operation)))
+
+(template (left-distributive carrier addition multiplication)
+  (forall (carrier left)
+    (forall (carrier middle)
+      (forall (carrier right)
+        (= (multiplication left (addition middle right))
+           (addition
+             (multiplication left middle)
+             (multiplication left right)))))))
+
+(template (right-distributive carrier addition multiplication)
+  (forall (carrier left)
+    (forall (carrier middle)
+      (forall (carrier right)
+        (= (multiplication (addition left middle) right)
+           (addition
+             (multiplication left right)
+             (multiplication middle right)))))))
+
+(template (distributive carrier addition multiplication)
+  (algebra.and
+    (algebra.left-distributive carrier addition multiplication)
+    (algebra.right-distributive carrier addition multiplication)))
+
+(template (ring carrier addition zero negative multiplication one)
+  (algebra.and
+    (algebra.abelian-group carrier addition zero negative)
+    (algebra.monoid carrier multiplication one)
+    (algebra.distributive carrier addition multiplication)))
