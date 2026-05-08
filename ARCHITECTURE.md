@@ -140,6 +140,21 @@ For consumers that start from a selected natural-language interpretation rather 
 
 The adapter currently supports explicit arithmetic equality and arithmetic value questions, plus direct LiNo/RML expressions. Real-world claims such as `moon orbits the Sun` remain non-computable until a caller provides selected entities, relations, evidence sources, and a formal shape.
 
+### Program Extraction
+
+Both implementations expose program extraction for the typed, non-probabilistic
+lambda fragment:
+
+| JavaScript | Rust | Purpose |
+|------------|------|---------|
+| `extractProgram(code, target)` | `extract_program(text, target)` | Compile named typed lambda definitions to JavaScript or Rust source. |
+
+The CLI entry point is `rml extract <js|rust> <file.lino>`. Extraction erases
+LiNo type annotations, emits named functions, lowers `apply` spines and prefix
+calls, and converts equality queries into generated target-language tests. It
+rejects probability assignments and logical/probabilistic operators because
+those forms require the RML evaluator rather than a direct function target.
+
 ### Structured Diagnostics
 
 The `evaluate()` entry point in both implementations returns a structured
