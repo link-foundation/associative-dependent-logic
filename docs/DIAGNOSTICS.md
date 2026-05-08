@@ -100,6 +100,7 @@ The exit code is `1` whenever any diagnostic is emitted, `0` otherwise.
 | `E038` | Normalization driver error. Triggered by a malformed `(whnf …)`, `(nf …)`, or `(normal-form …)` form — typically a missing argument or extra arguments. The driver expects exactly one expression to normalize. |
 | `E039` | Tactic and rewrite engine error. Triggered when a link tactic is malformed, unknown, applied to an incompatible goal, cannot close/transform the current goal, or a simplification rewrite set reaches its termination guard. The message includes the current goal printed as a link for tactic failures. |
 | `E040` | Template expansion error. Triggered by a malformed `(template (<name> <param>...) <body>)` declaration, a template use with the wrong number of arguments, or a recursive template expansion cycle. |
+| `E050` | Lean export error. Triggered when `rml export lean` sees forms outside the typed non-probabilistic subset, such as `has probability`, range/valence configuration, operator redefinitions, imports, namespaces, or templates. |
 
 Codes are stable identifiers — they do not change between releases unless we
 explicitly note a breaking change in the changelog. The accompanying
