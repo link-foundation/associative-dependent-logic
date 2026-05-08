@@ -114,6 +114,15 @@ from the `higher-order` namespace:
      ((P zero) implies (ho.forall (Natural n) (P (succ n))))))
 ```
 
+The modal library exports normal modal operators, K/T/S4/S5 axiom schemas,
+and Kripke-frame interpretation templates from the `modal` namespace:
+
+```lino
+(import "lib/modal/core.lino" as ml)
+(? (ml.axiom-k p q))
+(? (ml.necessarily-at current p))
+```
+
 ### Isabelle export
 
 ```bash
