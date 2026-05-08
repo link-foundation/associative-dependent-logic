@@ -43,6 +43,8 @@
 
 (propositional-logic.lino: 0.3 0.6 0.18 0.72 0.7 0.072 0.8320000000000001)
 
+(rocq-export.lino: 1 1 1 (type Natural))
+
 (self-reasoning.lino: 1 1 1 1 (type Logic) 0 0.5 0.5)
 
 (ternary-kleene.lino: 0.5 0 1 0.5 0.5 0.5)
