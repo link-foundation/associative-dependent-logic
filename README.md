@@ -123,6 +123,16 @@ and Kripke-frame interpretation templates from the `modal` namespace:
 (? (ml.necessarily-at current p))
 ```
 
+The provability library exports GL axiom schemas and a basic interpretability
+fragment from the `provability` namespace:
+
+```lino
+(import "lib/provability/core.lino" as pr)
+(? (pr.provability-of p))
+(? (pr.axiom-gl p))
+(? (pr.interprets theory-a theory-b))
+```
+
 ### Isabelle export
 
 ```bash
