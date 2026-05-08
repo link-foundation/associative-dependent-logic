@@ -4,6 +4,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   keyOf,
   parseOne,
@@ -23,6 +26,21 @@ function state(...goals) {
 
 function goalKeys(proofState) {
   return proofState.goals.map(goal => keyOf(goal.goal));
+}
+
+function withTempDir(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rml-smt-js-'));
+  try {
+    return fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function writeFakeSolver(dir, source) {
+  const solverPath = path.join(dir, 'fake-solver.mjs');
+  fs.writeFileSync(solverPath, source);
+  return solverPath;
 }
 
 describe('runTactics applies link tactics to proof states', () => {
@@ -178,4 +196,61 @@ describe('runTactics applies link tactics to proof states', () => {
     assert.match(out.diagnostics[0].message, /current goal: \(a = b\)/);
     assert.deepStrictEqual(goalKeys(out.state), ['(a = b)']);
   });
+
+  it('closes a goal with (by smt) when the configured solver returns unsat', () => withTempDir((dir) => {
+    const capturePath = path.join(dir, 'input.smt2');
+    const solverPath = writeFakeSolver(dir, `
+      import fs from 'node:fs';
+      const input = fs.readFileSync(0, 'utf8');
+      fs.writeFileSync(process.argv[2], input);
+      console.log('unsat');
+    `);
+
+    const out = runTactics(state('(a = a)'), [link('(by smt)')], {
+      smtSolver: process.execPath,
+      smtSolverArgs: [solverPath, capturePath],
+      smtTimeoutMs: 1000,
+    });
+
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.state.goals, []);
+    assert.deepStrictEqual(out.state.proof.map(keyOf), [
+      `(by smt-trusted ${path.basename(process.execPath)})`,
+    ]);
+
+    const smtLib = fs.readFileSync(capturePath, 'utf8');
+    assert.match(smtLib, /\(declare-const \|a\| Real\)/);
+    assert.match(smtLib, /\(assert \(not \(= \|a\| \|a\|\)\)\)/);
+    assert.match(smtLib, /\(check-sat\)/);
+  }));
+
+  it('reports unknown from the SMT solver without closing the goal', () => withTempDir((dir) => {
+    const solverPath = writeFakeSolver(dir, "console.log('unknown');\n");
+
+    const out = runTactics(state('(a = a)'), [link('(by smt)')], {
+      smtSolver: process.execPath,
+      smtSolverArgs: [solverPath],
+      smtTimeoutMs: 1000,
+    });
+
+    assert.strictEqual(out.diagnostics.length, 1);
+    assert.strictEqual(out.diagnostics[0].code, 'E039');
+    assert.match(out.diagnostics[0].message, /returned unknown/);
+    assert.deepStrictEqual(goalKeys(out.state), ['(a = a)']);
+  }));
+
+  it('reports SMT solver timeouts without closing the goal', () => withTempDir((dir) => {
+    const solverPath = writeFakeSolver(dir, 'setTimeout(() => {}, 2000);\n');
+
+    const out = runTactics(state('(a = a)'), [link('(by smt)')], {
+      smtSolver: process.execPath,
+      smtSolverArgs: [solverPath],
+      smtTimeoutMs: 20,
+    });
+
+    assert.strictEqual(out.diagnostics.length, 1);
+    assert.strictEqual(out.diagnostics[0].code, 'E039');
+    assert.match(out.diagnostics[0].message, /timed out/);
+    assert.deepStrictEqual(goalKeys(out.state), ['(a = a)']);
+  }));
 });
