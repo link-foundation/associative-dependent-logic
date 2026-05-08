@@ -163,6 +163,17 @@ the `algebra` namespace:
 (? (al.ring R plus zero neg times one))
 ```
 
+The [programming-language theory library](./lib/programming-language/core.lino)
+exports untyped lambda-calculus constructors, simply typed lambda calculus
+typing and small-step schemas, and type-safety theorem forms from the
+`programming-language` namespace:
+
+```lino
+(import "lib/programming-language/core.lino" as pl)
+(? (pl.theorem progress (pl.progress term T)))
+(? (pl.theorem preservation (pl.preservation term next T)))
+```
+
 ### Isabelle export
 
 ```bash
