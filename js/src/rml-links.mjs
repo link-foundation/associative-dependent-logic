@@ -4762,38 +4762,12 @@ async function runCli() {
   }
   const arg = positionals[0];
   if (!arg) {
-    console.error('Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export rocq <file.lino> [-o <file.v>]');
+    console.error('Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export <lean|rocq> <file.lino> [-o <file>]');
     process.exit(1);
   }
   if (arg === 'export') {
-    const target = positionals[1];
-    const input = positionals[2];
-    if (target !== 'rocq' || !input) {
-      console.error('Usage: rml export rocq <file.lino> [-o <file.v>]');
-      process.exit(1);
-    }
-    let output = null;
-    for (let i = 3; i < positionals.length; i += 1) {
-      const flag = positionals[i];
-      if (flag === '-o' || flag === '--output') {
-        if (i + 1 >= positionals.length) {
-          console.error(`${flag} requires an output path`);
-          process.exit(1);
-        }
-        output = positionals[i + 1];
-        i += 1;
-      } else {
-        console.error(`Unknown export option: ${flag}`);
-        process.exit(1);
-      }
-    }
-    const text = fs.readFileSync(input, 'utf8');
-    const rocqUrl = new URL('./rml-rocq.mjs', import.meta.url).href;
-    const { exportRocq } = await import(rocqUrl);
-    const rendered = exportRocq(text, { sourcePath: input });
-    if (output) fs.writeFileSync(output, rendered, 'utf8');
-    else process.stdout.write(rendered);
-    return;
+    const status = await runExportCli(positionals.slice(1));
+    process.exit(status);
   }
   if (arg === 'repl') {
     const replUrl = new URL('./rml-repl.mjs', import.meta.url).href;
@@ -4819,6 +4793,59 @@ async function runCli() {
     console.error(formatDiagnostic(diag, text));
   }
   if (out.diagnostics.length > 0) process.exit(1);
+}
+
+async function runExportCli(args) {
+  const [target, input] = args;
+  if (args.length < 2 || (target !== 'lean' && target !== 'rocq')) {
+    console.error('Usage: rml export <lean|rocq> <file.lino> [-o <file>]');
+    return 2;
+  }
+  let output = null;
+  for (let i = 2; i < args.length; i++) {
+    if ((args[i] === '-o' || args[i] === '--output') && i + 1 < args.length) {
+      output = args[i + 1];
+      i++;
+      continue;
+    }
+    console.error(`Unknown export option: ${args[i]}`);
+    console.error(`Usage: rml export ${target} <file.lino> [-o <file>]`);
+    return 2;
+  }
+  if (target === 'lean' && !output) {
+    console.error('Usage: rml export lean <file.lino> -o <file.lean>');
+    return 2;
+  }
+  let text;
+  try {
+    text = fs.readFileSync(input, 'utf8');
+  } catch (err) {
+    console.error(`Error reading ${input}: ${err.message}`);
+    return 1;
+  }
+  let rendered;
+  if (target === 'lean') {
+    const { exportLean } = await import(new URL('./lean-export.mjs', import.meta.url).href);
+    const out = exportLean(text, { file: input });
+    if (out.diagnostics.length > 0) {
+      for (const diag of out.diagnostics) {
+        console.error(formatDiagnostic(diag, text));
+      }
+      return 1;
+    }
+    rendered = out.source;
+  } else {
+    const { exportRocq } = await import(new URL('./rml-rocq.mjs', import.meta.url).href);
+    rendered = exportRocq(text, { sourcePath: input });
+  }
+  try {
+    if (output) fs.writeFileSync(output, rendered, 'utf8');
+    else process.stdout.write(rendered);
+  } catch (err) {
+    console.error(`Error writing ${output}: ${err.message}`);
+    return 1;
+  }
+  return 0;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

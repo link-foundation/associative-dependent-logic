@@ -21,6 +21,14 @@ cargo build
 cargo run -- <file.lino>
 ```
 
+### Exporting Lean 4
+
+```bash
+cargo run -- export lean ../examples/lean-export-basic.lino -o out.lean
+```
+
+The supported subset is documented in [`../docs/LEAN_EXPORT.md`](../docs/LEAN_EXPORT.md).
+
 The shared examples live at the repo root in [`/examples/`](../examples/) and
 both implementations are required to produce identical output for every file
 there. To run one:
@@ -66,6 +74,7 @@ use rml::{
     run, evaluate, format_diagnostic, Diagnostic, EvaluateResult, RunResult, Span,
     tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round, subst,
     run_tactics, rewrite, simplify, ProofState,
+    export_lean,
     formalize_selected_interpretation, evaluate_formalization,
     FormalizationRequest, Interpretation,
 };

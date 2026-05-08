@@ -23,6 +23,7 @@ For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 - [Typed kernel rules](./docs/KERNEL.md) - The implemented D1 rules for `Pi`, `lambda`, `apply`, `(expr of Type)`, and `(type of expr)`.
 - [Soundness statement](./docs/SOUNDNESS.md) - The trusted-kernel guarantee, proof-replay checker, trusted operator base, and aggregator-relative scope of soundness.
 - [Metatheorem checker](./docs/METATHEOREMS.md) - The C3 Twelf-style guarantee that composes D12 totality, D14 coverage, D15 modes, and D13 termination, plus the `rml-meta` CLI.
+- [Lean 4 export](./docs/LEAN_EXPORT.md) - The `rml export lean` bridge for typed, non-probabilistic RML fragments.
 - [Rocq export](./docs/ROCQ-EXPORT.md) - The supported typed LiNo subset for `rml export rocq <file.lino> -o <file.v>`.
 
 ## Overview
@@ -65,6 +66,7 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 cd js
 npm install
 node src/rml-links.mjs ../examples/demo.lino
+node src/rml-links.mjs export lean ../examples/lean-export-basic.lino -o out.lean
 ```
 
 ### Rust
@@ -72,6 +74,7 @@ node src/rml-links.mjs ../examples/demo.lino
 ```bash
 cd rust
 cargo run -- ../examples/demo.lino
+cargo run -- export lean ../examples/lean-export-basic.lino -o out.lean
 ```
 
 Examples are language-agnostic and live in [`/examples/`](./examples/). Both
