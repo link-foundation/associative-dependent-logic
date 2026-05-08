@@ -31,6 +31,7 @@ cargo build --release --manifest-path rust/Cargo.toml
 | File | Topic |
 |------|-------|
 | [`classical-logic.lino`](./classical-logic.lino) | Standard Boolean (2-valued) logic |
+| [`automatic-sequences.lino`](./automatic-sequences.lino) | Pecan-style automatic-sequence theorem decision |
 | [`propositional-logic.lino`](./propositional-logic.lino) | Probabilistic propositional logic with independent events |
 | [`fuzzy-logic.lino`](./fuzzy-logic.lino) | Continuous-valued (Zadeh) fuzzy logic |
 | [`ternary-kleene.lino`](./ternary-kleene.lino) | Three-valued Kleene logic |

@@ -103,6 +103,7 @@ Each AST node is evaluated recursively by `eval_node` / `evalNode`. The evaluati
 | `(fresh x in body)` | Temporarily introduce a fresh scoped variable | `(fresh x in (x of Natural))` |
 | `(whnf expr)` | Weak-head normal form (spine reduction only) | `(whnf (apply identity zero))` |
 | `(nf expr)`, `(normal-form expr)` | Full beta-normal form | `(normal-form (apply (compose succ succ) zero))` |
+| `(domain name form...)` | Domain plugin decision block | `(domain automatic-sequences (theorem thue-morse-cube-free))` |
 | `(expr of Type)` | Type membership check | `(zero of Natural)` |
 | `(type of expr)` | Type query | `(type of zero)` |
 
@@ -126,10 +127,20 @@ The tactic engine keeps proof steps as links:
 | `runTactics(state, tactics, options)` | `run_tactics(state, tactics)` / `run_tactics_with_options(...)` | Apply link tactics to a proof state and return the updated state plus diagnostics. |
 | `rewrite(goal, eq)` / `simplify(goal, rules)` | `rewrite(...)` / `simplify(...)` | Apply a single equality rewrite or a guarded rewrite set directly. |
 | Goal state | `ProofState` / `ProofGoal` | Open goals, local context, and successful tactic links. |
+| `Env.registerDomainPlugin(name, plugin)` | `Env::register_domain_plugin(name, plugin)` | Register a `(domain <name> ...)` decision procedure. |
 
 Built-in tactics are `reflexivity`, `symmetry`, `transitivity`, `induction`,
 `suppose`, `introduce`, `by`, `rewrite`, `simplify`, and `exact`. A failed
 tactic emits `E039` and includes the current goal in the diagnostic message.
+
+The default environment also registers the `automatic-sequences` domain
+plugin. It currently ships the classic `thue-morse-cube-free` decision and
+records it as a truth-valued theorem when a program contains:
+
+```lino
+(domain automatic-sequences
+  (theorem thue-morse-cube-free))
+```
 
 For consumers that start from a selected natural-language interpretation rather than a complete `.lino` file, the library also exposes a meta-expression adapter:
 
@@ -178,6 +189,10 @@ The environment holds all mutable state during evaluation:
 - **`ops`**: Map from operator names to operator implementations.
 - **`types`**: Map from expression keys to type-expression keys.
 - **`lambdas`**: Map from lambda names to their parameter, parameter type, and body.
+- **`domain_plugins` / `domainPlugins`**: Registry of domain-specific decision
+  procedures used by `(domain <name> ...)`.
+- **`automatic_sequence_decisions` / `automaticSequenceDecisions`**: Decisions
+  recorded by the built-in automatic-sequences plugin.
 
 ### Truth Constants
 

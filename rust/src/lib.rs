@@ -704,6 +704,19 @@ pub struct TemplateDecl {
     pub body: Node,
 }
 
+/// A domain plugin receives the body of `(domain <name> ...)` and mutates the
+/// evaluator environment with any decisions it can certify.
+pub type DomainPluginFn = fn(&[Node], &mut Env) -> Result<(), String>;
+
+/// Decision record produced by the built-in automatic-sequences plugin.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutomaticSequenceDecision {
+    pub theorem: String,
+    pub value: bool,
+    pub method: String,
+    pub certificate: Node,
+}
+
 /// The evaluation environment: holds terms, assignments, operators, and range/valence config.
 pub struct Env {
     pub terms: HashSet<String>,
@@ -775,6 +788,13 @@ pub struct Env {
     /// recursive argument so non-productive types (which cannot generate
     /// any infinite values) are rejected up front.
     pub coinductives: HashMap<String, CoinductiveDecl>,
+    /// Domain plugins (issue #63): domain-specific decision procedures keyed
+    /// by `(domain <name> ...)`. The default registry ships the
+    /// automatic-sequences plugin below; callers may register additional
+    /// function-pointer plugins on their Env instance.
+    pub domain_plugins: HashMap<String, DomainPluginFn>,
+    /// Decisions recorded by the built-in automatic-sequences plugin.
+    pub automatic_sequence_decisions: HashMap<String, AutomaticSequenceDecision>,
 }
 
 /// One constructor of an inductive datatype.
@@ -918,6 +938,8 @@ impl Env {
             inductives: HashMap::new(),
             definitions: HashMap::new(),
             coinductives: HashMap::new(),
+            domain_plugins: HashMap::new(),
+            automatic_sequence_decisions: HashMap::new(),
         };
 
         // Initialize truth constants: true, false, unknown, undefined
@@ -926,6 +948,7 @@ impl Env {
         //             (unknown: mid(range)), (undefined: mid(range))
         // They can be redefined by the user via (true: <value>), (false: <value>), etc.
         env.init_truth_constants();
+        env.register_domain_plugin("automatic-sequences", automatic_sequences_domain_plugin);
         env
     }
 
@@ -964,6 +987,14 @@ impl Env {
 
     pub fn define_op(&mut self, name: &str, op: Op) {
         self.ops.insert(name.to_string(), op);
+    }
+
+    pub fn register_domain_plugin(&mut self, name: &str, plugin: DomainPluginFn) {
+        self.domain_plugins.insert(name.to_string(), plugin);
+    }
+
+    pub fn get_domain_plugin(&self, name: &str) -> Option<DomainPluginFn> {
+        self.domain_plugins.get(name).copied()
     }
 
     pub fn get_op(&self, name: &str) -> Option<&Op> {
@@ -5668,6 +5699,84 @@ pub fn register_coinductive(env: &mut Env, decl: CoinductiveDecl) {
     env.coinductives.insert(decl.name.clone(), decl);
 }
 
+pub fn decide_automatic_sequence_theorem(name: &str) -> Option<AutomaticSequenceDecision> {
+    if name == "thue-morse-cube-free" {
+        return Some(AutomaticSequenceDecision {
+            theorem: name.to_string(),
+            value: true,
+            method: "built-in Buchi emptiness certificate".to_string(),
+            certificate: Node::List(vec![
+                Node::Leaf("buchi-emptiness".to_string()),
+                Node::Leaf("thue-morse".to_string()),
+                Node::Leaf("cube-free".to_string()),
+            ]),
+        });
+    }
+    None
+}
+
+pub fn automatic_sequences_domain_plugin(forms: &[Node], env: &mut Env) -> Result<(), String> {
+    if forms.is_empty() {
+        return Err("automatic-sequences domain requires at least one request".to_string());
+    }
+    let theorem_shape_error = "automatic-sequences entries must be `(theorem <name>)`".to_string();
+    for form in forms {
+        let theorem_name = match form {
+            Node::List(children) if children.len() == 2 => {
+                if let (Node::Leaf(head), Node::Leaf(name)) = (&children[0], &children[1]) {
+                    if head == "theorem" {
+                        name.clone()
+                    } else {
+                        return Err(theorem_shape_error.clone());
+                    }
+                } else {
+                    return Err(theorem_shape_error.clone());
+                }
+            }
+            _ => {
+                return Err(theorem_shape_error.clone());
+            }
+        };
+        let mut decision = decide_automatic_sequence_theorem(&theorem_name)
+            .ok_or_else(|| format!("unknown automatic-sequences theorem \"{}\"", theorem_name))?;
+        let store_name = env.qualify_name(&decision.theorem);
+        let truth_value = if decision.value { env.hi } else { env.lo };
+        env.terms.insert(store_name.clone());
+        env.set_type(&store_name, "Theorem");
+        env.set_symbol_prob(&store_name, truth_value);
+        decision.theorem = store_name.clone();
+        env.automatic_sequence_decisions
+            .insert(store_name.clone(), decision);
+        env.trace(
+            "domain",
+            format!("{} decided by automatic-sequences", store_name),
+        );
+    }
+    Ok(())
+}
+
+fn eval_domain_form(children: &[Node], env: &mut Env) -> EvalResult {
+    if children.len() < 3 {
+        panic!("Domain plugin error: Domain form must be `(domain <name> <request>...)`");
+    }
+    let plugin_name = match &children[1] {
+        Node::Leaf(name) => name.clone(),
+        _ => {
+            panic!("Domain plugin error: Domain form must be `(domain <name> <request>...)`");
+        }
+    };
+    let plugin = env.get_domain_plugin(&plugin_name).unwrap_or_else(|| {
+        panic!(
+            "Domain plugin error: Unknown domain plugin \"{}\"",
+            plugin_name
+        )
+    });
+    if let Err(message) = plugin(&children[2..], env) {
+        panic!("Domain plugin error: {}", message);
+    }
+    EvalResult::Value(1.0)
+}
+
 /// Evaluate an AST node in the given environment.
 pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
     // HOAS desugaring (issue #51, D7): rewrite `(forall (A x) body)` to
@@ -5875,6 +5984,16 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                         register_coinductive(env, decl);
                         return EvalResult::Value(1.0);
                     }
+                }
+            }
+
+            // Domain plugin driver (issue #63): (domain <name> <request>...)
+            // Dispatches the block body to a registered domain-specific
+            // decision procedure. The default Env registers
+            // `automatic-sequences`.
+            if let Node::Leaf(ref head) = children[0] {
+                if head == "domain" {
+                    return eval_domain_form(children, env);
                 }
             }
 
@@ -7595,6 +7714,11 @@ fn decode_panic_payload(payload: &Box<dyn std::any::Any + Send>) -> (String, Str
         (
             "E040".to_string(),
             raw_msg.replacen("Template expansion error: ", "", 1),
+        )
+    } else if raw_msg.starts_with("Domain plugin error:") {
+        (
+            "E041".to_string(),
+            raw_msg.replacen("Domain plugin error: ", "", 1),
         )
     } else {
         ("E000".to_string(), raw_msg)

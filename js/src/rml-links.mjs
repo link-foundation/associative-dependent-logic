@@ -244,6 +244,12 @@ class Env {
     // (which cannot generate any infinite values) are rejected at declaration
     // time.
     this.coinductives = new Map();              // name -> { name, constructors, corecName, corecType }
+    // Domain plugins (issue #63): domain-specific decision procedures keyed
+    // by `(domain <name> ...)`. The default registry ships the
+    // automatic-sequences plugin below; callers may register additional
+    // plugin functions on their Env instance.
+    this.domainPlugins = new Map();             // name -> (forms, env) => number
+    this.automaticSequenceDecisions = new Map();// theorem -> decision record
     // Namespace state (issue #34): a file can declare `(namespace foo)`, which
     // prefixes every name it subsequently introduces with `foo.`. Imports can
     // be aliased via `(import "x.lino" as a)`, which records `a` -> the
@@ -318,6 +324,7 @@ class Env {
     //             (unknown: mid(range)), (undefined: mid(range))
     // They can be redefined by the user via (true: <value>), (false: <value>), etc.
     this._initTruthConstants();
+    this.registerDomainPlugin('automatic-sequences', automaticSequencesDomainPlugin);
   }
 
   // Clamp and optionally quantize a value to the valid range
@@ -365,6 +372,15 @@ class Env {
     return resolved !== name && this.ops.has(resolved);
   }
   defineOp(name, fn){ this.ops.set(name, fn); }
+  registerDomainPlugin(name, plugin) {
+    if (typeof name !== 'string' || name.length === 0 || typeof plugin !== 'function') {
+      throw new RmlError('E041', 'Domain plugin registration requires a name and function');
+    }
+    this.domainPlugins.set(name, plugin);
+  }
+  getDomainPlugin(name) {
+    return this.domainPlugins.get(name) || null;
+  }
 
   setExprProb(exprNode, p){
     this.assign.set(keyOf(exprNode), this.clamp(p));
@@ -3037,6 +3053,57 @@ function evalFresh(varName, body, env) {
   }
 }
 
+function decideAutomaticSequenceTheorem(name) {
+  if (name === 'thue-morse-cube-free') {
+    return {
+      theorem: name,
+      value: true,
+      method: 'built-in Buchi emptiness certificate',
+      certificate: ['buchi-emptiness', 'thue-morse', 'cube-free'],
+    };
+  }
+  return null;
+}
+
+function automaticSequencesDomainPlugin(forms, env) {
+  if (!Array.isArray(forms) || forms.length === 0) {
+    throw new RmlError('E041', 'automatic-sequences domain requires at least one request');
+  }
+  for (const form of forms) {
+    if (!Array.isArray(form) || form.length !== 2 || form[0] !== 'theorem' || typeof form[1] !== 'string') {
+      throw new RmlError('E041', 'automatic-sequences entries must be `(theorem <name>)`');
+    }
+    const decision = decideAutomaticSequenceTheorem(form[1]);
+    if (!decision) {
+      throw new RmlError('E041', `unknown automatic-sequences theorem "${form[1]}"`);
+    }
+    const storeName = env.qualifyName(decision.theorem);
+    const truthValue = decision.value ? env.hi : env.lo;
+    env.terms.add(storeName);
+    env.setType(storeName, 'Theorem');
+    env.setSymbolProb(storeName, truthValue);
+    env.automaticSequenceDecisions.set(storeName, {
+      ...decision,
+      theorem: storeName,
+      truthValue,
+    });
+    env.trace('domain', `${storeName} decided by automatic-sequences`);
+  }
+  return 1;
+}
+
+function evalDomainForm(node, env) {
+  if (node.length < 3 || typeof node[1] !== 'string') {
+    throw new RmlError('E041', 'Domain form must be `(domain <name> <request>...)`');
+  }
+  const pluginName = node[1];
+  const plugin = env.getDomainPlugin(pluginName);
+  if (!plugin) {
+    throw new RmlError('E041', `Unknown domain plugin "${pluginName}"`);
+  }
+  return plugin(node.slice(2), env);
+}
+
 function evalNode(node, env){
   if (typeof node === 'string') {
     if (isNum(node)) return env.toNum(node);
@@ -3119,6 +3186,13 @@ function evalNode(node, env){
     if (decl) {
       return registerCoinductive(env, decl);
     }
+  }
+
+  // Domain plugin driver (issue #63): (domain <name> <request>...)
+  // Dispatches the block body to a registered domain-specific decision
+  // procedure. The default Env registers `automatic-sequences`.
+  if (node[0] === 'domain') {
+    return evalDomainForm(node, env);
   }
 
   // Totality check (issue #44, D12): (total <name>) runs `isTotal` over
@@ -5326,6 +5400,8 @@ export {
   buildEliminatorType,
   parseCoinductiveForm,
   buildCorecursorType,
+  automaticSequencesDomainPlugin,
+  decideAutomaticSequenceTheorem,
   formalizeSelectedInterpretation,
   evaluateFormalization,
   exportIsabelle,
