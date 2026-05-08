@@ -4173,6 +4173,15 @@ function defineForm(head, rhs, env){
 
   // Operator redefinitions
   if (['=','!=','and','or','not','is','?:','both','neither'].includes(head) || /[=!]/.test(head)) {
+    // Operator alias: `(not: not)` inside a namespace exports the existing
+    // operator under the qualified name, e.g. `classical.not`.
+    if (rhs.length === 1 && typeof rhs[0] === 'string' && env.hasOp(rhs[0])) {
+      const target = rhs[0];
+      const op = env.getOp(target);
+      env.defineOp(storeName, (...xs) => op(...xs));
+      env.trace('resolve', `(${storeName}: ${target})`);
+      return 1;
+    }
 
     // Composition like: (!=: not =)   or  (=: =) (no-op)
     if (rhs.length === 2 && typeof rhs[0]==='string' && typeof rhs[1]==='string') {

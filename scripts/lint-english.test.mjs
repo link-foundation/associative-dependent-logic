@@ -234,11 +234,14 @@ describe('loadAllowlist()', () => {
 });
 
 describe('CLI', () => {
-  it('exits 0 when all bundled examples are clean', () => {
+  it('exits 0 when all bundled examples and libraries are clean', () => {
     const examples = fs.readdirSync(path.join(REPO_ROOT, 'examples'))
       .filter(f => f.endsWith('.lino'))
       .map(f => path.join(REPO_ROOT, 'examples', f));
-    const r = spawnSync(process.execPath, [SCRIPT, ...examples], { encoding: 'utf8' });
+    const libraries = fs.readdirSync(path.join(REPO_ROOT, 'lib', 'classical'))
+      .filter(f => f.endsWith('.lino'))
+      .map(f => path.join(REPO_ROOT, 'lib', 'classical', f));
+    const r = spawnSync(process.execPath, [SCRIPT, ...examples, ...libraries], { encoding: 'utf8' });
     assert.strictEqual(r.status, 0,
       `expected clean lint, got status ${r.status}\n${r.stdout}\n${r.stderr}`);
   });

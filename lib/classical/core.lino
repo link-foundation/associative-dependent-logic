@@ -1,0 +1,64 @@
+# Classical logic standard library.
+#
+# This file installs Boolean truth values and exports classical connective
+# templates under the `classical` namespace. Import it with an alias such as:
+#
+#   (import "lib/classical/core.lino" as cl)
+#   (? (cl.excluded-middle p))
+
+(namespace classical)
+
+(valence: 2)
+(and: min)
+(or: max)
+(not: not)
+(!=: not =)
+
+(template (implies antecedent consequent)
+  (classical.or (classical.not antecedent) consequent))
+
+(template (excluded-middle proposition)
+  (classical.or proposition (classical.not proposition)))
+
+(template (non-contradiction proposition)
+  (classical.not (classical.and proposition (classical.not proposition))))
+
+(template (double-negation proposition)
+  (= (classical.not (classical.not proposition)) proposition))
+
+(template (de-morgan-not-and left right)
+  (= (classical.not (classical.and left right))
+     (classical.or (classical.not left) (classical.not right))))
+
+(template (de-morgan-not-or left right)
+  (= (classical.not (classical.or left right))
+     (classical.and (classical.not left) (classical.not right))))
+
+(template (and-introduction left right)
+  (classical.implies left
+    (classical.implies right (classical.and left right))))
+
+(template (and-elimination-left left right)
+  (classical.implies (classical.and left right) left))
+
+(template (and-elimination-right left right)
+  (classical.implies (classical.and left right) right))
+
+(template (or-introduction-left left right)
+  (classical.implies left (classical.or left right)))
+
+(template (or-introduction-right left right)
+  (classical.implies right (classical.or left right)))
+
+(template (or-elimination left right conclusion)
+  (classical.implies
+    (classical.implies left conclusion)
+    (classical.implies
+      (classical.implies right conclusion)
+      (classical.implies (classical.or left right) conclusion))))
+
+(template (modus-ponens antecedent consequent)
+  (classical.implies antecedent
+    (classical.implies
+      (classical.implies antecedent consequent)
+      consequent)))
