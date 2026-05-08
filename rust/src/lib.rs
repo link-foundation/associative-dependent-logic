@@ -8272,3 +8272,4 @@ pub fn run(text: &str, options: Option<EnvOptions>) -> Vec<f64> {
 pub mod repl;
 pub mod check;
 pub mod meta;
+pub mod rocq;

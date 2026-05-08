@@ -1,0 +1,14 @@
+# Rocq export typed fragment.
+#
+# This example stays inside the subset accepted by `rml export rocq`: typed
+# declarations, Pi types, lambda values, and type queries.
+
+(Natural: (Type 0) Natural)
+(zero: Natural zero)
+(succ: (Pi (Natural n) Natural))
+(identity: lambda (Natural x) x)
+
+(? (zero of Natural))
+(? (succ of (Pi (Natural n) Natural)))
+(? (identity of (Pi (Natural x) Natural)))
+(? (type of zero))
