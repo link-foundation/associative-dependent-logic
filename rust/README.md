@@ -21,6 +21,14 @@ cargo build
 cargo run -- <file.lino>
 ```
 
+### Exporting Lean 4
+
+```bash
+cargo run -- export lean ../examples/lean-export-basic.lino -o out.lean
+```
+
+The supported subset is documented in [`../docs/LEAN_EXPORT.md`](../docs/LEAN_EXPORT.md).
+
 The shared examples live at the repo root in [`/examples/`](../examples/) and
 both implementations are required to produce identical output for every file
 there. To run one:
@@ -34,6 +42,15 @@ Or after building:
 ```bash
 ./target/release/rml ../examples/classical-logic.lino
 ```
+
+### Exporting Rocq source
+
+```bash
+cargo run -- export rocq ../examples/dependent-types.lino -o dependent_types.v
+```
+
+See [`../docs/ROCQ-EXPORT.md`](../docs/ROCQ-EXPORT.md) for the supported
+typed subset.
 
 ### Example
 
@@ -58,6 +75,7 @@ use rml::{
     tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round, subst,
     run_tactics, rewrite, simplify, ProofState,
     automatic_sequences_domain_plugin, decide_automatic_sequence_theorem,
+    export_lean,
     formalize_selected_interpretation, evaluate_formalization,
     FormalizationRequest, Interpretation,
 };

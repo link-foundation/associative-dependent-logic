@@ -4818,6 +4818,420 @@ function evaluateFormalization(formalization, options = {}) {
   };
 }
 
+// ---------- Isabelle/HOL exporter ----------
+// The exporter targets the simply typed fragment shared by RML's prototype
+// type layer and Isabelle/HOL: type declarations, constants, simple Pi-types,
+// first-order inductive datatypes, and lambda definitions whose types can be
+// inferred locally. Dependent Pi codomains and probabilistic/operator forms
+// are rejected instead of being approximated silently.
+class IsabelleExportError extends Error {
+  constructor(message, node = null) {
+    const suffix = node ? `: ${keyOf(node)}` : '';
+    super(`Isabelle export: ${message}${suffix}`);
+    this.name = 'IsabelleExportError';
+    this.node = node;
+  }
+}
+
+const ISABELLE_RESERVED = new Set([
+  'and', 'assumes', 'begin', 'binder', 'case', 'class', 'consts', 'datatype',
+  'definition', 'else', 'end', 'fixes', 'for', 'fun', 'if', 'imports', 'in',
+  'infix', 'infixl', 'infixr', 'let', 'locale', 'module', 'notation', 'of',
+  'open', 'or', 'shows', 'structure', 'syntax', 'then', 'theory', 'type',
+  'typedecl', 'where',
+]);
+
+function _isUniverseAnnotation(node) {
+  if (node === 'Type') return true;
+  return Array.isArray(node) &&
+    node.length === 2 &&
+    node[0] === 'Type' &&
+    parseUniverseLevelToken(node[1]) !== null;
+}
+
+function _isTypeSelfDeclaration(name, rhs) {
+  return rhs.length === 2 &&
+    rhs[1] === name &&
+    _isUniverseAnnotation(rhs[0]);
+}
+
+function _isTypedSelfDeclaration(name, rhs) {
+  return rhs.length === 2 && rhs[1] === name && !_isUniverseAnnotation(rhs[0]);
+}
+
+function _isProbabilisticAssignment(node) {
+  return Array.isArray(node) &&
+    node.length === 4 &&
+    node[1] === 'has' &&
+    node[2] === 'probability' &&
+    isNum(node[3]);
+}
+
+function _isOperatorHead(head) {
+  return ['=','!=','and','or','not','is','?:','both','neither'].includes(head) || /[=!]/.test(head);
+}
+
+function _nodeContainsSymbol(node, symbol) {
+  if (typeof node === 'string') return node === symbol;
+  return Array.isArray(node) && node.some(child => _nodeContainsSymbol(child, symbol));
+}
+
+function _escapeIsabelleString(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function _isabelleBaseName(raw, fallback = 'x') {
+  let base = String(raw || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+  if (!base) base = fallback;
+  if (/^[0-9]/.test(base)) base = `${fallback}_${base}`;
+  return base;
+}
+
+function _isabelleTheoryName(raw) {
+  const stem = path.basename(String(raw || 'RML_Export')).replace(/\.[^.]*$/, '');
+  const parts = stem
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1).replace(/([a-z0-9])([A-Z])/g, '$1_$2'));
+  let name = parts.length ? parts.join('_') : 'RML_Export';
+  name = name.replace(/[^A-Za-z0-9_]/g, '_');
+  if (!/^[A-Z]/.test(name)) name = `RML_${name}`;
+  return name;
+}
+
+class IsabelleExportContext {
+  constructor(options = {}) {
+    this.theoryName = options.theoryName || _isabelleTheoryName(options.outputFile || options.file || 'RML_Export');
+    this.sourceFile = options.file || null;
+    this.typeNames = new Map();
+    this.termNames = new Map();
+    this.usedTypeNames = new Map();
+    this.usedTermNames = new Map();
+    this.typeDecls = [];
+    this.typeDeclSet = new Set();
+    this.datatypes = [];
+    this.datatypeNames = new Set();
+    this.datatypeConstructors = new Set();
+    this.consts = [];
+    this.constNames = new Set();
+    this.definitions = [];
+    this.definitionNames = new Set();
+    this.termTypes = new Map();
+  }
+
+  makeUnique(original, base, used) {
+    if (used.has(base) && used.get(base) === original) return base;
+    let candidate = base;
+    let index = 2;
+    while (used.has(candidate) && used.get(candidate) !== original) {
+      candidate = `${base}_${index}`;
+      index++;
+    }
+    used.set(candidate, original);
+    return candidate;
+  }
+
+  typeName(name) {
+    if (name === 'Prop') return 'bool';
+    if (this.typeNames.has(name)) return this.typeNames.get(name);
+    const base = `rml_${_isabelleBaseName(name, 'type')}`;
+    const unique = this.makeUnique(name, base, this.usedTypeNames);
+    this.typeNames.set(name, unique);
+    return unique;
+  }
+
+  termName(name) {
+    if (this.termNames.has(name)) return this.termNames.get(name);
+    const base = `rml_${_isabelleBaseName(name, 'term')}`;
+    const unique = this.makeUnique(name, base, this.usedTermNames);
+    this.termNames.set(name, unique);
+    return unique;
+  }
+
+  localName(name) {
+    let base = _isabelleBaseName(name, 'x');
+    if (ISABELLE_RESERVED.has(base)) base = `x_${base}`;
+    return base;
+  }
+
+  ensureTypedecl(name) {
+    if (name === 'Type' || name === 'Prop') return;
+    if (!this.typeDeclSet.has(name)) {
+      this.typeDeclSet.add(name);
+      this.typeDecls.push(name);
+    }
+  }
+
+  addConst(name, typeNode) {
+    if (this.datatypeConstructors.has(name) || this.definitionNames.has(name)) return;
+    if (!this.constNames.has(name)) {
+      this.constNames.add(name);
+      this.consts.push({ name, typeNode });
+    }
+    this.termTypes.set(name, typeNode);
+  }
+
+  addDefinition(name, typeNode, valueNode) {
+    if (this.definitionNames.has(name)) {
+      throw new IsabelleExportError(`duplicate definition "${name}"`);
+    }
+    this.definitionNames.add(name);
+    this.termTypes.set(name, typeNode);
+    this.definitions.push({ name, typeNode, valueNode });
+  }
+
+  addDatatype(decl) {
+    if (this.datatypeNames.has(decl.name)) {
+      throw new IsabelleExportError(`duplicate datatype "${decl.name}"`);
+    }
+    this.datatypeNames.add(decl.name);
+    for (const ctor of decl.constructors) {
+      this.datatypeConstructors.add(ctor.name);
+      this.termTypes.set(ctor.name, ctor.type);
+    }
+    this.datatypes.push(decl);
+  }
+
+  typeExpr(node) {
+    if (typeof node === 'string') {
+      if (node === 'Type') {
+        throw new IsabelleExportError('universe Type is not an Isabelle/HOL value type', node);
+      }
+      this.ensureTypedecl(node);
+      return this.typeName(node);
+    }
+    if (!Array.isArray(node)) {
+      throw new IsabelleExportError('unsupported type expression', node);
+    }
+    if (_isUniverseAnnotation(node)) {
+      throw new IsabelleExportError('universe levels cannot be exported as HOL value types', node);
+    }
+    if (node.length === 1 && node[0] === 'Prop') return 'bool';
+    if (node.length === 3 && node[0] === 'Pi') {
+      const binding = parseBinding(node[1]);
+      if (!binding) {
+        throw new IsabelleExportError('malformed Pi binder', node);
+      }
+      if (_nodeContainsSymbol(node[2], binding.paramName)) {
+        throw new IsabelleExportError(
+          `dependent Pi codomain mentions "${binding.paramName}", which is outside the Isabelle/HOL exporter subset`,
+          node,
+        );
+      }
+      const domain = this.typeExpr(binding.paramType);
+      const codomain = this.typeExpr(node[2]);
+      const left = Array.isArray(binding.paramType) &&
+        binding.paramType.length === 3 &&
+        binding.paramType[0] === 'Pi'
+        ? `(${domain})`
+        : domain;
+      return `${left} => ${codomain}`;
+    }
+    throw new IsabelleExportError('unsupported type expression', node);
+  }
+
+  inferTermType(node, locals = new Map()) {
+    if (typeof node === 'string') {
+      if (locals.has(node)) return locals.get(node).typeNode;
+      if (this.termTypes.has(node)) return this.termTypes.get(node);
+      throw new IsabelleExportError(`cannot infer type of "${node}"`, node);
+    }
+    if (!Array.isArray(node)) {
+      throw new IsabelleExportError('cannot infer type of term', node);
+    }
+    if (node.length === 3 && node[0] === 'lambda') {
+      const binding = parseBinding(node[1]);
+      if (!binding) throw new IsabelleExportError('malformed lambda binder', node);
+      const nextLocals = new Map(locals);
+      nextLocals.set(binding.paramName, {
+        typeNode: binding.paramType,
+        localName: this.localName(binding.paramName),
+      });
+      return ['Pi', [binding.paramType, binding.paramName], this.inferTermType(node[2], nextLocals)];
+    }
+    if (node.length === 3 && node[0] === 'apply') {
+      const fnType = this.inferTermType(node[1], locals);
+      const flat = _flattenPi(fnType);
+      if (!flat || flat.params.length === 0) {
+        throw new IsabelleExportError('application head does not have a Pi type', node);
+      }
+      return _buildPi(flat.params.slice(1), flat.result);
+    }
+    if (node.length > 0 && typeof node[0] === 'string') {
+      const fnType = this.termTypes.get(node[0]);
+      const flat = fnType ? _flattenPi(fnType) : null;
+      if (flat && flat.params.length >= node.length - 1) {
+        return _buildPi(flat.params.slice(node.length - 1), flat.result);
+      }
+    }
+    throw new IsabelleExportError('cannot infer type of term', node);
+  }
+
+  termExpr(node, locals = new Map()) {
+    if (typeof node === 'string') {
+      if (isNum(node)) return node;
+      if (locals.has(node)) return locals.get(node).localName;
+      return this.termName(node);
+    }
+    if (!Array.isArray(node)) {
+      throw new IsabelleExportError('unsupported term expression', node);
+    }
+    if (node.length === 3 && node[0] === 'lambda') {
+      const binding = parseBinding(node[1]);
+      if (!binding) throw new IsabelleExportError('malformed lambda binder', node);
+      const localName = this.localName(binding.paramName);
+      const nextLocals = new Map(locals);
+      nextLocals.set(binding.paramName, { typeNode: binding.paramType, localName });
+      return `(%${localName}. ${this.termExpr(node[2], nextLocals)})`;
+    }
+    if (node.length === 3 && node[0] === 'apply') {
+      return `(${this.termExpr(node[1], locals)} ${this.termExpr(node[2], locals)})`;
+    }
+    if (node.length === 3 && node[1] === '=') {
+      return `(${this.termExpr(node[0], locals)} = ${this.termExpr(node[2], locals)})`;
+    }
+    if (node.length > 0) {
+      const parts = node.map(part => this.termExpr(part, locals));
+      return `(${parts.join(' ')})`;
+    }
+    throw new IsabelleExportError('empty term expression', node);
+  }
+
+  processDefinition(head, rhs, node) {
+    if (head === 'range' || head === 'valence' || _isOperatorHead(head)) {
+      throw new IsabelleExportError('probabilistic configuration and operator definitions are outside the Isabelle exporter subset', node);
+    }
+    if (rhs.length === 1 && isNum(rhs[0])) {
+      throw new IsabelleExportError('symbol probability priors are outside the Isabelle exporter subset', node);
+    }
+    if (_isTypeSelfDeclaration(head, rhs)) {
+      if (head !== 'Type') this.ensureTypedecl(head);
+      return;
+    }
+    if (_isTypedSelfDeclaration(head, rhs)) {
+      this.addConst(head, rhs[0]);
+      return;
+    }
+    if (rhs.length === 1 && Array.isArray(rhs[0])) {
+      this.addConst(head, rhs[0]);
+      return;
+    }
+    if (rhs.length === 3 && rhs[0] === 'lambda') {
+      const typeNode = this.inferTermType(rhs);
+      this.addDefinition(head, typeNode, rhs);
+      return;
+    }
+    throw new IsabelleExportError('unsupported top-level definition form', node);
+  }
+
+  processForm(rawForm) {
+    let node = rawForm;
+    while (Array.isArray(node) && node.length === 1 && Array.isArray(node[0])) {
+      node = node[0];
+    }
+    if (!Array.isArray(node) || node.length === 0) return;
+    if (_isProbabilisticAssignment(node)) {
+      throw new IsabelleExportError('probability assignments are outside the Isabelle exporter subset', node);
+    }
+    if (node[0] === '?' || _isUniverseAnnotation(node)) return;
+    if (node[0] === 'inductive') {
+      this.addDatatype(parseInductiveForm(node));
+      return;
+    }
+    if (typeof node[0] === 'string' && node[0].endsWith(':')) {
+      this.processDefinition(node[0].slice(0, -1), node.slice(1), node);
+      return;
+    }
+    throw new IsabelleExportError('unsupported top-level form', node);
+  }
+
+  renderTypedecls() {
+    const lines = [];
+    for (const name of this.typeDecls) {
+      if (this.datatypeNames.has(name)) continue;
+      lines.push(`typedecl ${this.typeName(name)}`);
+    }
+    return lines;
+  }
+
+  renderDatatypes() {
+    const sections = [];
+    for (const decl of this.datatypes) {
+      const lines = [`datatype ${this.typeName(decl.name)} =`];
+      decl.constructors.forEach((ctor, index) => {
+        const args = ctor.params.map(param => this.typeExpr(param.type));
+        const rhs = [this.termName(ctor.name), ...args].join(' ');
+        lines.push(`  ${index === 0 ? '' : '| '}${rhs}`);
+      });
+      sections.push(lines.join('\n'));
+    }
+    return sections;
+  }
+
+  renderConsts() {
+    const lines = [];
+    for (const decl of this.consts) {
+      if (this.datatypeConstructors.has(decl.name) || this.definitionNames.has(decl.name)) continue;
+      lines.push(`  ${this.termName(decl.name)} :: "${_escapeIsabelleString(this.typeExpr(decl.typeNode))}"`);
+    }
+    return lines.length ? ['consts', ...lines] : [];
+  }
+
+  renderDefinitions() {
+    const sections = [];
+    for (const decl of this.definitions) {
+      const name = this.termName(decl.name);
+      const type = _escapeIsabelleString(this.typeExpr(decl.typeNode));
+      const body = _escapeIsabelleString(this.termExpr(decl.valueNode));
+      sections.push(`definition ${name} :: "${type}" where\n  "${name} = ${body}"`);
+    }
+    return sections;
+  }
+
+  render() {
+    const bodySections = [];
+    const typedecls = this.renderTypedecls();
+    if (typedecls.length) bodySections.push(typedecls.join('\n'));
+    const datatypes = this.renderDatatypes();
+    bodySections.push(...datatypes);
+    const consts = this.renderConsts();
+    if (consts.length) bodySections.push(consts.join('\n'));
+    bodySections.push(...this.renderDefinitions());
+
+    const lines = [
+      `theory ${this.theoryName}`,
+      '  imports Main',
+      'begin',
+      '',
+      '(* Generated by RML Isabelle exporter. *)',
+    ];
+    if (this.sourceFile) {
+      lines.push(`(* Source: ${_escapeIsabelleString(this.sourceFile)} *)`);
+    }
+    if (bodySections.length) {
+      lines.push('', bodySections.join('\n\n'));
+    }
+    lines.push('', 'end', '');
+    return lines.join('\n');
+  }
+}
+
+function exportIsabelle(sourceText, options = {}) {
+  const ctx = new IsabelleExportContext(options);
+  let forms;
+  try {
+    forms = parseLinoForms(sourceText);
+  } catch (err) {
+    throw new IsabelleExportError(`LiNo parse failure: ${err && err.message ? err.message : String(err)}`);
+  }
+  for (const form of forms) ctx.processForm(form);
+  return ctx.render();
+}
+
 // ---------- Runner ----------
 function run(text, options){
   return evaluate(text, options).results;
@@ -4826,6 +5240,10 @@ function run(text, options){
 // CLI (runs only when invoked directly, not when imported as a library).
 // The REPL subcommand lives in `./rml-repl.mjs` so we can `await import` it
 // without triggering an ESM circular-dependency deadlock.
+function _printMainUsage() {
+  console.error('Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export <lean|rocq|isabelle> <file.lino> [-o <file>] [--theory <Name>]');
+}
+
 async function runCli() {
   const argv = process.argv.slice(2);
   let trace = false;
@@ -4836,8 +5254,12 @@ async function runCli() {
   }
   const arg = positionals[0];
   if (!arg) {
-    console.error('Usage: rml [--trace] <kb.lino>   |   rml repl');
+    _printMainUsage();
     process.exit(1);
+  }
+  if (arg === 'export') {
+    const status = await runExportCli(positionals.slice(1));
+    process.exit(status);
   }
   if (arg === 'repl') {
     const replUrl = new URL('./rml-repl.mjs', import.meta.url).href;
@@ -4863,6 +5285,71 @@ async function runCli() {
     console.error(formatDiagnostic(diag, text));
   }
   if (out.diagnostics.length > 0) process.exit(1);
+}
+
+async function runExportCli(args) {
+  const [target, input] = args;
+  if (args.length < 2 || (target !== 'lean' && target !== 'rocq' && target !== 'isabelle')) {
+    console.error('Usage: rml export <lean|rocq|isabelle> <file.lino> [-o <file>] [--theory <Name>]');
+    return 2;
+  }
+  let output = null;
+  let theoryName = null;
+  for (let i = 2; i < args.length; i++) {
+    if ((args[i] === '-o' || args[i] === '--output') && i + 1 < args.length) {
+      output = args[i + 1];
+      i++;
+      continue;
+    }
+    if (target === 'isabelle' && args[i] === '--theory' && i + 1 < args.length) {
+      theoryName = args[i + 1];
+      i++;
+      continue;
+    }
+    console.error(`Unknown export option: ${args[i]}`);
+    console.error(`Usage: rml export ${target} <file.lino> [-o <file>]${target === 'isabelle' ? ' [--theory <Name>]' : ''}`);
+    return 2;
+  }
+  if (target === 'lean' && !output) {
+    console.error('Usage: rml export lean <file.lino> -o <file.lean>');
+    return 2;
+  }
+  let text;
+  try {
+    text = fs.readFileSync(input, 'utf8');
+  } catch (err) {
+    console.error(`Error reading ${input}: ${err.message}`);
+    return 1;
+  }
+  let rendered;
+  if (target === 'lean') {
+    const { exportLean } = await import(new URL('./lean-export.mjs', import.meta.url).href);
+    const out = exportLean(text, { file: input });
+    if (out.diagnostics.length > 0) {
+      for (const diag of out.diagnostics) {
+        console.error(formatDiagnostic(diag, text));
+      }
+      return 1;
+    }
+    rendered = out.source;
+  } else if (target === 'rocq') {
+    const { exportRocq } = await import(new URL('./rml-rocq.mjs', import.meta.url).href);
+    rendered = exportRocq(text, { sourcePath: input });
+  } else {
+    rendered = exportIsabelle(text, {
+      file: input,
+      outputFile: output,
+      theoryName: theoryName || _isabelleTheoryName(output || input),
+    });
+  }
+  try {
+    if (output) fs.writeFileSync(output, rendered, 'utf8');
+    else process.stdout.write(rendered);
+  } catch (err) {
+    console.error(`Error writing ${output}: ${err.message}`);
+    return 1;
+  }
+  return 0;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -4917,4 +5404,5 @@ export {
   decideAutomaticSequenceTheorem,
   formalizeSelectedInterpretation,
   evaluateFormalization,
+  exportIsabelle,
 };

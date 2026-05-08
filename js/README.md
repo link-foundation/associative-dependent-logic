@@ -21,6 +21,14 @@ npm install
 node src/rml-links.mjs <file.lino>
 ```
 
+### Exporting Lean 4
+
+```bash
+node src/rml-links.mjs export lean ../examples/lean-export-basic.lino -o out.lean
+```
+
+The supported subset is documented in [`../docs/LEAN_EXPORT.md`](../docs/LEAN_EXPORT.md).
+
 The shared examples live at the repo root in [`/examples/`](../examples/) and
 both implementations are required to produce identical output for every file
 there. To run one:
@@ -34,6 +42,24 @@ Or use the npm script (runs `../examples/demo.lino`):
 ```bash
 npm run demo
 ```
+
+### Exporting Isabelle/HOL
+
+```bash
+node src/rml-links.mjs export isabelle ../examples/isabelle-typed-fragment.lino -o Isabelle_Typed_Fragment.thy
+```
+
+The supported subset is documented in
+[`../docs/ISABELLE-EXPORT.md`](../docs/ISABELLE-EXPORT.md).
+
+### Exporting Rocq source
+
+```bash
+node src/rml-links.mjs export rocq ../examples/dependent-types.lino -o dependent_types.v
+```
+
+See [`../docs/ROCQ-EXPORT.md`](../docs/ROCQ-EXPORT.md) for the supported
+typed subset.
 
 ### Example
 
@@ -79,7 +105,9 @@ import {
   substitute,
   formalizeSelectedInterpretation,
   evaluateFormalization,
+  exportIsabelle,
 } from './src/rml-links.mjs';
+import { exportLean } from './src/lean-export.mjs';
 
 // Run a complete LiNo knowledge base
 const results = run(linoText);
