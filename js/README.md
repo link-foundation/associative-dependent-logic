@@ -43,6 +43,15 @@ Or use the npm script (runs `../examples/demo.lino`):
 npm run demo
 ```
 
+### Exporting Rocq source
+
+```bash
+node src/rml-links.mjs export rocq ../examples/dependent-types.lino -o dependent_types.v
+```
+
+See [`../docs/ROCQ-EXPORT.md`](../docs/ROCQ-EXPORT.md) for the supported
+typed subset.
+
 ### Example
 
 ```lino

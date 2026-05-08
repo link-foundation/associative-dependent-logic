@@ -43,6 +43,15 @@ Or after building:
 ./target/release/rml ../examples/classical-logic.lino
 ```
 
+### Exporting Rocq source
+
+```bash
+cargo run -- export rocq ../examples/dependent-types.lino -o dependent_types.v
+```
+
+See [`../docs/ROCQ-EXPORT.md`](../docs/ROCQ-EXPORT.md) for the supported
+typed subset.
+
 ### Example
 
 ```lino
