@@ -308,6 +308,9 @@ fn check_node(
     path: &[String],
 ) -> Result<String, CheckError> {
     let (rule, subs) = decode(proof, path)?;
+    if rule == "smt-trusted" {
+        return check_smt_trusted(&rule, subs, path);
+    }
     let exp = expected_rule(expr, ops, assigned);
     // For prefix-applied operators the kernel writes the op name itself
     // (e.g. `not`, `and`, custom `myop`); accept either the marker we
@@ -397,6 +400,21 @@ fn check_node(
         }),
         // Prefix operator named after the rule.
         _ => check_prefix(expr, &rule, subs, ops, assigned, &next_path, path),
+    }
+}
+
+fn check_smt_trusted(
+    rule: &str,
+    subs: &[Node],
+    path: &[String],
+) -> Result<String, CheckError> {
+    arity(rule, subs, 1, path)?;
+    match &subs[0] {
+        Node::Leaf(solver) if !solver.is_empty() => Ok(rule.to_string()),
+        _ => Err(err(
+            path,
+            "`smt-trusted` expects a solver name payload".to_string(),
+        )),
     }
 }
 

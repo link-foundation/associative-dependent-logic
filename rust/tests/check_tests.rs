@@ -40,6 +40,14 @@ fn replays_structural_equality_witness() {
 }
 
 #[test]
+fn accepts_explicit_trusted_smt_decision_node() {
+    let r = check_program("(? (a = a))", "(by smt-trusted z3)");
+    assert!(r.is_ok(), "{:?}", r);
+    assert_eq!(r.ok.len(), 1);
+    assert_eq!(r.ok[0].rule, "smt-trusted");
+}
+
+#[test]
 fn matches_proofs_emitted_by_evaluator() {
     let program = [
         "(a: a is a)",

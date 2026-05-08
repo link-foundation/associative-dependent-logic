@@ -199,6 +199,7 @@ function prefixMarker(name) {
 // Walk both trees in lockstep and verify each level matches.
 function checkNode(expr, proof, ops, assigned, path) {
   const { rule, subs } = decode(proof, path);
+  if (rule === 'smt-trusted') return checkSmtTrusted(rule, subs, path);
   const exp = expectedRule(expr, ops, assigned);
   const ruleOk = rule === exp || prefixMatch(rule, expr, ops);
   if (!ruleOk) {
@@ -299,6 +300,17 @@ function checkNode(expr, proof, ops, assigned, path) {
     default:
       return checkPrefix(expr, rule, subs, ops, assigned, nextPath, path);
   }
+}
+
+function checkSmtTrusted(rule, subs, path) {
+  arity(rule, subs, 1, path);
+  if (typeof subs[0] !== 'string' || subs[0].length === 0) {
+    throw {
+      path: [...path],
+      message: '`smt-trusted` expects a solver name payload',
+    };
+  }
+  return rule;
 }
 
 function arity(rule, subs, n, path) {

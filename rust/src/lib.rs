@@ -10,11 +10,18 @@
 // - Valence: (valence: N) to restrict truth values to N discrete levels (N=2 → Boolean, N=3 → ternary, etc.)
 // - Query: (? <expr>)
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
+use std::io::{Read, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread::{self, sleep, JoinHandle};
+use std::time::{Duration, Instant};
+
+pub mod lean_export;
+pub use lean_export::{export_lean, lean_ident, LeanExportResult};
 
 // ========== Structured Diagnostics ==========
 // Every parser/evaluator error is reported as a `Diagnostic` with an error
@@ -701,6 +708,19 @@ pub struct TemplateDecl {
     pub body: Node,
 }
 
+/// A domain plugin receives the body of `(domain <name> ...)` and mutates the
+/// evaluator environment with any decisions it can certify.
+pub type DomainPluginFn = fn(&[Node], &mut Env) -> Result<(), String>;
+
+/// Decision record produced by the built-in automatic-sequences plugin.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutomaticSequenceDecision {
+    pub theorem: String,
+    pub value: bool,
+    pub method: String,
+    pub certificate: Node,
+}
+
 /// The evaluation environment: holds terms, assignments, operators, and range/valence config.
 pub struct Env {
     pub terms: HashSet<String>,
@@ -772,6 +792,13 @@ pub struct Env {
     /// recursive argument so non-productive types (which cannot generate
     /// any infinite values) are rejected up front.
     pub coinductives: HashMap<String, CoinductiveDecl>,
+    /// Domain plugins (issue #63): domain-specific decision procedures keyed
+    /// by `(domain <name> ...)`. The default registry ships the
+    /// automatic-sequences plugin below; callers may register additional
+    /// function-pointer plugins on their Env instance.
+    pub domain_plugins: HashMap<String, DomainPluginFn>,
+    /// Decisions recorded by the built-in automatic-sequences plugin.
+    pub automatic_sequence_decisions: HashMap<String, AutomaticSequenceDecision>,
 }
 
 /// One constructor of an inductive datatype.
@@ -915,6 +942,8 @@ impl Env {
             inductives: HashMap::new(),
             definitions: HashMap::new(),
             coinductives: HashMap::new(),
+            domain_plugins: HashMap::new(),
+            automatic_sequence_decisions: HashMap::new(),
         };
 
         // Initialize truth constants: true, false, unknown, undefined
@@ -923,6 +952,7 @@ impl Env {
         //             (unknown: mid(range)), (undefined: mid(range))
         // They can be redefined by the user via (true: <value>), (false: <value>), etc.
         env.init_truth_constants();
+        env.register_domain_plugin("automatic-sequences", automatic_sequences_domain_plugin);
         env
     }
 
@@ -961,6 +991,14 @@ impl Env {
 
     pub fn define_op(&mut self, name: &str, op: Op) {
         self.ops.insert(name.to_string(), op);
+    }
+
+    pub fn register_domain_plugin(&mut self, name: &str, plugin: DomainPluginFn) {
+        self.domain_plugins.insert(name.to_string(), plugin);
+    }
+
+    pub fn get_domain_plugin(&self, name: &str) -> Option<DomainPluginFn> {
+        self.domain_plugins.get(name).copied()
     }
 
     pub fn get_op(&self, name: &str) -> Option<&Op> {
@@ -3422,6 +3460,11 @@ pub struct TacticRunResult {
 }
 
 const DEFAULT_SIMPLIFY_MAX_STEPS: usize = 100;
+const DEFAULT_ATP_TIMEOUT_MS: u64 = 5000;
+const DEFAULT_SMT_TIMEOUT_MS: u64 = 5000;
+const ATP_PROVED_STATUSES: &[&str] = &["Theorem", "Unsatisfiable", "ContradictoryAxioms"];
+const ATP_UNKNOWN_STATUSES: &[&str] = &["Unknown", "GaveUp"];
+const ATP_TIMEOUT_STATUSES: &[&str] = &["Timeout", "ResourceOut"];
 
 /// Direction for applying an equality rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3483,11 +3526,51 @@ pub struct SimplifyResult {
     pub steps: usize,
 }
 
+/// Configured external ATP invocation for the `(by atp)` tactic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtpOptions {
+    pub path: Option<String>,
+    pub args: Vec<String>,
+    pub name: Option<String>,
+    pub timeout_ms: u64,
+}
+
+impl Default for AtpOptions {
+    fn default() -> Self {
+        Self {
+            path: None,
+            args: Vec::new(),
+            name: None,
+            timeout_ms: DEFAULT_ATP_TIMEOUT_MS,
+        }
+    }
+}
+
+/// High-level classification of a parsed SZS ATP status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AtpStatusKind {
+    Proved,
+    Unknown,
+    Timeout,
+    Failure,
+}
+
+/// Parsed SZS status line from an ATP.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtpStatus {
+    pub status: String,
+    pub kind: AtpStatusKind,
+}
+
 /// Options supplied to tactic execution.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TacticOptions {
     pub rewrite_rules: Vec<Node>,
     pub simplify_max_steps: usize,
+    pub atp: AtpOptions,
+    pub smt_solver: Option<String>,
+    pub smt_solver_args: Vec<String>,
+    pub smt_timeout_ms: u64,
 }
 
 impl Default for TacticOptions {
@@ -3495,6 +3578,20 @@ impl Default for TacticOptions {
         Self {
             rewrite_rules: Vec::new(),
             simplify_max_steps: DEFAULT_SIMPLIFY_MAX_STEPS,
+            atp: AtpOptions::default(),
+            smt_solver: std::env::var("RML_SMT_SOLVER").ok(),
+            smt_solver_args: std::env::var("RML_SMT_ARGS")
+                .ok()
+                .map(|args| {
+                    args.split_whitespace()
+                        .map(|arg| arg.to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            smt_timeout_ms: std::env::var("RML_SMT_TIMEOUT_MS")
+                .ok()
+                .and_then(|raw| raw.parse::<u64>().ok())
+                .unwrap_or(DEFAULT_SMT_TIMEOUT_MS),
         }
     }
 }
@@ -3570,6 +3667,866 @@ fn replace_current_goal(
 
 fn rewrite_diagnostic(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new("E039", message, Span::unknown())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmtSort {
+    Bool,
+    Real,
+}
+
+impl SmtSort {
+    fn as_str(self) -> &'static str {
+        match self {
+            SmtSort::Bool => "Bool",
+            SmtSort::Real => "Real",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct SmtContext {
+    declarations: BTreeMap<String, SmtSort>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmtStatus {
+    Unsat,
+    Sat,
+    Unknown,
+    Timeout,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SmtRunResult {
+    status: SmtStatus,
+    reason: String,
+}
+
+fn smt_escape_symbol(raw: &str) -> String {
+    format!("|{}|", raw.replace('\\', "\\\\").replace('|', "\\|"))
+}
+
+fn smt_declare(ctx: &mut SmtContext, raw: String, sort: SmtSort) -> Result<String, String> {
+    if let Some(existing) = ctx.declarations.get(&raw) {
+        if *existing != sort {
+            return Err(format!(
+                "SMT symbol {} is used as both {} and {}",
+                raw,
+                existing.as_str(),
+                sort.as_str()
+            ));
+        }
+    }
+    ctx.declarations.insert(raw.clone(), sort);
+    Ok(smt_escape_symbol(&raw))
+}
+
+fn smt_number(raw: &str) -> String {
+    if let Some(rest) = raw.strip_prefix('-') {
+        format!("(- {})", rest)
+    } else {
+        raw.to_string()
+    }
+}
+
+fn smt_infix<'a>(node: &'a Node, operators: &[&str]) -> Option<&'a str> {
+    let Node::List(children) = node else {
+        return None;
+    };
+    if children.len() != 3 {
+        return None;
+    }
+    let Node::Leaf(op) = &children[1] else {
+        return None;
+    };
+    if operators.contains(&op.as_str()) {
+        Some(op.as_str())
+    } else {
+        None
+    }
+}
+
+fn smt_is_boolish(node: &Node) -> bool {
+    match node {
+        Node::Leaf(s) => s == "true" || s == "false",
+        Node::List(children) => {
+            if children.is_empty() {
+                return false;
+            }
+            if smt_infix(node, &["=", "!=", "and", "or", "=>", "implies"]).is_some() {
+                return true;
+            }
+            matches!(
+                &children[0],
+                Node::Leaf(head)
+                    if matches!(head.as_str(), "not" | "and" | "or" | "=>" | "implies")
+            )
+        }
+    }
+}
+
+fn smt_term(node: &Node, ctx: &mut SmtContext) -> Result<String, String> {
+    match node {
+        Node::Leaf(s) => {
+            if is_num(s) {
+                return Ok(smt_number(s));
+            }
+            if s == "true" || s == "false" {
+                return Err(format!(
+                    "SMT bridge cannot use Boolean constant {} as a Real term",
+                    s
+                ));
+            }
+            smt_declare(ctx, s.clone(), SmtSort::Real)
+        }
+        Node::List(children) => {
+            if children.is_empty() {
+                return Err(format!("SMT bridge cannot translate term {}", key_of(node)));
+            }
+            if let Some(op) = smt_infix(node, &["+", "-", "*", "/"]) {
+                return Ok(format!(
+                    "({} {} {})",
+                    op,
+                    smt_term(&children[0], ctx)?,
+                    smt_term(&children[2], ctx)?
+                ));
+            }
+            if let Node::Leaf(head) = &children[0] {
+                if ["+", "-", "*", "/"].contains(&head.as_str()) && children.len() >= 3 {
+                    let args = children[1..]
+                        .iter()
+                        .map(|arg| smt_term(arg, ctx))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(format!("({} {})", head, args.join(" ")));
+                }
+            }
+            smt_declare(ctx, key_of(node), SmtSort::Real)
+        }
+    }
+}
+
+fn smt_equality(left: &Node, right: &Node, ctx: &mut SmtContext) -> Result<String, String> {
+    if smt_is_boolish(left) || smt_is_boolish(right) {
+        return Ok(format!(
+            "(= {} {})",
+            smt_formula(left, ctx)?,
+            smt_formula(right, ctx)?
+        ));
+    }
+    Ok(format!(
+        "(= {} {})",
+        smt_term(left, ctx)?,
+        smt_term(right, ctx)?
+    ))
+}
+
+fn smt_formula(node: &Node, ctx: &mut SmtContext) -> Result<String, String> {
+    match node {
+        Node::Leaf(s) => {
+            if s == "true" {
+                return Ok("true".to_string());
+            }
+            if s == "false" {
+                return Ok("false".to_string());
+            }
+            if is_num(s) {
+                return Err(format!(
+                    "SMT bridge cannot use numeric literal {} as a Boolean formula",
+                    s
+                ));
+            }
+            smt_declare(ctx, s.clone(), SmtSort::Bool)
+        }
+        Node::List(children) => {
+            if children.is_empty() {
+                return Err(format!("SMT bridge cannot translate formula {}", key_of(node)));
+            }
+            match smt_infix(node, &["=", "!=", "and", "or", "=>", "implies"]) {
+                Some("=") => return smt_equality(&children[0], &children[2], ctx),
+                Some("!=") => {
+                    return Ok(format!(
+                        "(not {})",
+                        smt_equality(&children[0], &children[2], ctx)?
+                    ));
+                }
+                Some("and") | Some("or") => {
+                    let op = smt_infix(node, &["and", "or"]).unwrap();
+                    return Ok(format!(
+                        "({} {} {})",
+                        op,
+                        smt_formula(&children[0], ctx)?,
+                        smt_formula(&children[2], ctx)?
+                    ));
+                }
+                Some("=>") | Some("implies") => {
+                    return Ok(format!(
+                        "(=> {} {})",
+                        smt_formula(&children[0], ctx)?,
+                        smt_formula(&children[2], ctx)?
+                    ));
+                }
+                _ => {}
+            }
+
+            if let Node::Leaf(head) = &children[0] {
+                match head.as_str() {
+                    "not" if children.len() == 2 => {
+                        return Ok(format!("(not {})", smt_formula(&children[1], ctx)?));
+                    }
+                    "and" | "or" => {
+                        if children.len() == 1 {
+                            return Ok(if head == "and" {
+                                "true".to_string()
+                            } else {
+                                "false".to_string()
+                            });
+                        }
+                        let args = children[1..]
+                            .iter()
+                            .map(|arg| smt_formula(arg, ctx))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        return Ok(format!("({} {})", head, args.join(" ")));
+                    }
+                    "=>" | "implies" if children.len() == 3 => {
+                        return Ok(format!(
+                            "(=> {} {})",
+                            smt_formula(&children[1], ctx)?,
+                            smt_formula(&children[2], ctx)?
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+
+            smt_declare(ctx, key_of(node), SmtSort::Bool)
+        }
+    }
+}
+
+fn smt_lib_for_goal(goal: &Node) -> Result<String, String> {
+    let mut ctx = SmtContext::default();
+    let formula = smt_formula(goal, &mut ctx)?;
+    let mut lines = Vec::new();
+    for (name, sort) in ctx.declarations {
+        lines.push(format!(
+            "(declare-const {} {})",
+            smt_escape_symbol(&name),
+            sort.as_str()
+        ));
+    }
+    lines.push(format!("(assert (not {}))", formula));
+    lines.push("(check-sat)".to_string());
+    lines.push("(exit)".to_string());
+    lines.push(String::new());
+    Ok(lines.join("\n"))
+}
+
+fn smt_solver_proof_name(options: &TacticOptions) -> String {
+    let Some(solver) = options.smt_solver.as_deref() else {
+        return "unconfigured".to_string();
+    };
+    let base = Path::new(solver)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(solver);
+    let safe: String = base
+        .chars()
+        .map(|c| if c.is_whitespace() { '_' } else { c })
+        .collect();
+    if safe.is_empty() {
+        "solver".to_string()
+    } else {
+        safe
+    }
+}
+
+fn smt_trusted_node(options: &TacticOptions) -> Node {
+    Node::List(vec![
+        leaf("by"),
+        leaf("smt-trusted"),
+        Node::Leaf(smt_solver_proof_name(options)),
+    ])
+}
+
+fn smt_process_summary(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr_text = String::from_utf8_lossy(stderr);
+    let stdout_text = String::from_utf8_lossy(stdout);
+    let text = if stderr_text.trim().is_empty() {
+        stdout_text.trim()
+    } else {
+        stderr_text.trim()
+    };
+    if text.is_empty() {
+        return "<no output>".to_string();
+    }
+    let first = text.lines().next().unwrap_or(text);
+    if first.chars().count() > 200 {
+        format!("{}...", first.chars().take(200).collect::<String>())
+    } else {
+        first.to_string()
+    }
+}
+
+fn parse_smt_check_sat(stdout: &[u8], stderr: &[u8]) -> Option<SmtStatus> {
+    let stdout_text = String::from_utf8_lossy(stdout);
+    let stderr_text = String::from_utf8_lossy(stderr);
+    for line in stdout_text.lines().chain(stderr_text.lines()) {
+        match line.trim() {
+            "unsat" => return Some(SmtStatus::Unsat),
+            "sat" => return Some(SmtStatus::Sat),
+            "unknown" => return Some(SmtStatus::Unknown),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn run_smt_solver(smt_lib: &str, options: &TacticOptions) -> SmtRunResult {
+    let Some(solver) = options
+        .smt_solver
+        .as_deref()
+        .filter(|solver| !solver.trim().is_empty())
+    else {
+        return SmtRunResult {
+            status: SmtStatus::Error,
+            reason: "SMT solver path is not configured".to_string(),
+        };
+    };
+    let solver_name = smt_solver_proof_name(options);
+    let mut child = match Command::new(solver)
+        .args(&options.smt_solver_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            return SmtRunResult {
+                status: SmtStatus::Error,
+                reason: format!("SMT solver {} failed to start: {}", solver_name, err),
+            };
+        }
+    };
+
+    let mut stdin_error = None;
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(err) = stdin.write_all(smt_lib.as_bytes()) {
+            stdin_error = Some(err.to_string());
+        }
+    }
+
+    let started = Instant::now();
+    let timeout = Duration::from_millis(options.smt_timeout_ms);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let output = match child.wait_with_output() {
+                    Ok(output) => output,
+                    Err(err) => {
+                        return SmtRunResult {
+                            status: SmtStatus::Error,
+                            reason: format!(
+                                "SMT solver {} output collection failed: {}",
+                                solver_name, err
+                            ),
+                        };
+                    }
+                };
+                if !output.status.success() {
+                    return SmtRunResult {
+                        status: SmtStatus::Error,
+                        reason: format!(
+                            "SMT solver {} exited with status {}: {}",
+                            solver_name,
+                            output.status,
+                            smt_process_summary(&output.stdout, &output.stderr)
+                        ),
+                    };
+                }
+                let Some(status) = parse_smt_check_sat(&output.stdout, &output.stderr) else {
+                    let reason = stdin_error
+                        .map(|err| {
+                            format!(
+                                "SMT solver {} did not accept SMT-LIB input: {}",
+                                solver_name, err
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            format!(
+                                "SMT solver {} did not return sat, unsat, or unknown",
+                                solver_name
+                            )
+                        });
+                    return SmtRunResult {
+                        status: SmtStatus::Error,
+                        reason,
+                    };
+                };
+                return SmtRunResult {
+                    status,
+                    reason: format!(
+                        "SMT solver {} returned {}",
+                        solver_name,
+                        match status {
+                            SmtStatus::Unsat => "unsat",
+                            SmtStatus::Sat => "sat",
+                            SmtStatus::Unknown => "unknown",
+                            SmtStatus::Timeout | SmtStatus::Error => unreachable!(),
+                        }
+                    ),
+                };
+            }
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return SmtRunResult {
+                        status: SmtStatus::Timeout,
+                        reason: format!(
+                            "SMT solver {} timed out after {} ms",
+                            solver_name, options.smt_timeout_ms
+                        ),
+                    };
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => {
+                return SmtRunResult {
+                    status: SmtStatus::Error,
+                    reason: format!("SMT solver {} wait failed: {}", solver_name, err),
+                };
+            }
+        }
+    }
+}
+
+fn tptp_identifier(raw: &str, role: &str) -> String {
+    let mut cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        cleaned = if role == "var" {
+            "X".to_string()
+        } else {
+            "rml_symbol".to_string()
+        };
+    }
+    if role == "var" {
+        let mut chars = cleaned.chars();
+        if let Some(first) = chars.next() {
+            cleaned = first.to_ascii_uppercase().to_string() + chars.as_str();
+        }
+        if !cleaned
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_uppercase())
+            .unwrap_or(false)
+        {
+            cleaned = format!("V_{}", cleaned);
+        }
+        return cleaned;
+    }
+    cleaned = cleaned.to_ascii_lowercase();
+    if !cleaned
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_lowercase())
+        .unwrap_or(false)
+    {
+        cleaned = format!("rml_{}", cleaned);
+    }
+    cleaned
+}
+
+fn tptp_term(node: &Node, bound_vars: &HashSet<String>) -> Result<String, Diagnostic> {
+    match node {
+        Node::Leaf(raw) => {
+            if bound_vars.contains(raw) {
+                Ok(tptp_identifier(raw, "var"))
+            } else if is_num(raw) {
+                Ok(tptp_identifier(&format!("num_{}", raw), "term"))
+            } else {
+                Ok(tptp_identifier(raw, "term"))
+            }
+        }
+        Node::List(children) if !children.is_empty() => {
+            let Node::Leaf(head) = &children[0] else {
+                return Err(rewrite_diagnostic(format!(
+                    "TPTP export supports first-order terms only (got {})",
+                    key_of(node)
+                )));
+            };
+            let args = children[1..]
+                .iter()
+                .map(|arg| tptp_term(arg, bound_vars))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ");
+            Ok(format!("{}({})", tptp_identifier(head, "term"), args))
+        }
+        _ => Err(rewrite_diagnostic(format!(
+            "TPTP export supports first-order terms only (got {})",
+            key_of(node)
+        ))),
+    }
+}
+
+fn infix_operands<'a>(node: &'a Node, op: &str) -> Option<Vec<&'a Node>> {
+    let Node::List(children) = node else {
+        return None;
+    };
+    if children.len() < 3 || children.len() % 2 == 0 {
+        return None;
+    }
+    let mut operands = Vec::new();
+    let mut index = 0;
+    while index < children.len() {
+        if index > 0 && !matches!(&children[index - 1], Node::Leaf(mid) if mid == op) {
+            return None;
+        }
+        operands.push(&children[index]);
+        index += 2;
+    }
+    Some(operands)
+}
+
+fn tptp_join_formula(
+    op: &str,
+    operands: &[&Node],
+    bound_vars: &HashSet<String>,
+) -> Result<String, Diagnostic> {
+    let parts = operands
+        .iter()
+        .map(|part| tptp_formula(part, bound_vars).map(|s| format!("({})", s)))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(parts.join(&format!(" {} ", op)))
+}
+
+fn quantifier_parts<'a>(node: &'a Node) -> Result<Option<(&'a str, String, &'a Node)>, Diagnostic> {
+    let Node::List(children) = node else {
+        return Ok(None);
+    };
+    if children.len() != 3 {
+        return Ok(None);
+    }
+    let Node::Leaf(head) = &children[0] else {
+        return Ok(None);
+    };
+    if head != "forall" && head != "exists" && head != "Pi" {
+        return Ok(None);
+    }
+    let Some((variable, _)) = parse_binding(&children[1]) else {
+        return Err(rewrite_diagnostic(format!(
+            "TPTP export could not parse quantifier binder {}",
+            key_of(&children[1])
+        )));
+    };
+    let quantifier = if head == "exists" { "?" } else { "!" };
+    Ok(Some((quantifier, variable, &children[2])))
+}
+
+fn tptp_formula(node: &Node, bound_vars: &HashSet<String>) -> Result<String, Diagnostic> {
+    match node {
+        Node::Leaf(raw) => {
+            if raw == "true" {
+                return Ok("$true".to_string());
+            }
+            if raw == "false" {
+                return Ok("$false".to_string());
+            }
+            if bound_vars.contains(raw) {
+                return Ok(tptp_identifier(raw, "var"));
+            }
+            return Ok(tptp_identifier(raw, "pred"));
+        }
+        Node::List(children) if children.is_empty() => {
+            return Err(rewrite_diagnostic(format!(
+                "TPTP export supports first-order formulas only (got {})",
+                key_of(node)
+            )));
+        }
+        Node::List(_) => {}
+    }
+
+    if let Some((quantifier, variable, body)) = quantifier_parts(node)? {
+        let mut next_bound = bound_vars.clone();
+        next_bound.insert(variable.clone());
+        return Ok(format!(
+            "{}[{}] : ({})",
+            quantifier,
+            tptp_identifier(&variable, "var"),
+            tptp_formula(body, &next_bound)?
+        ));
+    }
+
+    if let Some((term, typ)) = type_ascription(node) {
+        return Ok(format!(
+            "{}({})",
+            tptp_identifier(&key_of(typ), "pred"),
+            tptp_term(term, bound_vars)?
+        ));
+    }
+
+    if let Some((left, right)) = as_equality(node) {
+        return Ok(format!(
+            "{} = {}",
+            tptp_term(left, bound_vars)?,
+            tptp_term(right, bound_vars)?
+        ));
+    }
+    if let Node::List(children) = node {
+        if children.len() == 3 && matches!(&children[1], Node::Leaf(op) if op == "!=") {
+            return Ok(format!(
+                "{} != {}",
+                tptp_term(&children[0], bound_vars)?,
+                tptp_term(&children[2], bound_vars)?
+            ));
+        }
+    }
+
+    if let Some(operands) = infix_operands(node, "and") {
+        return tptp_join_formula("&", &operands, bound_vars);
+    }
+    if let Some(operands) = infix_operands(node, "or") {
+        return tptp_join_formula("|", &operands, bound_vars);
+    }
+    if let Some(operands) = infix_operands(node, "=>").or_else(|| infix_operands(node, "implies")) {
+        if operands.len() == 2 {
+            return tptp_join_formula("=>", &operands, bound_vars);
+        }
+    }
+    if let Some(operands) = infix_operands(node, "<=>").or_else(|| infix_operands(node, "iff")) {
+        if operands.len() == 2 {
+            return tptp_join_formula("<=>", &operands, bound_vars);
+        }
+    }
+
+    let Node::List(children) = node else {
+        unreachable!();
+    };
+    let Node::Leaf(head) = &children[0] else {
+        return Err(rewrite_diagnostic(format!(
+            "TPTP export supports first-order formulas only (got {})",
+            key_of(node)
+        )));
+    };
+    match head.as_str() {
+        "not" if children.len() == 2 => {
+            Ok(format!("~({})", tptp_formula(&children[1], bound_vars)?))
+        }
+        "and" if children.len() >= 2 => {
+            let operands: Vec<&Node> = children[1..].iter().collect();
+            tptp_join_formula("&", &operands, bound_vars)
+        }
+        "or" if children.len() >= 2 => {
+            let operands: Vec<&Node> = children[1..].iter().collect();
+            tptp_join_formula("|", &operands, bound_vars)
+        }
+        "=>" | "implies" if children.len() == 3 => {
+            let operands: Vec<&Node> = children[1..].iter().collect();
+            tptp_join_formula("=>", &operands, bound_vars)
+        }
+        "<=>" | "iff" if children.len() == 3 => {
+            let operands: Vec<&Node> = children[1..].iter().collect();
+            tptp_join_formula("<=>", &operands, bound_vars)
+        }
+        _ => {
+            let predicate = tptp_identifier(head, "pred");
+            if children.len() == 1 {
+                return Ok(predicate);
+            }
+            let args = children[1..]
+                .iter()
+                .map(|arg| tptp_term(arg, bound_vars))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ");
+            Ok(format!("{}({})", predicate, args))
+        }
+    }
+}
+
+/// Export a proof goal plus local context as a TPTP FOF problem.
+pub fn goal_to_tptp(goal: &ProofGoal) -> Result<String, Diagnostic> {
+    let bound_vars = HashSet::new();
+    let mut lines = Vec::new();
+    for (index, ctx) in goal.context.iter().enumerate() {
+        lines.push(format!(
+            "fof(rml_context_{}, axiom, ({})).",
+            index + 1,
+            tptp_formula(ctx, &bound_vars)?
+        ));
+    }
+    lines.push(format!(
+        "fof(rml_goal, conjecture, ({})).",
+        tptp_formula(&goal.goal, &bound_vars)?
+    ));
+    Ok(format!("{}\n", lines.join("\n")))
+}
+
+/// Parse the first SZS status line from ATP output.
+pub fn parse_atp_status(output: &str) -> Option<AtpStatus> {
+    let tokens: Vec<&str> = output.split_whitespace().collect();
+    for window in tokens.windows(3) {
+        if window[0] == "SZS" && window[1] == "status" {
+            let status = window[2].to_string();
+            let kind = if ATP_PROVED_STATUSES.contains(&window[2]) {
+                AtpStatusKind::Proved
+            } else if ATP_UNKNOWN_STATUSES.contains(&window[2]) {
+                AtpStatusKind::Unknown
+            } else if ATP_TIMEOUT_STATUSES.contains(&window[2]) {
+                AtpStatusKind::Timeout
+            } else {
+                AtpStatusKind::Failure
+            };
+            return Some(AtpStatus { status, kind });
+        }
+    }
+    None
+}
+
+fn atp_solver_name(options: &AtpOptions) -> String {
+    let raw = options
+        .name
+        .clone()
+        .or_else(|| {
+            options.path.as_ref().and_then(|p| {
+                Path::new(p)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.to_string())
+            })
+        })
+        .unwrap_or_else(|| "atp".to_string());
+    let cleaned = raw
+        .chars()
+        .map(|c| {
+            if c.is_whitespace() || c == '(' || c == ')' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect::<String>();
+    if cleaned.is_empty() {
+        "atp".to_string()
+    } else {
+        cleaned
+    }
+}
+
+struct AtpRunSuccess {
+    solver: String,
+}
+
+fn read_atp_pipe<R>(mut pipe: R) -> JoinHandle<Result<Vec<u8>, String>>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)
+            .map_err(|err| err.to_string())?;
+        Ok(bytes)
+    })
+}
+
+fn collect_atp_pipe(
+    handle: Option<JoinHandle<Result<Vec<u8>, String>>>,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    match handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| format!("ATP {} reader failed", label))?,
+        None => Ok(Vec::new()),
+    }
+}
+
+fn run_atp_process(tptp: &str, options: &AtpOptions) -> Result<AtpRunSuccess, String> {
+    let Some(path) = options.path.as_ref().filter(|p| !p.is_empty()) else {
+        return Err("ATP path is not configured".to_string());
+    };
+    if options.timeout_ms == 0 {
+        return Err("ATP timeout must be a positive integer".to_string());
+    }
+    let mut child = Command::new(path)
+        .args(&options.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("ATP invocation failed: {}", err))?;
+    let stdout_reader = child.stdout.take().map(read_atp_pipe);
+    let stderr_reader = child.stderr.take().map(read_atp_pipe);
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(tptp.as_bytes())
+            .map_err(|err| format!("ATP invocation failed: {}", err))?;
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(options.timeout_ms);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = collect_atp_pipe(stdout_reader, "stdout");
+                    let _ = collect_atp_pipe(stderr_reader, "stderr");
+                    return Err(format!("ATP timed out after {} ms", options.timeout_ms));
+                }
+                sleep(Duration::from_millis(5));
+            }
+            Err(err) => return Err(format!("ATP invocation failed: {}", err)),
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|err| format!("ATP invocation failed: {}", err))?;
+    let stdout_bytes = collect_atp_pipe(stdout_reader, "stdout")?;
+    let stderr_bytes = collect_atp_pipe(stderr_reader, "stderr")?;
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
+    let stderr = String::from_utf8_lossy(&stderr_bytes);
+    let combined = format!("{}\n{}", stdout, stderr);
+
+    if !status.success() {
+        let detail = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if !stdout.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            status
+                .code()
+                .map(|code| format!("exit status {}", code))
+                .unwrap_or_else(|| "terminated by signal".to_string())
+        };
+        return Err(format!("ATP exited with status {}: {}", status, detail));
+    }
+
+    let Some(status) = parse_atp_status(&combined) else {
+        return Err("ATP output did not contain an SZS status".to_string());
+    };
+    match status.kind {
+        AtpStatusKind::Proved => Ok(AtpRunSuccess {
+            solver: atp_solver_name(options),
+        }),
+        AtpStatusKind::Timeout | AtpStatusKind::Unknown => {
+            Err(format!("ATP returned {}", status.status))
+        }
+        AtpStatusKind::Failure => Err(format!("ATP returned non-proving status {}", status.status)),
+    }
 }
 
 fn rewrite_sides(
@@ -4066,6 +5023,52 @@ fn apply_tactic(
                 state,
                 vec![goal_with_context(current, simplified.node)],
                 record_tactic,
+            ))
+        }
+        Some("smt") => {
+            if !args.is_empty() {
+                return Err(tactic_diagnostic(
+                    record_tactic,
+                    Some(current),
+                    "smt expects no arguments; configure the solver through tactic options",
+                ));
+            }
+            let smt_lib = smt_lib_for_goal(&current.goal)
+                .map_err(|reason| tactic_diagnostic(record_tactic, Some(current), reason))?;
+            let checked = run_smt_solver(&smt_lib, tactic_options);
+            if checked.status != SmtStatus::Unsat {
+                return Err(tactic_diagnostic(
+                    record_tactic,
+                    Some(current),
+                    checked.reason,
+                ));
+            }
+            Ok(replace_current_goal(
+                state,
+                Vec::new(),
+                &smt_trusted_node(tactic_options),
+            ))
+        }
+        Some("atp") => {
+            if !args.is_empty() {
+                return Err(tactic_diagnostic(
+                    record_tactic,
+                    Some(current),
+                    "atp expects no tactic arguments",
+                ));
+            }
+            let tptp = goal_to_tptp(current)
+                .map_err(|diag| tactic_diagnostic(record_tactic, Some(current), diag.message))?;
+            let proved = run_atp_process(&tptp, &tactic_options.atp)
+                .map_err(|reason| tactic_diagnostic(record_tactic, Some(current), reason))?;
+            Ok(replace_current_goal(
+                state,
+                Vec::new(),
+                &Node::List(vec![
+                    leaf("by"),
+                    leaf("atp-trusted"),
+                    Node::Leaf(proved.solver),
+                ]),
             ))
         }
         Some("exact") => {
@@ -5665,6 +6668,84 @@ pub fn register_coinductive(env: &mut Env, decl: CoinductiveDecl) {
     env.coinductives.insert(decl.name.clone(), decl);
 }
 
+pub fn decide_automatic_sequence_theorem(name: &str) -> Option<AutomaticSequenceDecision> {
+    if name == "thue-morse-cube-free" {
+        return Some(AutomaticSequenceDecision {
+            theorem: name.to_string(),
+            value: true,
+            method: "built-in Buchi emptiness certificate".to_string(),
+            certificate: Node::List(vec![
+                Node::Leaf("buchi-emptiness".to_string()),
+                Node::Leaf("thue-morse".to_string()),
+                Node::Leaf("cube-free".to_string()),
+            ]),
+        });
+    }
+    None
+}
+
+pub fn automatic_sequences_domain_plugin(forms: &[Node], env: &mut Env) -> Result<(), String> {
+    if forms.is_empty() {
+        return Err("automatic-sequences domain requires at least one request".to_string());
+    }
+    let theorem_shape_error = "automatic-sequences entries must be `(theorem <name>)`".to_string();
+    for form in forms {
+        let theorem_name = match form {
+            Node::List(children) if children.len() == 2 => {
+                if let (Node::Leaf(head), Node::Leaf(name)) = (&children[0], &children[1]) {
+                    if head == "theorem" {
+                        name.clone()
+                    } else {
+                        return Err(theorem_shape_error.clone());
+                    }
+                } else {
+                    return Err(theorem_shape_error.clone());
+                }
+            }
+            _ => {
+                return Err(theorem_shape_error.clone());
+            }
+        };
+        let mut decision = decide_automatic_sequence_theorem(&theorem_name)
+            .ok_or_else(|| format!("unknown automatic-sequences theorem \"{}\"", theorem_name))?;
+        let store_name = env.qualify_name(&decision.theorem);
+        let truth_value = if decision.value { env.hi } else { env.lo };
+        env.terms.insert(store_name.clone());
+        env.set_type(&store_name, "Theorem");
+        env.set_symbol_prob(&store_name, truth_value);
+        decision.theorem = store_name.clone();
+        env.automatic_sequence_decisions
+            .insert(store_name.clone(), decision);
+        env.trace(
+            "domain",
+            format!("{} decided by automatic-sequences", store_name),
+        );
+    }
+    Ok(())
+}
+
+fn eval_domain_form(children: &[Node], env: &mut Env) -> EvalResult {
+    if children.len() < 3 {
+        panic!("Domain plugin error: Domain form must be `(domain <name> <request>...)`");
+    }
+    let plugin_name = match &children[1] {
+        Node::Leaf(name) => name.clone(),
+        _ => {
+            panic!("Domain plugin error: Domain form must be `(domain <name> <request>...)`");
+        }
+    };
+    let plugin = env.get_domain_plugin(&plugin_name).unwrap_or_else(|| {
+        panic!(
+            "Domain plugin error: Unknown domain plugin \"{}\"",
+            plugin_name
+        )
+    });
+    if let Err(message) = plugin(&children[2..], env) {
+        panic!("Domain plugin error: {}", message);
+    }
+    EvalResult::Value(1.0)
+}
+
 /// Evaluate an AST node in the given environment.
 pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
     // HOAS desugaring (issue #51, D7): rewrite `(forall (A x) body)` to
@@ -5872,6 +6953,16 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                         register_coinductive(env, decl);
                         return EvalResult::Value(1.0);
                     }
+                }
+            }
+
+            // Domain plugin driver (issue #63): (domain <name> <request>...)
+            // Dispatches the block body to a registered domain-specific
+            // decision procedure. The default Env registers
+            // `automatic-sequences`.
+            if let Node::Leaf(ref head) = children[0] {
+                if head == "domain" {
+                    return eval_domain_form(children, env);
                 }
             }
 
@@ -8244,6 +9335,11 @@ fn decode_panic_payload(payload: &Box<dyn std::any::Any + Send>) -> (String, Str
         (
             "E040".to_string(),
             raw_msg.replacen("Template expansion error: ", "", 1),
+        )
+    } else if raw_msg.starts_with("Domain plugin error:") {
+        (
+            "E041".to_string(),
+            raw_msg.replacen("Domain plugin error: ", "", 1),
         )
     } else {
         ("E000".to_string(), raw_msg)

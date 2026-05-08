@@ -23,6 +23,7 @@ For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 - [Typed kernel rules](./docs/KERNEL.md) - The implemented D1 rules for `Pi`, `lambda`, `apply`, `(expr of Type)`, and `(type of expr)`.
 - [Soundness statement](./docs/SOUNDNESS.md) - The trusted-kernel guarantee, proof-replay checker, trusted operator base, and aggregator-relative scope of soundness.
 - [Metatheorem checker](./docs/METATHEOREMS.md) - The C3 Twelf-style guarantee that composes D12 totality, D14 coverage, D15 modes, and D13 termination, plus the `rml-meta` CLI.
+- [Lean 4 export](./docs/LEAN_EXPORT.md) - The `rml export lean` bridge for typed, non-probabilistic RML fragments.
 - [Rocq export](./docs/ROCQ-EXPORT.md) - The supported typed LiNo subset for `rml export rocq <file.lino> -o <file.v>`.
 
 ## Overview
@@ -41,7 +42,10 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 - Query the truth value of complex expressions
 - Define dependent types as links — universe hierarchy, Pi-types, lambdas, type queries
 - Combine types with probabilistic logic in a unified framework
+- Delegate domain-specific decision blocks through evaluator plugins, including
+  `(domain automatic-sequences (theorem thue-morse-cube-free))`
 - Reuse the evaluator as a library, including a meta-expression adapter that accepts selected interpretations and explicit dependencies while keeping underspecified claims partial
+- Export the simply typed LiNo fragment to Isabelle/HOL source for external certification experiments
 
 ## Supported Logic Types
 
@@ -65,6 +69,7 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 cd js
 npm install
 node src/rml-links.mjs ../examples/demo.lino
+node src/rml-links.mjs export lean ../examples/lean-export-basic.lino -o out.lean
 ```
 
 ### Rust
@@ -72,11 +77,21 @@ node src/rml-links.mjs ../examples/demo.lino
 ```bash
 cd rust
 cargo run -- ../examples/demo.lino
+cargo run -- export lean ../examples/lean-export-basic.lino -o out.lean
 ```
 
 Examples are language-agnostic and live in [`/examples/`](./examples/). Both
 implementations execute the same files and are required to produce identical
 output (enforced by `examples/expected.lino` and the shared-examples tests).
+
+### Isabelle export
+
+```bash
+node js/src/rml-links.mjs export isabelle examples/isabelle-typed-fragment.lino -o Isabelle_Typed_Fragment.thy
+```
+
+The exporter covers the simply typed fragment documented in
+[`docs/ISABELLE-EXPORT.md`](./docs/ISABELLE-EXPORT.md).
 
 ### Rocq Export
 
@@ -451,6 +466,8 @@ and successful tactic history is stored as links in the proof state:
 (rewrite (a = b) in goal)
 (rewrite <- (a = b) in goal at 2)
 (simplify in goal)
+(by smt)
+(by atp)
 (exact (p = q))
 (induction n
   (case zero (by reflexivity))
@@ -460,14 +477,33 @@ and successful tactic history is stored as links in the proof state:
 Programmatic APIs:
 
 - JavaScript: `runTactics(state, tactics, options)` returns `{ state, diagnostics }`;
-  `rewrite(goal, eq)` and `simplify(goal, rules)` expose the rewrite engine.
+  `rewrite(goal, eq)`, `simplify(goal, rules)`, `goalToTptp(...)`, and
+  `parseAtpStatus(...)` expose the rewrite and ATP bridge helpers.
 - Rust: `run_tactics(state, tactics)` and `run_tactics_with_options(...)`
-  return `TacticRunResult`; `rewrite(...)` and `simplify(...)` expose the
-  rewrite engine.
+  return `TacticRunResult`; `rewrite(...)`, `simplify(...)`,
+  `goal_to_tptp(...)`, and `parse_atp_status(...)` expose the rewrite and ATP
+  bridge helpers.
+
+`(by smt)` serializes the current goal to an SMT-LIB check by asserting the
+negated goal and closes the goal only when the configured solver returns
+`unsat`. Successful runs record `(by smt-trusted <solver>)` in the proof
+state. JavaScript accepts `smtSolver`, `smtSolverArgs`, and `smtTimeoutMs`
+options; Rust accepts the corresponding `TacticOptions` fields
+`smt_solver`, `smt_solver_args`, and `smt_timeout_ms`. The environment
+variables `RML_SMT_SOLVER`, `RML_SMT_ARGS`, and `RML_SMT_TIMEOUT_MS` provide
+defaults in both runtimes.
+
+`(by atp)` exports the current first-order goal and local context as TPTP FOF,
+invokes a configured ATP path, accepts proving SZS statuses, and records
+`(by atp-trusted <solver>)` in the proof state. JavaScript accepts `atpPath`,
+`atpArgs`, `atpName`, and `atpTimeoutMs` options or an `atp` object with
+`path`, `args`, `name`, and `timeoutMs`; Rust accepts the corresponding
+`TacticOptions.atp` fields.
 
 The built-in tactic set is `reflexivity`, `symmetry`, `transitivity`,
-`induction`, `suppose`, `introduce`, `by`, `rewrite`, `simplify`, and `exact`.
-Failed tactics emit `E039` diagnostics that include the current goal.
+`induction`, `suppose`, `introduce`, `by`, `rewrite`, `simplify`, `smt`,
+`atp`, and `exact`. Failed tactics emit `E039` diagnostics that include the
+current goal.
 
 #### Type Queries
 
@@ -769,6 +805,8 @@ The test suites cover:
 - Self-reasoning: meta-logic properties, comparing logic systems, paradox resolution in meta context
 - Markov chains: one-step and multi-step transitions, joint probability, stationary distribution, conditional transitions with links
 - Markov networks: cyclic graphs, pairwise joints, three-way cliques, clique potentials, normalization
+- Automatic sequences: a Pecan-style domain plugin that decides
+  `thue-morse-cube-free`
 - Comprehensive valence coverage: 0 (continuous), 1 (unary), 2–10, 100, 1000, with both ranges
 - English-readability lint: identifier shape, operator-only links, allow-list (see [English-readability lint](#english-readability-lint))
 

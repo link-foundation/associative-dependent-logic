@@ -21,6 +21,14 @@ npm install
 node src/rml-links.mjs <file.lino>
 ```
 
+### Exporting Lean 4
+
+```bash
+node src/rml-links.mjs export lean ../examples/lean-export-basic.lino -o out.lean
+```
+
+The supported subset is documented in [`../docs/LEAN_EXPORT.md`](../docs/LEAN_EXPORT.md).
+
 The shared examples live at the repo root in [`/examples/`](../examples/) and
 both implementations are required to produce identical output for every file
 there. To run one:
@@ -34,6 +42,15 @@ Or use the npm script (runs `../examples/demo.lino`):
 ```bash
 npm run demo
 ```
+
+### Exporting Isabelle/HOL
+
+```bash
+node src/rml-links.mjs export isabelle ../examples/isabelle-typed-fragment.lino -o Isabelle_Typed_Fragment.thy
+```
+
+The supported subset is documented in
+[`../docs/ISABELLE-EXPORT.md`](../docs/ISABELLE-EXPORT.md).
 
 ### Exporting Rocq source
 
@@ -74,8 +91,12 @@ import {
   Env,
   evalNode,
   runTactics,
+  goalToTptp,
+  parseAtpStatus,
   rewrite,
   simplify,
+  automaticSequencesDomainPlugin,
+  decideAutomaticSequenceTheorem,
   quantize,
   decRound,
   keyOf,
@@ -86,7 +107,9 @@ import {
   substitute,
   formalizeSelectedInterpretation,
   evaluateFormalization,
+  exportIsabelle,
 } from './src/rml-links.mjs';
+import { exportLean } from './src/lean-export.mjs';
 
 // Run a complete LiNo knowledge base
 const results = run(linoText);
@@ -106,12 +129,23 @@ const env = new Env({ lo: 0, hi: 1, valence: 3 });
 const ast = parseOne(tokenizeOne('(a = a)'));
 const truthValue = evalNode(ast, env);
 
+// Register a domain plugin, or use the built-in automatic-sequences plugin
+// that is already registered on new Env instances.
+env.registerDomainPlugin('automatic-sequences', automaticSequencesDomainPlugin);
+const theorem = decideAutomaticSequenceTheorem('thue-morse-cube-free');
+
 // Apply link tactics to a proof state
 const tacticResult = runTactics(
   { goals: [parseOne(tokenizeOne('(a = a)'))] },
   [parseOne(tokenizeOne('(by reflexivity)'))],
 );
 // -> { state: { goals: [], proof: [['by', 'reflexivity']] }, diagnostics: [] }
+
+const atpResult = runTactics(
+  { goals: [parseOne(tokenizeOne('(P a)'))] },
+  [parseOne(tokenizeOne('(by atp)'))],
+  { atp: { path: 'eprover', args: ['-'], name: 'eprover', timeoutMs: 5000 } },
+);
 
 const rewritten = rewrite(
   parseOne(tokenizeOne('(b = b)')),
@@ -122,6 +156,8 @@ const simplified = simplify(
   parseOne(tokenizeOne('((f a) = (f a))')),
   [parseOne(tokenizeOne('(a = b)'))],
 );
+const tptp = goalToTptp({ goal: parseOne(tokenizeOne('(P a)')) });
+const szs = parseAtpStatus('% SZS status Theorem for rml_goal');
 
 // Quantize a value to N discrete levels
 const q = quantize(0.4, 3, 0, 1); // -> 0.5 (nearest ternary level)
@@ -156,6 +192,7 @@ The test suite covers:
 - Decimal-precision arithmetic and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, definitional equality, capture-avoiding substitution, freshness, type queries
 - Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, simplify, exact
+- Domain plugins: Pecan-style automatic-sequence theorem decisions
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types
 
 ## Dependencies
