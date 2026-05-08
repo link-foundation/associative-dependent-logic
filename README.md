@@ -43,6 +43,7 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 - Define dependent types as links — universe hierarchy, Pi-types, lambdas, type queries
 - Combine types with probabilistic logic in a unified framework
 - Reuse the evaluator as a library, including a meta-expression adapter that accepts selected interpretations and explicit dependencies while keeping underspecified claims partial
+- Export the simply typed LiNo fragment to Isabelle/HOL source for external certification experiments
 
 ## Supported Logic Types
 
@@ -80,6 +81,15 @@ cargo run -- export lean ../examples/lean-export-basic.lino -o out.lean
 Examples are language-agnostic and live in [`/examples/`](./examples/). Both
 implementations execute the same files and are required to produce identical
 output (enforced by `examples/expected.lino` and the shared-examples tests).
+
+### Isabelle export
+
+```bash
+node js/src/rml-links.mjs export isabelle examples/isabelle-typed-fragment.lino -o Isabelle_Typed_Fragment.thy
+```
+
+The exporter covers the simply typed fragment documented in
+[`docs/ISABELLE-EXPORT.md`](./docs/ISABELLE-EXPORT.md).
 
 ### Rocq Export
 
