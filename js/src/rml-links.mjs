@@ -13,6 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { Parser } from 'links-notation';
 
 // ---------- Structured Diagnostics ----------
@@ -1031,6 +1032,20 @@ function _queryRequestsProof(node) {
 // Callers may pass bare goal nodes in `goals`; `runTactics` normalises them
 // into goal objects before applying tactics.
 const DEFAULT_SIMPLIFY_MAX_STEPS = 100;
+const DEFAULT_ATP_TIMEOUT_MS = 5000;
+const ATP_PROVED_STATUSES = new Set([
+  'Theorem',
+  'Unsatisfiable',
+  'ContradictoryAxioms',
+]);
+const ATP_UNKNOWN_STATUSES = new Set([
+  'Unknown',
+  'GaveUp',
+]);
+const ATP_TIMEOUT_STATUSES = new Set([
+  'Timeout',
+  'ResourceOut',
+]);
 
 function _normaliseProofGoal(rawGoal, inheritedContext = []) {
   if (
@@ -1245,10 +1260,221 @@ function simplify(goal, rules, options = {}) {
   return _simplifyDetailed(goal, rules, options).node;
 }
 
+function _tptpIdentifier(raw, role) {
+  const original = String(raw);
+  let cleaned = original.replace(/[^A-Za-z0-9_]/g, '_');
+  if (cleaned.length === 0) cleaned = role === 'var' ? 'X' : 'rml_symbol';
+  if (role === 'var') {
+    cleaned = cleaned[0].toUpperCase() + cleaned.slice(1);
+    if (!/^[A-Z]/.test(cleaned)) cleaned = `V_${cleaned}`;
+    return cleaned;
+  }
+  cleaned = cleaned.toLowerCase();
+  if (!/^[a-z]/.test(cleaned)) cleaned = `rml_${cleaned}`;
+  return cleaned;
+}
+
+function _tptpTerm(node, boundVars) {
+  if (typeof node === 'string') {
+    if (boundVars.has(node)) return _tptpIdentifier(node, 'var');
+    if (isNum(node)) return _tptpIdentifier(`num_${node}`, 'term');
+    return _tptpIdentifier(node, 'term');
+  }
+  if (!Array.isArray(node) || node.length === 0 || typeof node[0] !== 'string') {
+    throw _rewriteError(`TPTP export supports first-order terms only (got ${keyOf(node)})`);
+  }
+  const head = _tptpIdentifier(node[0], 'term');
+  const args = node.slice(1).map(arg => _tptpTerm(arg, boundVars)).join(', ');
+  return `${head}(${args})`;
+}
+
+function _infixOperands(node, op) {
+  if (!Array.isArray(node) || node.length < 3 || node.length % 2 === 0) return null;
+  const operands = [];
+  for (let i = 0; i < node.length; i += 2) {
+    if (i > 0 && node[i - 1] !== op) return null;
+    operands.push(node[i]);
+  }
+  return operands;
+}
+
+function _tptpJoinFormula(op, operands, boundVars) {
+  return operands.map(part => `(${_tptpFormula(part, boundVars)})`).join(` ${op} `);
+}
+
+function _quantifierParts(node) {
+  if (!Array.isArray(node) || node.length !== 3 || typeof node[0] !== 'string') return null;
+  if (node[0] !== 'forall' && node[0] !== 'exists' && node[0] !== 'Pi') return null;
+  const binding = parseBinding(node[1]);
+  if (!binding) {
+    throw _rewriteError(`TPTP export could not parse quantifier binder ${keyOf(node[1])}`);
+  }
+  return {
+    quantifier: node[0] === 'exists' ? '?' : '!',
+    variable: binding.paramName,
+    body: node[2],
+  };
+}
+
+function _tptpFormula(node, boundVars = new Set()) {
+  if (typeof node === 'string') {
+    if (node === 'true') return '$true';
+    if (node === 'false') return '$false';
+    if (boundVars.has(node)) return _tptpIdentifier(node, 'var');
+    return _tptpIdentifier(node, 'pred');
+  }
+  if (!Array.isArray(node) || node.length === 0) {
+    throw _rewriteError(`TPTP export supports first-order formulas only (got ${keyOf(node)})`);
+  }
+
+  const quantified = _quantifierParts(node);
+  if (quantified) {
+    const nextBound = new Set(boundVars);
+    nextBound.add(quantified.variable);
+    const variable = _tptpIdentifier(quantified.variable, 'var');
+    return `${quantified.quantifier}[${variable}] : (${_tptpFormula(quantified.body, nextBound)})`;
+  }
+
+  const ascription = _typeAscription(node);
+  if (ascription) {
+    return `${_tptpIdentifier(keyOf(ascription.type), 'pred')}(${_tptpTerm(ascription.term, boundVars)})`;
+  }
+
+  const eq = _asEquality(node);
+  if (eq) {
+    return `${_tptpTerm(eq.left, boundVars)} = ${_tptpTerm(eq.right, boundVars)}`;
+  }
+  if (node.length === 3 && node[1] === '!=') {
+    return `${_tptpTerm(node[0], boundVars)} != ${_tptpTerm(node[2], boundVars)}`;
+  }
+
+  const conjunction = _infixOperands(node, 'and');
+  if (conjunction) return _tptpJoinFormula('&', conjunction, boundVars);
+  const disjunction = _infixOperands(node, 'or');
+  if (disjunction) return _tptpJoinFormula('|', disjunction, boundVars);
+  const implication = _infixOperands(node, '=>') || _infixOperands(node, 'implies');
+  if (implication && implication.length === 2) return _tptpJoinFormula('=>', implication, boundVars);
+  const equivalence = _infixOperands(node, '<=>') || _infixOperands(node, 'iff');
+  if (equivalence && equivalence.length === 2) return _tptpJoinFormula('<=>', equivalence, boundVars);
+
+  if (typeof node[0] === 'string') {
+    const head = node[0];
+    if (head === 'not' && node.length === 2) return `~(${_tptpFormula(node[1], boundVars)})`;
+    if (head === 'and' && node.length >= 2) return _tptpJoinFormula('&', node.slice(1), boundVars);
+    if (head === 'or' && node.length >= 2) return _tptpJoinFormula('|', node.slice(1), boundVars);
+    if ((head === '=>' || head === 'implies') && node.length === 3) {
+      return _tptpJoinFormula('=>', node.slice(1), boundVars);
+    }
+    if ((head === '<=>' || head === 'iff') && node.length === 3) {
+      return _tptpJoinFormula('<=>', node.slice(1), boundVars);
+    }
+    const predicate = _tptpIdentifier(head, 'pred');
+    if (node.length === 1) return predicate;
+    const args = node.slice(1).map(arg => _tptpTerm(arg, boundVars)).join(', ');
+    return `${predicate}(${args})`;
+  }
+
+  throw _rewriteError(`TPTP export supports first-order formulas only (got ${keyOf(node)})`);
+}
+
+function goalToTptp(goal, context = []) {
+  const proofGoal =
+    goal &&
+    typeof goal === 'object' &&
+    !Array.isArray(goal) &&
+    Object.prototype.hasOwnProperty.call(goal, 'goal')
+      ? _normaliseProofGoal(goal)
+      : _normaliseProofGoal({ goal, context });
+  const lines = proofGoal.context.map((ctx, index) =>
+    `fof(rml_context_${index + 1}, axiom, (${_tptpFormula(ctx)})).`);
+  lines.push(`fof(rml_goal, conjecture, (${_tptpFormula(proofGoal.goal)})).`);
+  return `${lines.join('\n')}\n`;
+}
+
+function parseAtpStatus(output) {
+  const match = String(output || '').match(/\bSZS\s+status\s+([A-Za-z][A-Za-z0-9_]*)\b/);
+  if (!match) return null;
+  const status = match[1];
+  let kind = 'failure';
+  if (ATP_PROVED_STATUSES.has(status)) kind = 'proved';
+  else if (ATP_UNKNOWN_STATUSES.has(status)) kind = 'unknown';
+  else if (ATP_TIMEOUT_STATUSES.has(status)) kind = 'timeout';
+  return { status, kind };
+}
+
+function _normaliseAtpOptions(options = {}) {
+  const atp = options.atp && typeof options.atp === 'object' ? options.atp : {};
+  const rawArgs = atp.args ?? options.atpArgs ?? [];
+  let args;
+  if (typeof rawArgs === 'string') {
+    args = rawArgs.trim().length === 0 ? [] : rawArgs.trim().split(/\s+/);
+  } else {
+    args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
+  }
+  const timeoutRaw = atp.timeoutMs ?? options.atpTimeoutMs ?? DEFAULT_ATP_TIMEOUT_MS;
+  const timeoutMs = Number(timeoutRaw);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw _rewriteError(`ATP timeout must be a positive integer (got ${String(timeoutRaw)})`);
+  }
+  const atpPath = atp.path ?? options.atpPath ?? null;
+  const name = atp.name ?? options.atpName ?? (atpPath ? path.basename(String(atpPath)) : 'atp');
+  return {
+    path: atpPath === null || atpPath === undefined || String(atpPath).length === 0
+      ? null
+      : String(atpPath),
+    args,
+    name: String(name || 'atp').replace(/[()\s]+/g, '_'),
+    timeoutMs,
+    maxBuffer: atp.maxBuffer ?? options.atpMaxBuffer ?? 1024 * 1024,
+  };
+}
+
+function _runAtpProcess(tptp, atpOptions) {
+  if (!atpOptions.path) {
+    return { ok: false, reason: 'ATP path is not configured' };
+  }
+  const child = spawnSync(atpOptions.path, atpOptions.args, {
+    input: tptp,
+    encoding: 'utf8',
+    timeout: atpOptions.timeoutMs,
+    maxBuffer: atpOptions.maxBuffer,
+  });
+  const stdout = child.stdout || '';
+  const stderr = child.stderr || '';
+  const combined = `${stdout}\n${stderr}`;
+
+  if (child.error) {
+    if (child.error.code === 'ETIMEDOUT') {
+      return { ok: false, reason: `ATP timed out after ${atpOptions.timeoutMs} ms` };
+    }
+    return { ok: false, reason: `ATP invocation failed: ${child.error.message}` };
+  }
+  if (child.status !== 0) {
+    const detail = stderr.trim() || stdout.trim() || `exit status ${child.status}`;
+    return { ok: false, reason: `ATP exited with status ${child.status}: ${detail}` };
+  }
+
+  const parsed = parseAtpStatus(combined);
+  if (!parsed) {
+    return { ok: false, reason: 'ATP output did not contain an SZS status' };
+  }
+  if (parsed.kind === 'proved') {
+    return { ok: true, status: parsed.status, solver: atpOptions.name };
+  }
+  if (parsed.kind === 'timeout') {
+    return { ok: false, reason: `ATP returned ${parsed.status}` };
+  }
+  if (parsed.kind === 'unknown') {
+    return { ok: false, reason: `ATP returned ${parsed.status}` };
+  }
+  return { ok: false, reason: `ATP returned non-proving status ${parsed.status}` };
+}
+
 function _normaliseTacticOptions(options = {}) {
   return {
     rewriteRules: _normaliseRewriteRules(options.rewriteRules ?? options.rules ?? []),
     simplifyMaxSteps: _normaliseSimplifyMaxSteps(options),
+    atp: _normaliseAtpOptions(options),
   };
 }
 
@@ -1521,6 +1747,38 @@ function _applyTactic(state, tactic, recordTactic = tactic, tacticOptions = _nor
     return {
       ok: true,
       state: _replaceCurrentGoal(state, [_goalWithContext(current, simplified.node)], recordTactic),
+    };
+  }
+
+  if (name === 'atp') {
+    if (args.length !== 0) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, 'atp expects no tactic arguments'),
+      };
+    }
+    let tptp;
+    try {
+      tptp = goalToTptp(current);
+    } catch (err) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, err.message),
+      };
+    }
+    const atp = _runAtpProcess(tptp, tacticOptions.atp);
+    if (!atp.ok) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, atp.reason),
+      };
+    }
+    return {
+      ok: true,
+      state: _replaceCurrentGoal(state, [], ['by', 'atp-trusted', atp.solver]),
     };
   }
 
@@ -4815,6 +5073,8 @@ export {
   evalNode,
   buildProof,
   runTactics,
+  goalToTptp,
+  parseAtpStatus,
   rewrite,
   simplify,
   quantize,

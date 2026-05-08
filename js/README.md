@@ -65,6 +65,8 @@ import {
   Env,
   evalNode,
   runTactics,
+  goalToTptp,
+  parseAtpStatus,
   rewrite,
   simplify,
   quantize,
@@ -104,6 +106,12 @@ const tacticResult = runTactics(
 );
 // -> { state: { goals: [], proof: [['by', 'reflexivity']] }, diagnostics: [] }
 
+const atpResult = runTactics(
+  { goals: [parseOne(tokenizeOne('(P a)'))] },
+  [parseOne(tokenizeOne('(by atp)'))],
+  { atp: { path: 'eprover', args: ['-'], name: 'eprover', timeoutMs: 5000 } },
+);
+
 const rewritten = rewrite(
   parseOne(tokenizeOne('(b = b)')),
   parseOne(tokenizeOne('(a = b)')),
@@ -113,6 +121,8 @@ const simplified = simplify(
   parseOne(tokenizeOne('((f a) = (f a))')),
   [parseOne(tokenizeOne('(a = b)'))],
 );
+const tptp = goalToTptp({ goal: parseOne(tokenizeOne('(P a)')) });
+const szs = parseAtpStatus('% SZS status Theorem for rml_goal');
 
 // Quantize a value to N discrete levels
 const q = quantize(0.4, 3, 0, 1); // -> 0.5 (nearest ternary level)

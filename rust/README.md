@@ -56,7 +56,8 @@ Or after building:
 use rml::{
     run, evaluate, format_diagnostic, Diagnostic, EvaluateResult, RunResult, Span,
     tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round, subst,
-    run_tactics, rewrite, simplify, ProofState,
+    run_tactics, run_tactics_with_options, rewrite, simplify, goal_to_tptp,
+    parse_atp_status, AtpOptions, TacticOptions, ProofGoal, ProofState,
     formalize_selected_interpretation, evaluate_formalization,
     FormalizationRequest, Interpretation,
 };
@@ -86,9 +87,27 @@ let goal = parse_one(&tokenize_one("(a = a)")).unwrap();
 let tactic_result = run_tactics(ProofState::from_goals(vec![goal]), &[tactic]);
 // -> tactic_result.state.goals is empty, diagnostics is empty
 
+let atp_goal = parse_one(&tokenize_one("(P a)")).unwrap();
+let atp_tactic = parse_one(&tokenize_one("(by atp)")).unwrap();
+let atp_result = run_tactics_with_options(
+    ProofState::from_goals(vec![atp_goal.clone()]),
+    &[atp_tactic],
+    TacticOptions {
+        atp: AtpOptions {
+            path: Some("eprover".to_string()),
+            args: vec!["-".to_string()],
+            name: Some("eprover".to_string()),
+            timeout_ms: 5000,
+        },
+        ..TacticOptions::default()
+    },
+);
+
 let eq = parse_one(&tokenize_one("(a = b)")).unwrap();
 let rewritten = rewrite(&parse_one(&tokenize_one("(a = a)")).unwrap(), &eq).unwrap();
 let simplified = simplify(&parse_one(&tokenize_one("((f a) = (f a))")).unwrap(), &[eq]).unwrap();
+let tptp = goal_to_tptp(&ProofGoal::new(atp_goal)).unwrap();
+let szs = parse_atp_status("% SZS status Theorem for rml_goal");
 
 // Quantize a value to N discrete levels
 let q = quantize(0.4, 3, 0.0, 1.0); // -> 0.5 (nearest ternary level)

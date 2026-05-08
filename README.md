@@ -424,6 +424,7 @@ and successful tactic history is stored as links in the proof state:
 (rewrite (a = b) in goal)
 (rewrite <- (a = b) in goal at 2)
 (simplify in goal)
+(by atp)
 (exact (p = q))
 (induction n
   (case zero (by reflexivity))
@@ -433,14 +434,19 @@ and successful tactic history is stored as links in the proof state:
 Programmatic APIs:
 
 - JavaScript: `runTactics(state, tactics, options)` returns `{ state, diagnostics }`;
-  `rewrite(goal, eq)` and `simplify(goal, rules)` expose the rewrite engine.
+  `rewrite(goal, eq)`, `simplify(goal, rules)`, `goalToTptp(goal)`, and
+  `parseAtpStatus(output)` expose the rewrite and ATP bridge helpers.
 - Rust: `run_tactics(state, tactics)` and `run_tactics_with_options(...)`
-  return `TacticRunResult`; `rewrite(...)` and `simplify(...)` expose the
-  rewrite engine.
+  return `TacticRunResult`; `rewrite(...)`, `simplify(...)`,
+  `goal_to_tptp(...)`, and `parse_atp_status(...)` expose the rewrite and ATP
+  bridge helpers.
 
 The built-in tactic set is `reflexivity`, `symmetry`, `transitivity`,
-`induction`, `suppose`, `introduce`, `by`, `rewrite`, `simplify`, and `exact`.
-Failed tactics emit `E039` diagnostics that include the current goal.
+`induction`, `suppose`, `introduce`, `by`, `rewrite`, `simplify`, `atp`, and
+`exact`. The `(by atp)` tactic exports the current first-order goal and local
+context as TPTP FOF, invokes a configured ATP path, accepts proving SZS
+statuses, and records `(by atp-trusted <solver>)`. Failed tactics emit `E039`
+diagnostics that include the current goal.
 
 #### Type Queries
 

@@ -125,11 +125,14 @@ The tactic engine keeps proof steps as links:
 |------------|------|---------|
 | `runTactics(state, tactics, options)` | `run_tactics(state, tactics)` / `run_tactics_with_options(...)` | Apply link tactics to a proof state and return the updated state plus diagnostics. |
 | `rewrite(goal, eq)` / `simplify(goal, rules)` | `rewrite(...)` / `simplify(...)` | Apply a single equality rewrite or a guarded rewrite set directly. |
+| `goalToTptp(goal)` / `parseAtpStatus(output)` | `goal_to_tptp(goal)` / `parse_atp_status(output)` | Export first-order proof goals to TPTP FOF and classify ATP SZS statuses. |
 | Goal state | `ProofState` / `ProofGoal` | Open goals, local context, and successful tactic links. |
 
 Built-in tactics are `reflexivity`, `symmetry`, `transitivity`, `induction`,
-`suppose`, `introduce`, `by`, `rewrite`, `simplify`, and `exact`. A failed
-tactic emits `E039` and includes the current goal in the diagnostic message.
+`suppose`, `introduce`, `by`, `rewrite`, `simplify`, `atp`, and `exact`. A
+failed tactic emits `E039` and includes the current goal in the diagnostic
+message. The ATP bridge invokes a configured external executable and records
+successful results as `(by atp-trusted <solver>)`.
 
 For consumers that start from a selected natural-language interpretation rather than a complete `.lino` file, the library also exposes a meta-expression adapter:
 

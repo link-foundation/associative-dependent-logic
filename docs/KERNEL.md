@@ -489,14 +489,18 @@ Built-in tactics:
 | `(rewrite <- (L = R) in goal)` | Rewrites in the reverse direction, from `R` to `L`. |
 | `(rewrite (L = R) in goal at N)` | Rewrites only the 1-based occurrence `N`. |
 | `(simplify in goal)` | Repeatedly applies the configured rewrite rules until the goal stops changing. |
+| `(by atp)` | Exports the current first-order goal and context to TPTP FOF, invokes a configured ATP, and closes the goal only for proving SZS statuses. |
 | `(exact term)` | Closes the goal when `term` or its context ascription proves it. |
 | `(induction x (case p tactics...) ...)` | Creates one substituted case goal per case and runs its tactic links. |
 
 Simplification stops with an `E039` diagnostic when its max-step termination
-guard is reached, so cyclic rule sets cannot loop forever. Failed tactics
-return `E039` diagnostics with the current goal printed in the message.
-Successful tactic history remains a list of links, preserving the "everything
-is a link" invariant.
+guard is reached, so cyclic rule sets cannot loop forever. ATP failures such
+as a missing executable path, timeout, unknown result, nonzero exit, or
+missing SZS status also return `E039`. A successful ATP call records
+`(by atp-trusted <solver>)`; replaying ATP proofs is outside this kernel layer.
+Failed tactics return `E039` diagnostics with the current goal printed in the
+message. Successful tactic history remains a list of links, preserving the
+"everything is a link" invariant.
 
 ## Bidirectional Type Checker
 
