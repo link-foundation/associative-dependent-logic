@@ -490,6 +490,7 @@ Built-in tactics:
 | `(rewrite (L = R) in goal at N)` | Rewrites only the 1-based occurrence `N`. |
 | `(simplify in goal)` | Repeatedly applies the configured rewrite rules until the goal stops changing. |
 | `(by smt)` | Sends the current goal as an SMT-LIB validity check to the configured solver. |
+| `(by atp)` | Exports the current first-order goal and context to TPTP FOF, invokes a configured ATP, and closes the goal only for proving SZS statuses. |
 | `(exact term)` | Closes the goal when `term` or its context ascription proves it. |
 | `(induction x (case p tactics...) ...)` | Creates one substituted case goal per case and runs its tactic links. |
 
@@ -499,6 +500,12 @@ and timeouts are reported as `E039` diagnostics without changing the goal.
 The bridge supports a small Boolean, equality, and arithmetic SMT-LIB
 fragment, with unsupported compound RML terms represented as uninterpreted
 SMT constants.
+
+The ATP tactic serializes first-order formulas and local context to TPTP FOF.
+Successful runs record `(by atp-trusted <solver>)`; missing executable paths,
+timeouts, unknown or non-proving SZS statuses, process failures, and
+unparseable output are reported as `E039` diagnostics without changing the
+goal.
 
 Simplification stops with an `E039` diagnostic when its max-step termination
 guard is reached, so cyclic rule sets cannot loop forever. Failed tactics

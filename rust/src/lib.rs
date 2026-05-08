@@ -13,11 +13,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread;
+use std::thread::{self, sleep, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub mod lean_export;
@@ -3460,7 +3460,11 @@ pub struct TacticRunResult {
 }
 
 const DEFAULT_SIMPLIFY_MAX_STEPS: usize = 100;
+const DEFAULT_ATP_TIMEOUT_MS: u64 = 5000;
 const DEFAULT_SMT_TIMEOUT_MS: u64 = 5000;
+const ATP_PROVED_STATUSES: &[&str] = &["Theorem", "Unsatisfiable", "ContradictoryAxioms"];
+const ATP_UNKNOWN_STATUSES: &[&str] = &["Unknown", "GaveUp"];
+const ATP_TIMEOUT_STATUSES: &[&str] = &["Timeout", "ResourceOut"];
 
 /// Direction for applying an equality rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3522,11 +3526,48 @@ pub struct SimplifyResult {
     pub steps: usize,
 }
 
+/// Configured external ATP invocation for the `(by atp)` tactic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtpOptions {
+    pub path: Option<String>,
+    pub args: Vec<String>,
+    pub name: Option<String>,
+    pub timeout_ms: u64,
+}
+
+impl Default for AtpOptions {
+    fn default() -> Self {
+        Self {
+            path: None,
+            args: Vec::new(),
+            name: None,
+            timeout_ms: DEFAULT_ATP_TIMEOUT_MS,
+        }
+    }
+}
+
+/// High-level classification of a parsed SZS ATP status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AtpStatusKind {
+    Proved,
+    Unknown,
+    Timeout,
+    Failure,
+}
+
+/// Parsed SZS status line from an ATP.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtpStatus {
+    pub status: String,
+    pub kind: AtpStatusKind,
+}
+
 /// Options supplied to tactic execution.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TacticOptions {
     pub rewrite_rules: Vec<Node>,
     pub simplify_max_steps: usize,
+    pub atp: AtpOptions,
     pub smt_solver: Option<String>,
     pub smt_solver_args: Vec<String>,
     pub smt_timeout_ms: u64,
@@ -3537,6 +3578,7 @@ impl Default for TacticOptions {
         Self {
             rewrite_rules: Vec::new(),
             simplify_max_steps: DEFAULT_SIMPLIFY_MAX_STEPS,
+            atp: AtpOptions::default(),
             smt_solver: std::env::var("RML_SMT_SOLVER").ok(),
             smt_solver_args: std::env::var("RML_SMT_ARGS")
                 .ok()
@@ -4061,6 +4103,432 @@ fn run_smt_solver(smt_lib: &str, options: &TacticOptions) -> SmtRunResult {
     }
 }
 
+fn tptp_identifier(raw: &str, role: &str) -> String {
+    let mut cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        cleaned = if role == "var" {
+            "X".to_string()
+        } else {
+            "rml_symbol".to_string()
+        };
+    }
+    if role == "var" {
+        let mut chars = cleaned.chars();
+        if let Some(first) = chars.next() {
+            cleaned = first.to_ascii_uppercase().to_string() + chars.as_str();
+        }
+        if !cleaned
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_uppercase())
+            .unwrap_or(false)
+        {
+            cleaned = format!("V_{}", cleaned);
+        }
+        return cleaned;
+    }
+    cleaned = cleaned.to_ascii_lowercase();
+    if !cleaned
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_lowercase())
+        .unwrap_or(false)
+    {
+        cleaned = format!("rml_{}", cleaned);
+    }
+    cleaned
+}
+
+fn tptp_term(node: &Node, bound_vars: &HashSet<String>) -> Result<String, Diagnostic> {
+    match node {
+        Node::Leaf(raw) => {
+            if bound_vars.contains(raw) {
+                Ok(tptp_identifier(raw, "var"))
+            } else if is_num(raw) {
+                Ok(tptp_identifier(&format!("num_{}", raw), "term"))
+            } else {
+                Ok(tptp_identifier(raw, "term"))
+            }
+        }
+        Node::List(children) if !children.is_empty() => {
+            let Node::Leaf(head) = &children[0] else {
+                return Err(rewrite_diagnostic(format!(
+                    "TPTP export supports first-order terms only (got {})",
+                    key_of(node)
+                )));
+            };
+            let args = children[1..]
+                .iter()
+                .map(|arg| tptp_term(arg, bound_vars))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ");
+            Ok(format!("{}({})", tptp_identifier(head, "term"), args))
+        }
+        _ => Err(rewrite_diagnostic(format!(
+            "TPTP export supports first-order terms only (got {})",
+            key_of(node)
+        ))),
+    }
+}
+
+fn infix_operands<'a>(node: &'a Node, op: &str) -> Option<Vec<&'a Node>> {
+    let Node::List(children) = node else {
+        return None;
+    };
+    if children.len() < 3 || children.len() % 2 == 0 {
+        return None;
+    }
+    let mut operands = Vec::new();
+    let mut index = 0;
+    while index < children.len() {
+        if index > 0 && !matches!(&children[index - 1], Node::Leaf(mid) if mid == op) {
+            return None;
+        }
+        operands.push(&children[index]);
+        index += 2;
+    }
+    Some(operands)
+}
+
+fn tptp_join_formula(
+    op: &str,
+    operands: &[&Node],
+    bound_vars: &HashSet<String>,
+) -> Result<String, Diagnostic> {
+    let parts = operands
+        .iter()
+        .map(|part| tptp_formula(part, bound_vars).map(|s| format!("({})", s)))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(parts.join(&format!(" {} ", op)))
+}
+
+fn quantifier_parts<'a>(node: &'a Node) -> Result<Option<(&'a str, String, &'a Node)>, Diagnostic> {
+    let Node::List(children) = node else {
+        return Ok(None);
+    };
+    if children.len() != 3 {
+        return Ok(None);
+    }
+    let Node::Leaf(head) = &children[0] else {
+        return Ok(None);
+    };
+    if head != "forall" && head != "exists" && head != "Pi" {
+        return Ok(None);
+    }
+    let Some((variable, _)) = parse_binding(&children[1]) else {
+        return Err(rewrite_diagnostic(format!(
+            "TPTP export could not parse quantifier binder {}",
+            key_of(&children[1])
+        )));
+    };
+    let quantifier = if head == "exists" { "?" } else { "!" };
+    Ok(Some((quantifier, variable, &children[2])))
+}
+
+fn tptp_formula(node: &Node, bound_vars: &HashSet<String>) -> Result<String, Diagnostic> {
+    match node {
+        Node::Leaf(raw) => {
+            if raw == "true" {
+                return Ok("$true".to_string());
+            }
+            if raw == "false" {
+                return Ok("$false".to_string());
+            }
+            if bound_vars.contains(raw) {
+                return Ok(tptp_identifier(raw, "var"));
+            }
+            return Ok(tptp_identifier(raw, "pred"));
+        }
+        Node::List(children) if children.is_empty() => {
+            return Err(rewrite_diagnostic(format!(
+                "TPTP export supports first-order formulas only (got {})",
+                key_of(node)
+            )));
+        }
+        Node::List(_) => {}
+    }
+
+    if let Some((quantifier, variable, body)) = quantifier_parts(node)? {
+        let mut next_bound = bound_vars.clone();
+        next_bound.insert(variable.clone());
+        return Ok(format!(
+            "{}[{}] : ({})",
+            quantifier,
+            tptp_identifier(&variable, "var"),
+            tptp_formula(body, &next_bound)?
+        ));
+    }
+
+    if let Some((term, typ)) = type_ascription(node) {
+        return Ok(format!(
+            "{}({})",
+            tptp_identifier(&key_of(typ), "pred"),
+            tptp_term(term, bound_vars)?
+        ));
+    }
+
+    if let Some((left, right)) = as_equality(node) {
+        return Ok(format!(
+            "{} = {}",
+            tptp_term(left, bound_vars)?,
+            tptp_term(right, bound_vars)?
+        ));
+    }
+    if let Node::List(children) = node {
+        if children.len() == 3 && matches!(&children[1], Node::Leaf(op) if op == "!=") {
+            return Ok(format!(
+                "{} != {}",
+                tptp_term(&children[0], bound_vars)?,
+                tptp_term(&children[2], bound_vars)?
+            ));
+        }
+    }
+
+    if let Some(operands) = infix_operands(node, "and") {
+        return tptp_join_formula("&", &operands, bound_vars);
+    }
+    if let Some(operands) = infix_operands(node, "or") {
+        return tptp_join_formula("|", &operands, bound_vars);
+    }
+    if let Some(operands) = infix_operands(node, "=>").or_else(|| infix_operands(node, "implies")) {
+        if operands.len() == 2 {
+            return tptp_join_formula("=>", &operands, bound_vars);
+        }
+    }
+    if let Some(operands) = infix_operands(node, "<=>").or_else(|| infix_operands(node, "iff")) {
+        if operands.len() == 2 {
+            return tptp_join_formula("<=>", &operands, bound_vars);
+        }
+    }
+
+    let Node::List(children) = node else {
+        unreachable!();
+    };
+    let Node::Leaf(head) = &children[0] else {
+        return Err(rewrite_diagnostic(format!(
+            "TPTP export supports first-order formulas only (got {})",
+            key_of(node)
+        )));
+    };
+    match head.as_str() {
+        "not" if children.len() == 2 => {
+            Ok(format!("~({})", tptp_formula(&children[1], bound_vars)?))
+        }
+        "and" if children.len() >= 2 => {
+            let operands: Vec<&Node> = children[1..].iter().collect();
+            tptp_join_formula("&", &operands, bound_vars)
+        }
+        "or" if children.len() >= 2 => {
+            let operands: Vec<&Node> = children[1..].iter().collect();
+            tptp_join_formula("|", &operands, bound_vars)
+        }
+        "=>" | "implies" if children.len() == 3 => {
+            let operands: Vec<&Node> = children[1..].iter().collect();
+            tptp_join_formula("=>", &operands, bound_vars)
+        }
+        "<=>" | "iff" if children.len() == 3 => {
+            let operands: Vec<&Node> = children[1..].iter().collect();
+            tptp_join_formula("<=>", &operands, bound_vars)
+        }
+        _ => {
+            let predicate = tptp_identifier(head, "pred");
+            if children.len() == 1 {
+                return Ok(predicate);
+            }
+            let args = children[1..]
+                .iter()
+                .map(|arg| tptp_term(arg, bound_vars))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ");
+            Ok(format!("{}({})", predicate, args))
+        }
+    }
+}
+
+/// Export a proof goal plus local context as a TPTP FOF problem.
+pub fn goal_to_tptp(goal: &ProofGoal) -> Result<String, Diagnostic> {
+    let bound_vars = HashSet::new();
+    let mut lines = Vec::new();
+    for (index, ctx) in goal.context.iter().enumerate() {
+        lines.push(format!(
+            "fof(rml_context_{}, axiom, ({})).",
+            index + 1,
+            tptp_formula(ctx, &bound_vars)?
+        ));
+    }
+    lines.push(format!(
+        "fof(rml_goal, conjecture, ({})).",
+        tptp_formula(&goal.goal, &bound_vars)?
+    ));
+    Ok(format!("{}\n", lines.join("\n")))
+}
+
+/// Parse the first SZS status line from ATP output.
+pub fn parse_atp_status(output: &str) -> Option<AtpStatus> {
+    let tokens: Vec<&str> = output.split_whitespace().collect();
+    for window in tokens.windows(3) {
+        if window[0] == "SZS" && window[1] == "status" {
+            let status = window[2].to_string();
+            let kind = if ATP_PROVED_STATUSES.contains(&window[2]) {
+                AtpStatusKind::Proved
+            } else if ATP_UNKNOWN_STATUSES.contains(&window[2]) {
+                AtpStatusKind::Unknown
+            } else if ATP_TIMEOUT_STATUSES.contains(&window[2]) {
+                AtpStatusKind::Timeout
+            } else {
+                AtpStatusKind::Failure
+            };
+            return Some(AtpStatus { status, kind });
+        }
+    }
+    None
+}
+
+fn atp_solver_name(options: &AtpOptions) -> String {
+    let raw = options
+        .name
+        .clone()
+        .or_else(|| {
+            options.path.as_ref().and_then(|p| {
+                Path::new(p)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.to_string())
+            })
+        })
+        .unwrap_or_else(|| "atp".to_string());
+    let cleaned = raw
+        .chars()
+        .map(|c| {
+            if c.is_whitespace() || c == '(' || c == ')' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect::<String>();
+    if cleaned.is_empty() {
+        "atp".to_string()
+    } else {
+        cleaned
+    }
+}
+
+struct AtpRunSuccess {
+    solver: String,
+}
+
+fn read_atp_pipe<R>(mut pipe: R) -> JoinHandle<Result<Vec<u8>, String>>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)
+            .map_err(|err| err.to_string())?;
+        Ok(bytes)
+    })
+}
+
+fn collect_atp_pipe(
+    handle: Option<JoinHandle<Result<Vec<u8>, String>>>,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    match handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| format!("ATP {} reader failed", label))?,
+        None => Ok(Vec::new()),
+    }
+}
+
+fn run_atp_process(tptp: &str, options: &AtpOptions) -> Result<AtpRunSuccess, String> {
+    let Some(path) = options.path.as_ref().filter(|p| !p.is_empty()) else {
+        return Err("ATP path is not configured".to_string());
+    };
+    if options.timeout_ms == 0 {
+        return Err("ATP timeout must be a positive integer".to_string());
+    }
+    let mut child = Command::new(path)
+        .args(&options.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("ATP invocation failed: {}", err))?;
+    let stdout_reader = child.stdout.take().map(read_atp_pipe);
+    let stderr_reader = child.stderr.take().map(read_atp_pipe);
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(tptp.as_bytes())
+            .map_err(|err| format!("ATP invocation failed: {}", err))?;
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(options.timeout_ms);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = collect_atp_pipe(stdout_reader, "stdout");
+                    let _ = collect_atp_pipe(stderr_reader, "stderr");
+                    return Err(format!("ATP timed out after {} ms", options.timeout_ms));
+                }
+                sleep(Duration::from_millis(5));
+            }
+            Err(err) => return Err(format!("ATP invocation failed: {}", err)),
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|err| format!("ATP invocation failed: {}", err))?;
+    let stdout_bytes = collect_atp_pipe(stdout_reader, "stdout")?;
+    let stderr_bytes = collect_atp_pipe(stderr_reader, "stderr")?;
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
+    let stderr = String::from_utf8_lossy(&stderr_bytes);
+    let combined = format!("{}\n{}", stdout, stderr);
+
+    if !status.success() {
+        let detail = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if !stdout.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            status
+                .code()
+                .map(|code| format!("exit status {}", code))
+                .unwrap_or_else(|| "terminated by signal".to_string())
+        };
+        return Err(format!("ATP exited with status {}: {}", status, detail));
+    }
+
+    let Some(status) = parse_atp_status(&combined) else {
+        return Err("ATP output did not contain an SZS status".to_string());
+    };
+    match status.kind {
+        AtpStatusKind::Proved => Ok(AtpRunSuccess {
+            solver: atp_solver_name(options),
+        }),
+        AtpStatusKind::Timeout | AtpStatusKind::Unknown => {
+            Err(format!("ATP returned {}", status.status))
+        }
+        AtpStatusKind::Failure => Err(format!("ATP returned non-proving status {}", status.status)),
+    }
+}
+
 fn rewrite_sides(
     eq: &Node,
     direction: RewriteDirection,
@@ -4579,6 +5047,28 @@ fn apply_tactic(
                 state,
                 Vec::new(),
                 &smt_trusted_node(tactic_options),
+            ))
+        }
+        Some("atp") => {
+            if !args.is_empty() {
+                return Err(tactic_diagnostic(
+                    record_tactic,
+                    Some(current),
+                    "atp expects no tactic arguments",
+                ));
+            }
+            let tptp = goal_to_tptp(current)
+                .map_err(|diag| tactic_diagnostic(record_tactic, Some(current), diag.message))?;
+            let proved = run_atp_process(&tptp, &tactic_options.atp)
+                .map_err(|reason| tactic_diagnostic(record_tactic, Some(current), reason))?;
+            Ok(replace_current_goal(
+                state,
+                Vec::new(),
+                &Node::List(vec![
+                    leaf("by"),
+                    leaf("atp-trusted"),
+                    Node::Leaf(proved.solver),
+                ]),
             ))
         }
         Some("exact") => {

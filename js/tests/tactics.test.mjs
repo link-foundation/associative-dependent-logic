@@ -8,7 +8,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  goalToTptp,
   keyOf,
+  parseAtpStatus,
   parseOne,
   runTactics,
   rewrite,
@@ -26,6 +28,10 @@ function state(...goals) {
 
 function goalKeys(proofState) {
   return proofState.goals.map(goal => keyOf(goal.goal));
+}
+
+function mockAtpArgs(source) {
+  return ['-e', source];
 }
 
 function withTempDir(fn) {
@@ -195,6 +201,95 @@ describe('runTactics applies link tactics to proof states', () => {
     assert.strictEqual(out.diagnostics[0].code, 'E039');
     assert.match(out.diagnostics[0].message, /current goal: \(a = b\)/);
     assert.deepStrictEqual(goalKeys(out.state), ['(a = b)']);
+  });
+
+  it('exports first-order goals and context to TPTP fof problems', () => {
+    const tptp = goalToTptp({
+      goal: link('(P a)'),
+      context: [
+        link('(forall (Thing x) (P x))'),
+        link('(a of Thing)'),
+      ],
+    });
+
+    assert.match(tptp, /fof\(rml_context_1, axiom, \(!\[X\] : \(p\(X\)\)\)\)\./);
+    assert.match(tptp, /fof\(rml_context_2, axiom, \(thing\(a\)\)\)\./);
+    assert.match(tptp, /fof\(rml_goal, conjecture, \(p\(a\)\)\)\./);
+  });
+
+  it('parses SZS statuses from ATP output', () => {
+    assert.deepStrictEqual(
+      parseAtpStatus('% SZS status Theorem for rml_goal\n'),
+      { status: 'Theorem', kind: 'proved' },
+    );
+    assert.deepStrictEqual(
+      parseAtpStatus('% SZS status Unknown for rml_goal\n'),
+      { status: 'Unknown', kind: 'unknown' },
+    );
+  });
+
+  it('closes the current goal with a configured ATP proving status', () => {
+    const out = runTactics(
+      state('(P a)'),
+      [link('(by atp)')],
+      {
+        atp: {
+          path: process.execPath,
+          args: mockAtpArgs(`
+            process.stdin.resume();
+            process.stdin.on('end', () => console.log('% SZS status Theorem for rml_goal'));
+          `),
+          name: 'mock-atp',
+          timeoutMs: 1000,
+        },
+      },
+    );
+
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.state.goals, []);
+    assert.deepStrictEqual(out.state.proof.map(keyOf), ['(by atp-trusted mock-atp)']);
+  });
+
+  it('reports ATP failure modes without closing the goal', () => {
+    const unconfigured = runTactics(state('(P a)'), [link('(by atp)')]);
+    assert.strictEqual(unconfigured.diagnostics.length, 1);
+    assert.match(unconfigured.diagnostics[0].message, /ATP path is not configured/);
+    assert.deepStrictEqual(goalKeys(unconfigured.state), ['(P a)']);
+
+    const unknown = runTactics(
+      state('(P a)'),
+      [link('(by atp)')],
+      {
+        atp: {
+          path: process.execPath,
+          args: mockAtpArgs(`
+            process.stdin.resume();
+            process.stdin.on('end', () => console.log('% SZS status Unknown for rml_goal'));
+          `),
+          name: 'mock-atp',
+          timeoutMs: 1000,
+        },
+      },
+    );
+    assert.strictEqual(unknown.diagnostics.length, 1);
+    assert.match(unknown.diagnostics[0].message, /ATP returned Unknown/);
+    assert.deepStrictEqual(goalKeys(unknown.state), ['(P a)']);
+
+    const timedOut = runTactics(
+      state('(P a)'),
+      [link('(by atp)')],
+      {
+        atp: {
+          path: process.execPath,
+          args: mockAtpArgs('setTimeout(() => {}, 1000);'),
+          name: 'mock-atp',
+          timeoutMs: 1,
+        },
+      },
+    );
+    assert.strictEqual(timedOut.diagnostics.length, 1);
+    assert.match(timedOut.diagnostics[0].message, /ATP timed out/);
+    assert.deepStrictEqual(goalKeys(timedOut.state), ['(P a)']);
   });
 
   it('closes a goal with (by smt) when the configured solver returns unsat', () => withTempDir((dir) => {

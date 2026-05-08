@@ -2,10 +2,10 @@
 // Mirrors js/tests/tactics.test.mjs so drift between runtimes fails CI.
 
 use rml::{
-    key_of, parse_one, parse_tactic_links, rewrite_with_options, run_tactics,
-    run_tactics_with_options, simplify, simplify_with_options, tokenize_one, Node, ProofGoal,
-    ProofState, RewriteDirection, RewriteOccurrence, RewriteOptions, SimplifyOptions,
-    TacticOptions,
+    goal_to_tptp, key_of, parse_atp_status, parse_one, parse_tactic_links, rewrite_with_options,
+    run_tactics, run_tactics_with_options, simplify, simplify_with_options, tokenize_one,
+    AtpOptions, AtpStatus, AtpStatusKind, Node, ProofGoal, ProofState, RewriteDirection,
+    RewriteOccurrence, RewriteOptions, SimplifyOptions, TacticOptions,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -34,6 +34,15 @@ fn goal_keys(proof_state: &ProofState) -> Vec<String> {
         .iter()
         .map(|goal| key_of(&goal.goal))
         .collect()
+}
+
+fn mock_atp_options(script: &str, timeout_ms: u64) -> AtpOptions {
+    AtpOptions {
+        path: Some("/bin/sh".to_string()),
+        args: vec!["-c".to_string(), script.to_string()],
+        name: Some("mock-atp".to_string()),
+        timeout_ms,
+    }
 }
 
 fn with_temp_dir<T>(f: impl FnOnce(&PathBuf) -> T) -> T {
@@ -237,6 +246,98 @@ fn failed_tactic_reports_current_goal() {
     assert_eq!(out.diagnostics[0].code, "E039");
     assert!(out.diagnostics[0].message.contains("current goal: (a = b)"));
     assert_eq!(goal_keys(&out.state), vec!["(a = b)"]);
+}
+
+#[test]
+fn exports_first_order_goals_and_context_to_tptp_fof_problems() {
+    let goal = ProofGoal {
+        goal: link("(P a)"),
+        context: vec![link("(forall (Thing x) (P x))"), link("(a of Thing)")],
+    };
+    let tptp = goal_to_tptp(&goal).expect("TPTP export should succeed");
+
+    assert!(tptp.contains("fof(rml_context_1, axiom, (![X] : (p(X))))."));
+    assert!(tptp.contains("fof(rml_context_2, axiom, (thing(a)))."));
+    assert!(tptp.contains("fof(rml_goal, conjecture, (p(a)))."));
+}
+
+#[test]
+fn parses_szs_statuses_from_atp_output() {
+    assert_eq!(
+        parse_atp_status("% SZS status Theorem for rml_goal\n"),
+        Some(AtpStatus {
+            status: "Theorem".to_string(),
+            kind: AtpStatusKind::Proved,
+        })
+    );
+    assert_eq!(
+        parse_atp_status("% SZS status Unknown for rml_goal\n"),
+        Some(AtpStatus {
+            status: "Unknown".to_string(),
+            kind: AtpStatusKind::Unknown,
+        })
+    );
+}
+
+#[test]
+fn closes_current_goal_with_configured_atp_proving_status() {
+    let out = run_tactics_with_options(
+        state(&["(P a)"]),
+        &[link("(by atp)")],
+        TacticOptions {
+            atp: mock_atp_options(
+                "cat >/dev/null; printf '%s\n' '% SZS status Theorem for rml_goal'",
+                1000,
+            ),
+            ..TacticOptions::default()
+        },
+    );
+
+    assert!(out.diagnostics.is_empty());
+    assert!(out.state.goals.is_empty());
+    assert_eq!(
+        out.state.proof.iter().map(key_of).collect::<Vec<_>>(),
+        vec!["(by atp-trusted mock-atp)"]
+    );
+}
+
+#[test]
+fn reports_atp_failure_modes_without_closing_the_goal() {
+    let unconfigured = run_tactics(state(&["(P a)"]), &[link("(by atp)")]);
+    assert_eq!(unconfigured.diagnostics.len(), 1);
+    assert!(unconfigured.diagnostics[0]
+        .message
+        .contains("ATP path is not configured"));
+    assert_eq!(goal_keys(&unconfigured.state), vec!["(P a)"]);
+
+    let unknown = run_tactics_with_options(
+        state(&["(P a)"]),
+        &[link("(by atp)")],
+        TacticOptions {
+            atp: mock_atp_options(
+                "cat >/dev/null; printf '%s\n' '% SZS status Unknown for rml_goal'",
+                1000,
+            ),
+            ..TacticOptions::default()
+        },
+    );
+    assert_eq!(unknown.diagnostics.len(), 1);
+    assert!(unknown.diagnostics[0]
+        .message
+        .contains("ATP returned Unknown"));
+    assert_eq!(goal_keys(&unknown.state), vec!["(P a)"]);
+
+    let timed_out = run_tactics_with_options(
+        state(&["(P a)"]),
+        &[link("(by atp)")],
+        TacticOptions {
+            atp: mock_atp_options("sleep 1", 1),
+            ..TacticOptions::default()
+        },
+    );
+    assert_eq!(timed_out.diagnostics.len(), 1);
+    assert!(timed_out.diagnostics[0].message.contains("ATP timed out"));
+    assert_eq!(goal_keys(&timed_out.state), vec!["(P a)"]);
 }
 
 #[test]

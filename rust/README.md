@@ -73,7 +73,7 @@ typed subset.
 use rml::{
     run, evaluate, format_diagnostic, Diagnostic, EvaluateResult, RunResult, Span,
     tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round, subst,
-    run_tactics, rewrite, simplify, ProofState,
+    run_tactics, rewrite, simplify, goal_to_tptp, parse_atp_status, ProofState,
     automatic_sequences_domain_plugin, decide_automatic_sequence_theorem,
     export_lean,
     formalize_selected_interpretation, evaluate_formalization,

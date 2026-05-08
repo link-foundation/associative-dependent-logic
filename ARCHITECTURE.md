@@ -126,14 +126,17 @@ The tactic engine keeps proof steps as links:
 |------------|------|---------|
 | `runTactics(state, tactics, options)` | `run_tactics(state, tactics)` / `run_tactics_with_options(...)` | Apply link tactics to a proof state and return the updated state plus diagnostics. |
 | `rewrite(goal, eq)` / `simplify(goal, rules)` | `rewrite(...)` / `simplify(...)` | Apply a single equality rewrite or a guarded rewrite set directly. |
+| `goalToTptp(goal)` / `parseAtpStatus(output)` | `goal_to_tptp(goal)` / `parse_atp_status(output)` | Export first-order proof goals to TPTP FOF and classify ATP SZS statuses. |
 | Goal state | `ProofState` / `ProofGoal` | Open goals, local context, and successful tactic links. |
 | `Env.registerDomainPlugin(name, plugin)` | `Env::register_domain_plugin(name, plugin)` | Register a `(domain <name> ...)` decision procedure. |
 
 Built-in tactics are `reflexivity`, `symmetry`, `transitivity`, `induction`,
-`suppose`, `introduce`, `by`, `rewrite`, `simplify`, `smt`, and `exact`.
+`suppose`, `introduce`, `by`, `rewrite`, `simplify`, `smt`, `atp`, and `exact`.
 `(by smt)` invokes a configured SMT-LIB solver and records successful external
-decisions as `(by smt-trusted <solver>)`. A failed tactic emits `E039` and
-includes the current goal in the diagnostic message.
+decisions as `(by smt-trusted <solver>)`. `(by atp)` invokes a configured TPTP
+FOF ATP and records successful SZS proving statuses as `(by atp-trusted
+<solver>)`. A failed tactic emits `E039` and includes the current goal in the
+diagnostic message.
 
 The default environment also registers the `automatic-sequences` domain
 plugin. It currently ships the classic `thue-morse-cube-free` decision and
