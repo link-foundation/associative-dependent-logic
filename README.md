@@ -153,6 +153,16 @@ namespace:
 (? (ar.decimal-sum-equals 0.1 0.2 0.3))
 ```
 
+The [algebra library](./lib/algebra/core.lino) exports operation laws and
+magma, semigroup, monoid, group, abelian-group, and unital-ring schemas from
+the `algebra` namespace:
+
+```lino
+(import "lib/algebra/core.lino" as al)
+(? (al.group (carrier G) (op times) (identity e) (inverse inv)))
+(? (al.ring R plus zero neg times one))
+```
+
 ### Isabelle export
 
 ```bash
