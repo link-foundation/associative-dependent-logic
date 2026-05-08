@@ -1,0 +1,176 @@
+# Programming-language theory standard library.
+#
+# This file exports untyped lambda-calculus constructors, simply typed lambda
+# calculus typing and small-step schemas, and type-safety theorem forms under
+# the `programming-language` namespace. Import it with an alias such as:
+#
+#   (import "lib/programming-language/core.lino" as pl)
+#   (? (pl.theorem progress (pl.progress term T)))
+#   (? (pl.theorem preservation (pl.preservation term next T)))
+
+(namespace programming-language)
+
+(valence: 2)
+(and: min)
+(or: max)
+(not: not)
+(!=: not =)
+
+(Expression: (Type 0) Expression)
+(Context: (Type 0) Context)
+(Judgment: (Type 0) Judgment)
+(empty-context: Context empty-context)
+
+(template (implies antecedent consequent)
+  (programming-language.or (programming-language.not antecedent) consequent))
+
+(template (iff left right)
+  (programming-language.and
+    (programming-language.implies left right)
+    (programming-language.implies right left)))
+
+(template (theorem name statement)
+  statement)
+
+(template (extend-context context variable typ)
+  (programming-language.context-extend context variable typ))
+
+(template (lookup context variable typ)
+  (programming-language.context-lookup context variable typ))
+
+(template (variable name)
+  (programming-language.object-variable name))
+
+(template (abstraction variable body)
+  (programming-language.object-lambda variable body))
+
+(template (application function argument)
+  (programming-language.object-apply function argument))
+
+(template (substitution body variable replacement)
+  (programming-language.object-substitution body variable replacement))
+
+(template (beta-redex variable body argument)
+  (programming-language.application
+    (programming-language.abstraction variable body)
+    argument))
+
+(template (steps-to expression next)
+  (programming-language.small-step expression next))
+
+(template (multi-step expression result)
+  (programming-language.multi-step expression result))
+
+(template (beta-reduction variable body argument)
+  (programming-language.steps-to
+    (programming-language.beta-redex variable body argument)
+    (programming-language.substitution body variable argument)))
+
+(template (step-application-function function next-function argument)
+  (programming-language.implies
+    (programming-language.steps-to function next-function)
+    (programming-language.steps-to
+      (programming-language.application function argument)
+      (programming-language.application next-function argument))))
+
+(template (step-application-argument function argument next-argument)
+  (programming-language.implies
+    (programming-language.and
+      (programming-language.value function)
+      (programming-language.steps-to argument next-argument))
+    (programming-language.steps-to
+      (programming-language.application function argument)
+      (programming-language.application function next-argument))))
+
+(template (value expression)
+  (programming-language.term-value expression))
+
+(template (lambda-value variable body)
+  (programming-language.value
+    (programming-language.abstraction variable body)))
+
+(template (base-type name)
+  (programming-language.simple-base-type name))
+
+(template (function-type domain codomain)
+  (programming-language.simple-function-type domain codomain))
+
+(template (has-type context expression typ)
+  (programming-language.typing-judgment context expression typ))
+
+(template (well-typed expression typ)
+  (programming-language.has-type
+    programming-language.empty-context
+    expression
+    typ))
+
+(template (typing-variable context variable typ)
+  (programming-language.implies
+    (programming-language.lookup context variable typ)
+    (programming-language.has-type
+      context
+      (programming-language.variable variable)
+      typ)))
+
+(template (typing-abstraction context variable domain body codomain)
+  (programming-language.implies
+    (programming-language.has-type
+      (programming-language.extend-context context variable domain)
+      body
+      codomain)
+    (programming-language.has-type
+      context
+      (programming-language.abstraction variable body)
+      (programming-language.function-type domain codomain))))
+
+(template (typing-application context function argument domain codomain)
+  (programming-language.implies
+    (programming-language.and
+      (programming-language.has-type
+        context
+        function
+        (programming-language.function-type domain codomain))
+      (programming-language.has-type context argument domain))
+    (programming-language.has-type
+      context
+      (programming-language.application function argument)
+      codomain)))
+
+(template (canonical-function expression)
+  (exists (programming-language.Expression variable)
+    (exists (programming-language.Expression body)
+      (= expression
+         (programming-language.abstraction variable body)))))
+
+(template (progress-in context expression typ)
+  (programming-language.implies
+    (programming-language.has-type context expression typ)
+    (programming-language.or
+      (programming-language.value expression)
+      (exists (programming-language.Expression next)
+        (programming-language.steps-to expression next)))))
+
+(template (progress expression typ)
+  (programming-language.progress-in
+    programming-language.empty-context
+    expression
+    typ))
+
+(template (preservation-in context expression next typ)
+  (programming-language.implies
+    (programming-language.and
+      (programming-language.has-type context expression typ)
+      (programming-language.steps-to expression next))
+    (programming-language.has-type context next typ)))
+
+(template (preservation expression next typ)
+  (programming-language.preservation-in
+    programming-language.empty-context
+    expression
+    next
+    typ))
+
+(template (type-safety expression next typ)
+  (programming-language.and
+    (programming-language.progress expression typ)
+    (programming-language.preservation expression next typ)))
