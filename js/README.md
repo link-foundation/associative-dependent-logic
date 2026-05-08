@@ -66,6 +66,7 @@ import {
   evalNode,
   runTactics,
   search,
+  counterModel,
   quantize,
   decRound,
   keyOf,
@@ -114,6 +115,10 @@ const searchProof = search(
   ],
 );
 // -> (by apply trans (by exact ab) (by exact bc))
+
+// Exhaustively find a finite-valence counter-model, or null for a tautology
+const witness = counterModel(parseOne(tokenizeOne('(or p (not p))')), 3);
+// -> { valuation: { p: 0.5 }, value: 0.5, ... }
 
 // Quantize a value to N discrete levels
 const q = quantize(0.4, 3, 0, 1); // -> 0.5 (nearest ternary level)
