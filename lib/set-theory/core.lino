@@ -1,0 +1,110 @@
+# Set theory standard library.
+#
+# This file configures Boolean connectives for classical set theory and exports
+# membership, basic set constructors, and ZF-style axiom schemas under the
+# `set-theory` namespace. Import it with an alias such as:
+#
+#   (import "lib/set-theory/core.lino" as st)
+#   (? (st.member-of x (set-of-naturals)))
+#   (? (st.axiom-extensionality a b))
+
+(namespace set-theory)
+
+(valence: 2)
+(and: min)
+(or: max)
+(not: not)
+(!=: not =)
+
+(template (implies antecedent consequent)
+  (set-theory.or (set-theory.not antecedent) consequent))
+
+(template (iff left right)
+  (set-theory.and
+    (set-theory.implies left right)
+    (set-theory.implies right left)))
+
+(template (member-of element set)
+  (member-of element set))
+
+(template (subset-of left right)
+  (forall (Set element)
+    (set-theory.implies
+      (set-theory.member-of element left)
+      (set-theory.member-of element right))))
+
+(template (same-set left right)
+  (forall (Set element)
+    (set-theory.iff
+      (set-theory.member-of element left)
+      (set-theory.member-of element right))))
+
+(template (axiom-extensionality left right)
+  (set-theory.implies
+    (set-theory.same-set left right)
+    (= left right)))
+
+(template (singleton element)
+  (singleton element))
+
+(template (unordered-pair left right)
+  (unordered-pair left right))
+
+(template (pair-membership element left right)
+  (set-theory.or (= element left) (= element right)))
+
+(template (axiom-pairing left right pair-set)
+  (forall (Set element)
+    (set-theory.iff
+      (set-theory.member-of element pair-set)
+      (set-theory.pair-membership element left right))))
+
+(template (union collection)
+  (union collection))
+
+(template (axiom-union collection union-set)
+  (forall (Set element)
+    (set-theory.iff
+      (set-theory.member-of element union-set)
+      (exists (Set member-set)
+        (set-theory.and
+          (set-theory.member-of element member-set)
+          (set-theory.member-of member-set collection))))))
+
+(template (separation source predicate)
+  (separation source predicate))
+
+(template (axiom-separation source predicate subset)
+  (forall (Set element)
+    (set-theory.iff
+      (set-theory.member-of element subset)
+      (set-theory.and
+        (set-theory.member-of element source)
+        (predicate element)))))
+
+(template (replacement source mapping)
+  (replacement source mapping))
+
+(template (axiom-replacement source mapping image)
+  (forall (Set output)
+    (set-theory.iff
+      (set-theory.member-of output image)
+      (exists (Set input)
+        (set-theory.and
+          (set-theory.member-of input source)
+          (mapping input output))))))
+
+(template (successor set)
+  (set-theory.union
+    (set-theory.unordered-pair set (set-theory.singleton set))))
+
+(template (inductive-set set)
+  (set-theory.and
+    (set-theory.member-of empty-set set)
+    (forall (Set element)
+      (set-theory.implies
+        (set-theory.member-of element set)
+        (set-theory.member-of (set-theory.successor element) set)))))
+
+(template (axiom-infinity naturals)
+  (set-theory.inductive-set naturals))

@@ -133,6 +133,15 @@ fragment from the `provability` namespace:
 (? (pr.interprets theory-a theory-b))
 ```
 
+The set-theory library exports membership, basic set constructors, and
+ZF-style axiom schemas from the `set-theory` namespace:
+
+```lino
+(import "lib/set-theory/core.lino" as st)
+(? (st.member-of x (set-of-naturals)))
+(? (st.axiom-extensionality a b))
+```
+
 ### Isabelle export
 
 ```bash
