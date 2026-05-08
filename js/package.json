@@ -14,7 +14,7 @@
     "demo": "node src/rml-links.mjs ../examples/demo.lino",
     "check": "node src/rml-check.mjs",
     "meta": "node src/rml-meta.mjs",
-    "lint:english": "node ../scripts/lint-english.mjs --allowlist ../scripts/lint-english.allowlist.json ../examples/*.lino"
+    "lint:english": "node ../scripts/lint-english.mjs --allowlist ../scripts/lint-english.allowlist.json ../examples/*.lino ../lib/classical/*.lino"
   },
   "keywords": [
     "logic",

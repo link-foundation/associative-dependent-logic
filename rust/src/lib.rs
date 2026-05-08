@@ -7498,6 +7498,18 @@ fn define_form(head: &str, rhs: &[Node], env: &mut Env) -> EvalResult {
         || head.contains('!');
 
     if is_op_name {
+        // Operator alias: `(not: not)` inside a namespace exports the existing
+        // operator under the qualified name, e.g. `classical.not`.
+        if rhs.len() == 1 {
+            if let Node::Leaf(ref target) = rhs[0] {
+                if let Some(op) = env.get_op(target.as_str()).cloned() {
+                    env.define_op(&store_name, op);
+                    env.trace("resolve", format!("({}: {})", store_name, target));
+                    return EvalResult::Value(1.0);
+                }
+            }
+        }
+
         // Composition like: (!=: not =) or (=: =) (no-op)
         if rhs.len() == 2 {
             if let (Node::Leaf(ref outer), Node::Leaf(ref inner)) = (&rhs[0], &rhs[1]) {

@@ -84,6 +84,18 @@ Examples are language-agnostic and live in [`/examples/`](./examples/). Both
 implementations execute the same files and are required to produce identical
 output (enforced by `examples/expected.lino` and the shared-examples tests).
 
+### Standard libraries
+
+Reusable LiNo libraries live under [`/lib/`](./lib/). The classical Boolean
+library configures two-valued truth values and exports connectives, laws, and
+natural-deduction rule schemas from the `classical` namespace:
+
+```lino
+(import "lib/classical/core.lino" as cl)
+(? (cl.or p (cl.not p)))
+(? (cl.excluded-middle p))
+```
+
 ### Isabelle export
 
 ```bash
@@ -564,6 +576,10 @@ See `examples/classical-logic.lino` — the most familiar logic system where eve
 (? ((p = true) or (not (p = true))))    # -> 1 (law of excluded middle)
 (? ((p = true) and (not (p = true))))   # -> 0 (law of non-contradiction)
 ```
+
+For reusable imports, see `lib/classical/core.lino`, which packages these
+Boolean connectives plus excluded middle, double negation, De Morgan laws, and
+natural-deduction rule schemas under the `classical` namespace.
 
 ### Propositional Logic (Probabilistic)
 
