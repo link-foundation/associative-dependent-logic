@@ -23,6 +23,7 @@ For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 - [Typed kernel rules](./docs/KERNEL.md) - The implemented D1 rules for `Pi`, `lambda`, `apply`, `(expr of Type)`, and `(type of expr)`.
 - [Soundness statement](./docs/SOUNDNESS.md) - The trusted-kernel guarantee, proof-replay checker, trusted operator base, and aggregator-relative scope of soundness.
 - [Metatheorem checker](./docs/METATHEOREMS.md) - The C3 Twelf-style guarantee that composes D12 totality, D14 coverage, D15 modes, and D13 termination, plus the `rml-meta` CLI.
+- [Rocq export](./docs/ROCQ-EXPORT.md) - The supported typed LiNo subset for `rml export rocq <file.lino> -o <file.v>`.
 
 ## Overview
 
@@ -76,6 +77,17 @@ cargo run -- ../examples/demo.lino
 Examples are language-agnostic and live in [`/examples/`](./examples/). Both
 implementations execute the same files and are required to produce identical
 output (enforced by `examples/expected.lino` and the shared-examples tests).
+
+### Rocq Export
+
+Both CLIs can translate the supported typed fragment to Rocq source:
+
+```bash
+node js/src/rml-links.mjs export rocq examples/dependent-types.lino -o dependent_types.v
+cargo run --manifest-path rust/Cargo.toml -- export rocq examples/dependent-types.lino -o dependent_types.v
+```
+
+See [docs/ROCQ-EXPORT.md](./docs/ROCQ-EXPORT.md) for the accepted subset.
 
 ### Example
 
