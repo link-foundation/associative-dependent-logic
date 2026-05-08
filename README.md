@@ -105,6 +105,15 @@ The first-order library exports aliasable quantifier templates from the
 (? ((fo.exists (Term x) (predicate x)) = (exists (Term x) (predicate x))))
 ```
 
+The higher-order library exports quantifier templates for predicate binders
+from the `higher-order` namespace:
+
+```lino
+(import "lib/higher-order/core.lino" as ho)
+(? (ho.forall ((Pi (Natural n) Boolean) P)
+     ((P zero) implies (ho.forall (Natural n) (P (succ n))))))
+```
+
 ### Isabelle export
 
 ```bash
