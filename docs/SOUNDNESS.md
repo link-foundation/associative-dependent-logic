@@ -56,6 +56,9 @@ The trusted base is deliberately small, but it is not empty. It includes:
 - The built-in rule classifier used by the checker.
 - The evaluator's implementations of arithmetic, equality, type facts,
   lambda reduction, truth-range clamping, valence quantization, and aggregators.
+- Explicit external SMT decisions recorded as `(by smt-trusted <solver>)`.
+  Replay validates the trusted-node shape and solver name payload; it does not
+  replay the solver's proof.
 - The source program's own declarations and assignments, treated as axioms of
   the current run.
 
@@ -77,6 +80,7 @@ The proof language currently trusts these rule families:
 | Equality | `assigned-equality`, `structural-equality`, `numeric-equality` |
 | Inequality | `assigned-inequality`, `structural-inequality`, `numeric-inequality` |
 | Type kernel | `type-universe`, `prop`, `pi-formation`, `lambda-formation`, `beta-reduction`, `type-query`, `type-check` |
+| External solver | `smt-trusted` |
 | Fallback | `reduce` for expressions outside a more specific proof rule |
 
 The operator names in the trusted base are the built-ins plus operators
@@ -85,6 +89,12 @@ checker validates that subderivations line up with the expression being
 checked. For user-introduced operators, the checker validates structural use of
 the operator name; the meaning of that operator is whatever the source program
 installed before the query.
+
+The SMT bridge deliberately trusts an external decision procedure at the
+boundary. `(by smt)` invokes the configured solver with an SMT-LIB validity
+query and produces `(by smt-trusted <solver>)` only when the solver reports
+`unsat`; proof replay later trusts that node rather than invoking the solver
+again.
 
 ## Aggregator-Relative Soundness
 

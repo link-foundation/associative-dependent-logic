@@ -7,6 +7,9 @@ use rml::{
     AtpOptions, AtpStatus, AtpStatusKind, Node, ProofGoal, ProofState, RewriteDirection,
     RewriteOccurrence, RewriteOptions, SimplifyOptions, TacticOptions,
 };
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn link(src: &str) -> Node {
     parse_one(&tokenize_one(src)).expect("parse failed")
@@ -40,6 +43,18 @@ fn mock_atp_options(script: &str, timeout_ms: u64) -> AtpOptions {
         name: Some("mock-atp".to_string()),
         timeout_ms,
     }
+}
+
+fn with_temp_dir<T>(f: impl FnOnce(&PathBuf) -> T) -> T {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("rml-smt-rust-{}-{nonce}", std::process::id()));
+    fs::create_dir_all(&dir).expect("temp dir should be creatable");
+    let result = f(&dir);
+    let _ = fs::remove_dir_all(&dir);
+    result
 }
 
 #[test]
@@ -185,7 +200,7 @@ fn simplifies_current_goal_with_configured_rewrite_rules() {
         TacticOptions {
             rewrite_rules: vec![link("(a = b)")],
             simplify_max_steps: 10,
-            atp: AtpOptions::default(),
+            ..TacticOptions::default()
         },
     );
 
@@ -323,4 +338,76 @@ fn reports_atp_failure_modes_without_closing_the_goal() {
     assert_eq!(timed_out.diagnostics.len(), 1);
     assert!(timed_out.diagnostics[0].message.contains("ATP timed out"));
     assert_eq!(goal_keys(&timed_out.state), vec!["(P a)"]);
+}
+
+#[test]
+fn closes_goal_with_smt_when_solver_returns_unsat() {
+    with_temp_dir(|dir| {
+        let capture = dir.join("input.smt2");
+        let out = run_tactics_with_options(
+            state(&["(a = a)"]),
+            &[link("(by smt)")],
+            TacticOptions {
+                smt_solver: Some("sh".to_string()),
+                smt_solver_args: vec![
+                    "-c".to_string(),
+                    "cat > \"$1\"; echo unsat".to_string(),
+                    "sh".to_string(),
+                    capture.display().to_string(),
+                ],
+                smt_timeout_ms: 1000,
+                ..TacticOptions::default()
+            },
+        );
+
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert!(out.state.goals.is_empty());
+        assert_eq!(
+            out.state.proof.iter().map(key_of).collect::<Vec<_>>(),
+            vec!["(by smt-trusted sh)"]
+        );
+
+        let smt_lib = fs::read_to_string(capture).expect("SMT input should be captured");
+        assert!(smt_lib.contains("(declare-const |a| Real)"));
+        assert!(smt_lib.contains("(assert (not (= |a| |a|)))"));
+        assert!(smt_lib.contains("(check-sat)"));
+    });
+}
+
+#[test]
+fn reports_unknown_from_smt_solver_without_closing_goal() {
+    let out = run_tactics_with_options(
+        state(&["(a = a)"]),
+        &[link("(by smt)")],
+        TacticOptions {
+            smt_solver: Some("sh".to_string()),
+            smt_solver_args: vec!["-c".to_string(), "echo unknown".to_string()],
+            smt_timeout_ms: 1000,
+            ..TacticOptions::default()
+        },
+    );
+
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E039");
+    assert!(out.diagnostics[0].message.contains("returned unknown"));
+    assert_eq!(goal_keys(&out.state), vec!["(a = a)"]);
+}
+
+#[test]
+fn reports_smt_solver_timeout_without_closing_goal() {
+    let out = run_tactics_with_options(
+        state(&["(a = a)"]),
+        &[link("(by smt)")],
+        TacticOptions {
+            smt_solver: Some("sh".to_string()),
+            smt_solver_args: vec!["-c".to_string(), "sleep 2".to_string()],
+            smt_timeout_ms: 20,
+            ..TacticOptions::default()
+        },
+    );
+
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E039");
+    assert!(out.diagnostics[0].message.contains("timed out"));
+    assert_eq!(goal_keys(&out.state), vec!["(a = a)"]);
 }

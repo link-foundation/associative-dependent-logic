@@ -245,6 +245,12 @@ class Env {
     // (which cannot generate any infinite values) are rejected at declaration
     // time.
     this.coinductives = new Map();              // name -> { name, constructors, corecName, corecType }
+    // Domain plugins (issue #63): domain-specific decision procedures keyed
+    // by `(domain <name> ...)`. The default registry ships the
+    // automatic-sequences plugin below; callers may register additional
+    // plugin functions on their Env instance.
+    this.domainPlugins = new Map();             // name -> (forms, env) => number
+    this.automaticSequenceDecisions = new Map();// theorem -> decision record
     // Namespace state (issue #34): a file can declare `(namespace foo)`, which
     // prefixes every name it subsequently introduces with `foo.`. Imports can
     // be aliased via `(import "x.lino" as a)`, which records `a` -> the
@@ -319,6 +325,7 @@ class Env {
     //             (unknown: mid(range)), (undefined: mid(range))
     // They can be redefined by the user via (true: <value>), (false: <value>), etc.
     this._initTruthConstants();
+    this.registerDomainPlugin('automatic-sequences', automaticSequencesDomainPlugin);
   }
 
   // Clamp and optionally quantize a value to the valid range
@@ -366,6 +373,15 @@ class Env {
     return resolved !== name && this.ops.has(resolved);
   }
   defineOp(name, fn){ this.ops.set(name, fn); }
+  registerDomainPlugin(name, plugin) {
+    if (typeof name !== 'string' || name.length === 0 || typeof plugin !== 'function') {
+      throw new RmlError('E041', 'Domain plugin registration requires a name and function');
+    }
+    this.domainPlugins.set(name, plugin);
+  }
+  getDomainPlugin(name) {
+    return this.domainPlugins.get(name) || null;
+  }
 
   setExprProb(exprNode, p){
     this.assign.set(keyOf(exprNode), this.clamp(p));
@@ -1033,6 +1049,7 @@ function _queryRequestsProof(node) {
 // into goal objects before applying tactics.
 const DEFAULT_SIMPLIFY_MAX_STEPS = 100;
 const DEFAULT_ATP_TIMEOUT_MS = 5000;
+const DEFAULT_SMT_TIMEOUT_MS = 5000;
 const ATP_PROVED_STATUSES = new Set([
   'Theorem',
   'Unsatisfiable',
@@ -1144,6 +1161,446 @@ function _goalWithContext(current, goal) {
 
 function _rewriteError(message) {
   return new RmlError('E039', message);
+}
+
+function _normaliseSmtSolverArgs(rawArgs) {
+  if (rawArgs === undefined || rawArgs === null) return [];
+  if (Array.isArray(rawArgs)) return rawArgs.map(String);
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim();
+    return trimmed ? trimmed.split(/\s+/) : [];
+  }
+  throw _rewriteError('SMT solver args must be an array or whitespace-separated string');
+}
+
+function _normaliseSmtTimeoutMs(rawTimeout) {
+  const timeout = rawTimeout === undefined || rawTimeout === null || rawTimeout === ''
+    ? DEFAULT_SMT_TIMEOUT_MS
+    : Number(String(rawTimeout));
+  if (!Number.isSafeInteger(timeout) || timeout < 0) {
+    throw _rewriteError(`SMT timeout must be a non-negative integer in milliseconds (got ${String(rawTimeout)})`);
+  }
+  return timeout;
+}
+
+function _normaliseSmtOptions(options = {}) {
+  const solver =
+    options.smtSolverPath ??
+    options.smtSolver ??
+    process.env.RML_SMT_SOLVER ??
+    null;
+  const solverArgs =
+    options.smtSolverArgs ??
+    options.smtArgs ??
+    process.env.RML_SMT_ARGS ??
+    [];
+  const timeout =
+    options.smtTimeoutMs ??
+    process.env.RML_SMT_TIMEOUT_MS ??
+    DEFAULT_SMT_TIMEOUT_MS;
+  return {
+    solver: solver === null || solver === undefined || String(solver).trim() === ''
+      ? null
+      : String(solver),
+    args: _normaliseSmtSolverArgs(solverArgs),
+    timeoutMs: _normaliseSmtTimeoutMs(timeout),
+  };
+}
+
+function _smtSolverProofName(smtOptions) {
+  if (!smtOptions || !smtOptions.solver) return 'unconfigured';
+  const base = path.basename(String(smtOptions.solver)) || String(smtOptions.solver);
+  const safe = base.replace(/\s+/g, '_');
+  return safe || 'solver';
+}
+
+function _smtTrustedNode(smtOptions) {
+  return ['by', 'smt-trusted', _smtSolverProofName(smtOptions)];
+}
+
+function _smtEscapeSymbol(raw) {
+  return `|${String(raw).replace(/\\/g, '\\\\').replace(/\|/g, '\\|')}|`;
+}
+
+function _smtDeclare(ctx, raw, sort) {
+  const key = String(raw);
+  const existing = ctx.declarations.get(key);
+  if (existing && existing !== sort) {
+    throw _rewriteError(`SMT symbol ${keyOf(key)} is used as both ${existing} and ${sort}`);
+  }
+  ctx.declarations.set(key, sort);
+  return _smtEscapeSymbol(key);
+}
+
+function _smtNumber(raw) {
+  const text = String(raw);
+  if (text.startsWith('-')) return `(- ${text.slice(1)})`;
+  return text;
+}
+
+function _smtLeaf(node, value) {
+  return typeof node === 'string' && node === value;
+}
+
+function _smtInfix(node, operators) {
+  return Array.isArray(node) &&
+    node.length === 3 &&
+    typeof node[1] === 'string' &&
+    operators.includes(node[1])
+    ? node[1]
+    : null;
+}
+
+function _smtIsBoolish(node) {
+  if (typeof node === 'string') return node === 'true' || node === 'false';
+  if (!Array.isArray(node) || node.length === 0) return false;
+  if (_smtInfix(node, ['=', '!=', 'and', 'or', '=>', 'implies'])) return true;
+  return typeof node[0] === 'string' && ['not', 'and', 'or', '=>', 'implies'].includes(node[0]);
+}
+
+function _smtTerm(node, ctx) {
+  if (typeof node === 'string') {
+    if (isNum(node)) return _smtNumber(node);
+    if (node === 'true' || node === 'false') {
+      throw _rewriteError(`SMT bridge cannot use Boolean constant ${node} as a Real term`);
+    }
+    return _smtDeclare(ctx, node, 'Real');
+  }
+  if (!Array.isArray(node) || node.length === 0) {
+    throw _rewriteError(`SMT bridge cannot translate term ${keyOf(node)}`);
+  }
+
+  const infix = _smtInfix(node, ['+', '-', '*', '/']);
+  if (infix) {
+    return `(${infix} ${_smtTerm(node[0], ctx)} ${_smtTerm(node[2], ctx)})`;
+  }
+  const head = node[0];
+  if (typeof head === 'string' && ['+', '-', '*', '/'].includes(head) && node.length >= 3) {
+    return `(${head} ${node.slice(1).map(arg => _smtTerm(arg, ctx)).join(' ')})`;
+  }
+
+  return _smtDeclare(ctx, keyOf(node), 'Real');
+}
+
+function _smtEquality(left, right, ctx) {
+  if (_smtIsBoolish(left) || _smtIsBoolish(right)) {
+    return `(= ${_smtFormula(left, ctx)} ${_smtFormula(right, ctx)})`;
+  }
+  return `(= ${_smtTerm(left, ctx)} ${_smtTerm(right, ctx)})`;
+}
+
+function _smtFormula(node, ctx) {
+  if (typeof node === 'string') {
+    if (node === 'true') return 'true';
+    if (node === 'false') return 'false';
+    if (isNum(node)) throw _rewriteError(`SMT bridge cannot use numeric literal ${node} as a Boolean formula`);
+    return _smtDeclare(ctx, node, 'Bool');
+  }
+  if (!Array.isArray(node) || node.length === 0) {
+    throw _rewriteError(`SMT bridge cannot translate formula ${keyOf(node)}`);
+  }
+
+  const infix = _smtInfix(node, ['=', '!=', 'and', 'or', '=>', 'implies']);
+  if (infix === '=') return _smtEquality(node[0], node[2], ctx);
+  if (infix === '!=') return `(not ${_smtEquality(node[0], node[2], ctx)})`;
+  if (infix === 'and' || infix === 'or') {
+    return `(${infix} ${_smtFormula(node[0], ctx)} ${_smtFormula(node[2], ctx)})`;
+  }
+  if (infix === '=>' || infix === 'implies') {
+    return `(=> ${_smtFormula(node[0], ctx)} ${_smtFormula(node[2], ctx)})`;
+  }
+
+  const head = node[0];
+  if (head === 'not' && node.length === 2) return `(not ${_smtFormula(node[1], ctx)})`;
+  if ((head === 'and' || head === 'or') && node.length >= 1) {
+    if (node.length === 1) return head === 'and' ? 'true' : 'false';
+    return `(${head} ${node.slice(1).map(arg => _smtFormula(arg, ctx)).join(' ')})`;
+  }
+  if ((head === '=>' || head === 'implies') && node.length === 3) {
+    return `(=> ${_smtFormula(node[1], ctx)} ${_smtFormula(node[2], ctx)})`;
+  }
+
+  return _smtDeclare(ctx, keyOf(node), 'Bool');
+}
+
+function smtLibForGoal(goal) {
+  const ctx = { declarations: new Map() };
+  const formula = _smtFormula(goal, ctx);
+  const declarations = [...ctx.declarations.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, sort]) => `(declare-const ${_smtEscapeSymbol(name)} ${sort})`);
+  return [
+    ...declarations,
+    `(assert (not ${formula}))`,
+    '(check-sat)',
+    '(exit)',
+    '',
+  ].join('\n');
+}
+
+function _smtProcessSummary(output) {
+  const text = String(output || '').trim();
+  if (!text) return '<no output>';
+  const firstLine = text.split(/\r?\n/)[0];
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}...` : firstLine;
+}
+
+function _parseSmtCheckSat(stdout, stderr) {
+  const combined = `${stdout || ''}\n${stderr || ''}`;
+  for (const line of combined.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === 'unsat' || trimmed === 'sat' || trimmed === 'unknown') return trimmed;
+  }
+  return null;
+}
+
+function _runSmtSolver(smtLib, smtOptions) {
+  if (!smtOptions.solver) {
+    return { status: 'error', reason: 'SMT solver path is not configured' };
+  }
+  const solverName = _smtSolverProofName(smtOptions);
+  const child = spawnSync(smtOptions.solver, smtOptions.args, {
+    input: smtLib,
+    encoding: 'utf8',
+    timeout: smtOptions.timeoutMs,
+    maxBuffer: 1024 * 1024,
+  });
+  if (child.error) {
+    if (child.error.code === 'ETIMEDOUT') {
+      return {
+        status: 'timeout',
+        reason: `SMT solver ${solverName} timed out after ${smtOptions.timeoutMs} ms`,
+      };
+    }
+    return {
+      status: 'error',
+      reason: `SMT solver ${solverName} failed to start: ${child.error.message}`,
+    };
+  }
+  if (child.status !== 0) {
+    return {
+      status: 'error',
+      reason: `SMT solver ${solverName} exited with status ${child.status}: ${_smtProcessSummary(child.stderr || child.stdout)}`,
+    };
+  }
+  const result = _parseSmtCheckSat(child.stdout, child.stderr);
+  if (!result) {
+    return {
+      status: 'error',
+      reason: `SMT solver ${solverName} did not return sat, unsat, or unknown`,
+    };
+  }
+  return { status: result, reason: `SMT solver ${solverName} returned ${result}` };
+}
+
+function _tptpIdentifier(raw, role) {
+  let cleaned = String(raw).replace(/[^A-Za-z0-9_]/g, '_');
+  if (!cleaned) cleaned = role === 'var' ? 'X' : 'rml_symbol';
+  if (role === 'var') {
+    cleaned = cleaned[0].toUpperCase() + cleaned.slice(1);
+    if (!/^[A-Z]/.test(cleaned)) cleaned = `V_${cleaned}`;
+    return cleaned;
+  }
+  cleaned = cleaned.toLowerCase();
+  if (!/^[a-z]/.test(cleaned)) cleaned = `rml_${cleaned}`;
+  return cleaned;
+}
+
+function _tptpTerm(node, boundVars) {
+  if (typeof node === 'string') {
+    if (boundVars.has(node)) return _tptpIdentifier(node, 'var');
+    if (isNum(node)) return _tptpIdentifier(`num_${node}`, 'term');
+    return _tptpIdentifier(node, 'term');
+  }
+  if (!Array.isArray(node) || node.length === 0 || typeof node[0] !== 'string') {
+    throw _rewriteError(`TPTP export supports first-order terms only (got ${keyOf(node)})`);
+  }
+  const head = _tptpIdentifier(node[0], 'term');
+  const args = node.slice(1).map(arg => _tptpTerm(arg, boundVars)).join(', ');
+  return `${head}(${args})`;
+}
+
+function _infixOperands(node, op) {
+  if (!Array.isArray(node) || node.length < 3 || node.length % 2 === 0) return null;
+  const operands = [];
+  for (let i = 0; i < node.length; i += 2) {
+    if (i > 0 && node[i - 1] !== op) return null;
+    operands.push(node[i]);
+  }
+  return operands;
+}
+
+function _tptpJoinFormula(op, operands, boundVars) {
+  return operands.map(part => `(${_tptpFormula(part, boundVars)})`).join(` ${op} `);
+}
+
+function _quantifierParts(node) {
+  if (!Array.isArray(node) || node.length !== 3) return null;
+  const [head, binder, body] = node;
+  if (head !== 'forall' && head !== 'exists' && head !== 'Pi') return null;
+  const parsed = parseBinding(binder);
+  if (!parsed) {
+    throw _rewriteError(`TPTP export could not parse quantifier binder ${keyOf(binder)}`);
+  }
+  return {
+    quantifier: head === 'exists' ? '?' : '!',
+    variable: parsed.paramName,
+    body,
+  };
+}
+
+function _tptpFormula(node, boundVars = new Set()) {
+  if (typeof node === 'string') {
+    if (node === 'true') return '$true';
+    if (node === 'false') return '$false';
+    if (boundVars.has(node)) return _tptpIdentifier(node, 'var');
+    return _tptpIdentifier(node, 'pred');
+  }
+  if (!Array.isArray(node) || node.length === 0) {
+    throw _rewriteError(`TPTP export supports first-order formulas only (got ${keyOf(node)})`);
+  }
+
+  const quantified = _quantifierParts(node);
+  if (quantified) {
+    const nextBound = new Set(boundVars);
+    nextBound.add(quantified.variable);
+    const variable = _tptpIdentifier(quantified.variable, 'var');
+    return `${quantified.quantifier}[${variable}] : (${_tptpFormula(quantified.body, nextBound)})`;
+  }
+
+  const ascription = _typeAscription(node);
+  if (ascription) {
+    return `${_tptpIdentifier(keyOf(ascription.type), 'pred')}(${_tptpTerm(ascription.term, boundVars)})`;
+  }
+
+  const equality = _asEquality(node);
+  if (equality) {
+    return `${_tptpTerm(equality.left, boundVars)} = ${_tptpTerm(equality.right, boundVars)}`;
+  }
+  if (node.length === 3 && node[1] === '!=') {
+    return `${_tptpTerm(node[0], boundVars)} != ${_tptpTerm(node[2], boundVars)}`;
+  }
+
+  const conjunction = _infixOperands(node, 'and');
+  if (conjunction) return _tptpJoinFormula('&', conjunction, boundVars);
+  const disjunction = _infixOperands(node, 'or');
+  if (disjunction) return _tptpJoinFormula('|', disjunction, boundVars);
+  const implication = _infixOperands(node, '=>') ?? _infixOperands(node, 'implies');
+  if (implication && implication.length === 2) return _tptpJoinFormula('=>', implication, boundVars);
+  const equivalence = _infixOperands(node, '<=>') ?? _infixOperands(node, 'iff');
+  if (equivalence && equivalence.length === 2) return _tptpJoinFormula('<=>', equivalence, boundVars);
+
+  if (typeof node[0] === 'string') {
+    const head = node[0];
+    if (head === 'not' && node.length === 2) return `~(${_tptpFormula(node[1], boundVars)})`;
+    if (head === 'and' && node.length >= 2) return _tptpJoinFormula('&', node.slice(1), boundVars);
+    if (head === 'or' && node.length >= 2) return _tptpJoinFormula('|', node.slice(1), boundVars);
+    if ((head === '=>' || head === 'implies') && node.length === 3) {
+      return _tptpJoinFormula('=>', node.slice(1), boundVars);
+    }
+    if ((head === '<=>' || head === 'iff') && node.length === 3) {
+      return _tptpJoinFormula('<=>', node.slice(1), boundVars);
+    }
+    const predicate = _tptpIdentifier(head, 'pred');
+    if (node.length === 1) return predicate;
+    const args = node.slice(1).map(arg => _tptpTerm(arg, boundVars)).join(', ');
+    return `${predicate}(${args})`;
+  }
+
+  throw _rewriteError(`TPTP export supports first-order formulas only (got ${keyOf(node)})`);
+}
+
+function goalToTptp(goal, context = []) {
+  const proofGoal =
+    goal &&
+    typeof goal === 'object' &&
+    !Array.isArray(goal) &&
+    Object.prototype.hasOwnProperty.call(goal, 'goal')
+      ? _normaliseProofGoal(goal)
+      : _normaliseProofGoal({ goal, context });
+  const lines = proofGoal.context.map((ctx, index) =>
+    `fof(rml_context_${index + 1}, axiom, (${_tptpFormula(ctx)})).`);
+  lines.push(`fof(rml_goal, conjecture, (${_tptpFormula(proofGoal.goal)})).`);
+  return `${lines.join('\n')}\n`;
+}
+
+function parseAtpStatus(output) {
+  const match = String(output || '').match(/\bSZS\s+status\s+([A-Za-z][A-Za-z0-9_]*)\b/);
+  if (!match) return null;
+  const status = match[1];
+  let kind = 'failure';
+  if (ATP_PROVED_STATUSES.has(status)) kind = 'proved';
+  else if (ATP_UNKNOWN_STATUSES.has(status)) kind = 'unknown';
+  else if (ATP_TIMEOUT_STATUSES.has(status)) kind = 'timeout';
+  return { status, kind };
+}
+
+function _normaliseAtpOptions(options = {}) {
+  const atp = options.atp && typeof options.atp === 'object' ? options.atp : {};
+  const rawArgs = atp.args ?? options.atpArgs ?? [];
+  let args;
+  if (typeof rawArgs === 'string') {
+    args = rawArgs.trim().length === 0 ? [] : rawArgs.trim().split(/\s+/);
+  } else {
+    args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
+  }
+  const timeoutRaw = atp.timeoutMs ?? options.atpTimeoutMs ?? DEFAULT_ATP_TIMEOUT_MS;
+  const timeoutMs = Number(timeoutRaw);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw _rewriteError(`ATP timeout must be a positive integer (got ${String(timeoutRaw)})`);
+  }
+  const atpPath = atp.path ?? options.atpPath ?? null;
+  const name = atp.name ?? options.atpName ?? (atpPath ? path.basename(String(atpPath)) : 'atp');
+  return {
+    path: atpPath === null || atpPath === undefined || String(atpPath).length === 0
+      ? null
+      : String(atpPath),
+    args,
+    name: String(name || 'atp').replace(/[()\s]+/g, '_'),
+    timeoutMs,
+    maxBuffer: atp.maxBuffer ?? options.atpMaxBuffer ?? 1024 * 1024,
+  };
+}
+
+function _runAtpProcess(tptp, atpOptions) {
+  if (!atpOptions.path) {
+    return { ok: false, reason: 'ATP path is not configured' };
+  }
+  const child = spawnSync(atpOptions.path, atpOptions.args, {
+    input: tptp,
+    encoding: 'utf8',
+    timeout: atpOptions.timeoutMs,
+    maxBuffer: atpOptions.maxBuffer,
+  });
+  const stdout = child.stdout || '';
+  const stderr = child.stderr || '';
+  const combined = `${stdout}\n${stderr}`;
+
+  if (child.error) {
+    if (child.error.code === 'ETIMEDOUT') {
+      return { ok: false, reason: `ATP timed out after ${atpOptions.timeoutMs} ms` };
+    }
+    return { ok: false, reason: `ATP invocation failed: ${child.error.message}` };
+  }
+  if (child.status !== 0) {
+    const detail = stderr.trim() || stdout.trim() || `exit status ${child.status}`;
+    return { ok: false, reason: `ATP exited with status ${child.status}: ${detail}` };
+  }
+
+  const parsed = parseAtpStatus(combined);
+  if (!parsed) {
+    return { ok: false, reason: 'ATP output did not contain an SZS status' };
+  }
+  if (parsed.kind === 'proved') {
+    return { ok: true, status: parsed.status, solver: atpOptions.name };
+  }
+  if (parsed.kind === 'timeout') {
+    return { ok: false, reason: `ATP returned ${parsed.status}` };
+  }
+  if (parsed.kind === 'unknown') {
+    return { ok: false, reason: `ATP returned ${parsed.status}` };
+  }
+  return { ok: false, reason: `ATP returned non-proving status ${parsed.status}` };
 }
 
 function _normaliseRewriteDirection(direction = 'forward') {
@@ -1260,221 +1717,12 @@ function simplify(goal, rules, options = {}) {
   return _simplifyDetailed(goal, rules, options).node;
 }
 
-function _tptpIdentifier(raw, role) {
-  const original = String(raw);
-  let cleaned = original.replace(/[^A-Za-z0-9_]/g, '_');
-  if (cleaned.length === 0) cleaned = role === 'var' ? 'X' : 'rml_symbol';
-  if (role === 'var') {
-    cleaned = cleaned[0].toUpperCase() + cleaned.slice(1);
-    if (!/^[A-Z]/.test(cleaned)) cleaned = `V_${cleaned}`;
-    return cleaned;
-  }
-  cleaned = cleaned.toLowerCase();
-  if (!/^[a-z]/.test(cleaned)) cleaned = `rml_${cleaned}`;
-  return cleaned;
-}
-
-function _tptpTerm(node, boundVars) {
-  if (typeof node === 'string') {
-    if (boundVars.has(node)) return _tptpIdentifier(node, 'var');
-    if (isNum(node)) return _tptpIdentifier(`num_${node}`, 'term');
-    return _tptpIdentifier(node, 'term');
-  }
-  if (!Array.isArray(node) || node.length === 0 || typeof node[0] !== 'string') {
-    throw _rewriteError(`TPTP export supports first-order terms only (got ${keyOf(node)})`);
-  }
-  const head = _tptpIdentifier(node[0], 'term');
-  const args = node.slice(1).map(arg => _tptpTerm(arg, boundVars)).join(', ');
-  return `${head}(${args})`;
-}
-
-function _infixOperands(node, op) {
-  if (!Array.isArray(node) || node.length < 3 || node.length % 2 === 0) return null;
-  const operands = [];
-  for (let i = 0; i < node.length; i += 2) {
-    if (i > 0 && node[i - 1] !== op) return null;
-    operands.push(node[i]);
-  }
-  return operands;
-}
-
-function _tptpJoinFormula(op, operands, boundVars) {
-  return operands.map(part => `(${_tptpFormula(part, boundVars)})`).join(` ${op} `);
-}
-
-function _quantifierParts(node) {
-  if (!Array.isArray(node) || node.length !== 3 || typeof node[0] !== 'string') return null;
-  if (node[0] !== 'forall' && node[0] !== 'exists' && node[0] !== 'Pi') return null;
-  const binding = parseBinding(node[1]);
-  if (!binding) {
-    throw _rewriteError(`TPTP export could not parse quantifier binder ${keyOf(node[1])}`);
-  }
-  return {
-    quantifier: node[0] === 'exists' ? '?' : '!',
-    variable: binding.paramName,
-    body: node[2],
-  };
-}
-
-function _tptpFormula(node, boundVars = new Set()) {
-  if (typeof node === 'string') {
-    if (node === 'true') return '$true';
-    if (node === 'false') return '$false';
-    if (boundVars.has(node)) return _tptpIdentifier(node, 'var');
-    return _tptpIdentifier(node, 'pred');
-  }
-  if (!Array.isArray(node) || node.length === 0) {
-    throw _rewriteError(`TPTP export supports first-order formulas only (got ${keyOf(node)})`);
-  }
-
-  const quantified = _quantifierParts(node);
-  if (quantified) {
-    const nextBound = new Set(boundVars);
-    nextBound.add(quantified.variable);
-    const variable = _tptpIdentifier(quantified.variable, 'var');
-    return `${quantified.quantifier}[${variable}] : (${_tptpFormula(quantified.body, nextBound)})`;
-  }
-
-  const ascription = _typeAscription(node);
-  if (ascription) {
-    return `${_tptpIdentifier(keyOf(ascription.type), 'pred')}(${_tptpTerm(ascription.term, boundVars)})`;
-  }
-
-  const eq = _asEquality(node);
-  if (eq) {
-    return `${_tptpTerm(eq.left, boundVars)} = ${_tptpTerm(eq.right, boundVars)}`;
-  }
-  if (node.length === 3 && node[1] === '!=') {
-    return `${_tptpTerm(node[0], boundVars)} != ${_tptpTerm(node[2], boundVars)}`;
-  }
-
-  const conjunction = _infixOperands(node, 'and');
-  if (conjunction) return _tptpJoinFormula('&', conjunction, boundVars);
-  const disjunction = _infixOperands(node, 'or');
-  if (disjunction) return _tptpJoinFormula('|', disjunction, boundVars);
-  const implication = _infixOperands(node, '=>') || _infixOperands(node, 'implies');
-  if (implication && implication.length === 2) return _tptpJoinFormula('=>', implication, boundVars);
-  const equivalence = _infixOperands(node, '<=>') || _infixOperands(node, 'iff');
-  if (equivalence && equivalence.length === 2) return _tptpJoinFormula('<=>', equivalence, boundVars);
-
-  if (typeof node[0] === 'string') {
-    const head = node[0];
-    if (head === 'not' && node.length === 2) return `~(${_tptpFormula(node[1], boundVars)})`;
-    if (head === 'and' && node.length >= 2) return _tptpJoinFormula('&', node.slice(1), boundVars);
-    if (head === 'or' && node.length >= 2) return _tptpJoinFormula('|', node.slice(1), boundVars);
-    if ((head === '=>' || head === 'implies') && node.length === 3) {
-      return _tptpJoinFormula('=>', node.slice(1), boundVars);
-    }
-    if ((head === '<=>' || head === 'iff') && node.length === 3) {
-      return _tptpJoinFormula('<=>', node.slice(1), boundVars);
-    }
-    const predicate = _tptpIdentifier(head, 'pred');
-    if (node.length === 1) return predicate;
-    const args = node.slice(1).map(arg => _tptpTerm(arg, boundVars)).join(', ');
-    return `${predicate}(${args})`;
-  }
-
-  throw _rewriteError(`TPTP export supports first-order formulas only (got ${keyOf(node)})`);
-}
-
-function goalToTptp(goal, context = []) {
-  const proofGoal =
-    goal &&
-    typeof goal === 'object' &&
-    !Array.isArray(goal) &&
-    Object.prototype.hasOwnProperty.call(goal, 'goal')
-      ? _normaliseProofGoal(goal)
-      : _normaliseProofGoal({ goal, context });
-  const lines = proofGoal.context.map((ctx, index) =>
-    `fof(rml_context_${index + 1}, axiom, (${_tptpFormula(ctx)})).`);
-  lines.push(`fof(rml_goal, conjecture, (${_tptpFormula(proofGoal.goal)})).`);
-  return `${lines.join('\n')}\n`;
-}
-
-function parseAtpStatus(output) {
-  const match = String(output || '').match(/\bSZS\s+status\s+([A-Za-z][A-Za-z0-9_]*)\b/);
-  if (!match) return null;
-  const status = match[1];
-  let kind = 'failure';
-  if (ATP_PROVED_STATUSES.has(status)) kind = 'proved';
-  else if (ATP_UNKNOWN_STATUSES.has(status)) kind = 'unknown';
-  else if (ATP_TIMEOUT_STATUSES.has(status)) kind = 'timeout';
-  return { status, kind };
-}
-
-function _normaliseAtpOptions(options = {}) {
-  const atp = options.atp && typeof options.atp === 'object' ? options.atp : {};
-  const rawArgs = atp.args ?? options.atpArgs ?? [];
-  let args;
-  if (typeof rawArgs === 'string') {
-    args = rawArgs.trim().length === 0 ? [] : rawArgs.trim().split(/\s+/);
-  } else {
-    args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
-  }
-  const timeoutRaw = atp.timeoutMs ?? options.atpTimeoutMs ?? DEFAULT_ATP_TIMEOUT_MS;
-  const timeoutMs = Number(timeoutRaw);
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    throw _rewriteError(`ATP timeout must be a positive integer (got ${String(timeoutRaw)})`);
-  }
-  const atpPath = atp.path ?? options.atpPath ?? null;
-  const name = atp.name ?? options.atpName ?? (atpPath ? path.basename(String(atpPath)) : 'atp');
-  return {
-    path: atpPath === null || atpPath === undefined || String(atpPath).length === 0
-      ? null
-      : String(atpPath),
-    args,
-    name: String(name || 'atp').replace(/[()\s]+/g, '_'),
-    timeoutMs,
-    maxBuffer: atp.maxBuffer ?? options.atpMaxBuffer ?? 1024 * 1024,
-  };
-}
-
-function _runAtpProcess(tptp, atpOptions) {
-  if (!atpOptions.path) {
-    return { ok: false, reason: 'ATP path is not configured' };
-  }
-  const child = spawnSync(atpOptions.path, atpOptions.args, {
-    input: tptp,
-    encoding: 'utf8',
-    timeout: atpOptions.timeoutMs,
-    maxBuffer: atpOptions.maxBuffer,
-  });
-  const stdout = child.stdout || '';
-  const stderr = child.stderr || '';
-  const combined = `${stdout}\n${stderr}`;
-
-  if (child.error) {
-    if (child.error.code === 'ETIMEDOUT') {
-      return { ok: false, reason: `ATP timed out after ${atpOptions.timeoutMs} ms` };
-    }
-    return { ok: false, reason: `ATP invocation failed: ${child.error.message}` };
-  }
-  if (child.status !== 0) {
-    const detail = stderr.trim() || stdout.trim() || `exit status ${child.status}`;
-    return { ok: false, reason: `ATP exited with status ${child.status}: ${detail}` };
-  }
-
-  const parsed = parseAtpStatus(combined);
-  if (!parsed) {
-    return { ok: false, reason: 'ATP output did not contain an SZS status' };
-  }
-  if (parsed.kind === 'proved') {
-    return { ok: true, status: parsed.status, solver: atpOptions.name };
-  }
-  if (parsed.kind === 'timeout') {
-    return { ok: false, reason: `ATP returned ${parsed.status}` };
-  }
-  if (parsed.kind === 'unknown') {
-    return { ok: false, reason: `ATP returned ${parsed.status}` };
-  }
-  return { ok: false, reason: `ATP returned non-proving status ${parsed.status}` };
-}
-
 function _normaliseTacticOptions(options = {}) {
   return {
     rewriteRules: _normaliseRewriteRules(options.rewriteRules ?? options.rules ?? []),
     simplifyMaxSteps: _normaliseSimplifyMaxSteps(options),
     atp: _normaliseAtpOptions(options),
+    smt: _normaliseSmtOptions(options),
   };
 }
 
@@ -1747,6 +1995,38 @@ function _applyTactic(state, tactic, recordTactic = tactic, tacticOptions = _nor
     return {
       ok: true,
       state: _replaceCurrentGoal(state, [_goalWithContext(current, simplified.node)], recordTactic),
+    };
+  }
+
+  if (name === 'smt') {
+    if (args.length !== 0) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, 'smt expects no arguments; configure the solver through tactic options'),
+      };
+    }
+    let smtLib;
+    try {
+      smtLib = smtLibForGoal(current.goal);
+    } catch (err) {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, err.message),
+      };
+    }
+    const checked = _runSmtSolver(smtLib, tacticOptions.smt);
+    if (checked.status !== 'unsat') {
+      return {
+        ok: false,
+        state,
+        diagnostic: _tacticDiagnostic(recordTactic, current, checked.reason),
+      };
+    }
+    return {
+      ok: true,
+      state: _replaceCurrentGoal(state, [], _smtTrustedNode(tacticOptions.smt)),
     };
   }
 
@@ -3295,6 +3575,57 @@ function evalFresh(varName, body, env) {
   }
 }
 
+function decideAutomaticSequenceTheorem(name) {
+  if (name === 'thue-morse-cube-free') {
+    return {
+      theorem: name,
+      value: true,
+      method: 'built-in Buchi emptiness certificate',
+      certificate: ['buchi-emptiness', 'thue-morse', 'cube-free'],
+    };
+  }
+  return null;
+}
+
+function automaticSequencesDomainPlugin(forms, env) {
+  if (!Array.isArray(forms) || forms.length === 0) {
+    throw new RmlError('E041', 'automatic-sequences domain requires at least one request');
+  }
+  for (const form of forms) {
+    if (!Array.isArray(form) || form.length !== 2 || form[0] !== 'theorem' || typeof form[1] !== 'string') {
+      throw new RmlError('E041', 'automatic-sequences entries must be `(theorem <name>)`');
+    }
+    const decision = decideAutomaticSequenceTheorem(form[1]);
+    if (!decision) {
+      throw new RmlError('E041', `unknown automatic-sequences theorem "${form[1]}"`);
+    }
+    const storeName = env.qualifyName(decision.theorem);
+    const truthValue = decision.value ? env.hi : env.lo;
+    env.terms.add(storeName);
+    env.setType(storeName, 'Theorem');
+    env.setSymbolProb(storeName, truthValue);
+    env.automaticSequenceDecisions.set(storeName, {
+      ...decision,
+      theorem: storeName,
+      truthValue,
+    });
+    env.trace('domain', `${storeName} decided by automatic-sequences`);
+  }
+  return 1;
+}
+
+function evalDomainForm(node, env) {
+  if (node.length < 3 || typeof node[1] !== 'string') {
+    throw new RmlError('E041', 'Domain form must be `(domain <name> <request>...)`');
+  }
+  const pluginName = node[1];
+  const plugin = env.getDomainPlugin(pluginName);
+  if (!plugin) {
+    throw new RmlError('E041', `Unknown domain plugin "${pluginName}"`);
+  }
+  return plugin(node.slice(2), env);
+}
+
 function evalNode(node, env){
   if (typeof node === 'string') {
     if (isNum(node)) return env.toNum(node);
@@ -3377,6 +3708,13 @@ function evalNode(node, env){
     if (decl) {
       return registerCoinductive(env, decl);
     }
+  }
+
+  // Domain plugin driver (issue #63): (domain <name> <request>...)
+  // Dispatches the block body to a registered domain-specific decision
+  // procedure. The default Env registers `automatic-sequences`.
+  if (node[0] === 'domain') {
+    return evalDomainForm(node, env);
   }
 
   // Totality check (issue #44, D12): (total <name>) runs `isTotal` over
@@ -5002,6 +5340,420 @@ function evaluateFormalization(formalization, options = {}) {
   };
 }
 
+// ---------- Isabelle/HOL exporter ----------
+// The exporter targets the simply typed fragment shared by RML's prototype
+// type layer and Isabelle/HOL: type declarations, constants, simple Pi-types,
+// first-order inductive datatypes, and lambda definitions whose types can be
+// inferred locally. Dependent Pi codomains and probabilistic/operator forms
+// are rejected instead of being approximated silently.
+class IsabelleExportError extends Error {
+  constructor(message, node = null) {
+    const suffix = node ? `: ${keyOf(node)}` : '';
+    super(`Isabelle export: ${message}${suffix}`);
+    this.name = 'IsabelleExportError';
+    this.node = node;
+  }
+}
+
+const ISABELLE_RESERVED = new Set([
+  'and', 'assumes', 'begin', 'binder', 'case', 'class', 'consts', 'datatype',
+  'definition', 'else', 'end', 'fixes', 'for', 'fun', 'if', 'imports', 'in',
+  'infix', 'infixl', 'infixr', 'let', 'locale', 'module', 'notation', 'of',
+  'open', 'or', 'shows', 'structure', 'syntax', 'then', 'theory', 'type',
+  'typedecl', 'where',
+]);
+
+function _isUniverseAnnotation(node) {
+  if (node === 'Type') return true;
+  return Array.isArray(node) &&
+    node.length === 2 &&
+    node[0] === 'Type' &&
+    parseUniverseLevelToken(node[1]) !== null;
+}
+
+function _isTypeSelfDeclaration(name, rhs) {
+  return rhs.length === 2 &&
+    rhs[1] === name &&
+    _isUniverseAnnotation(rhs[0]);
+}
+
+function _isTypedSelfDeclaration(name, rhs) {
+  return rhs.length === 2 && rhs[1] === name && !_isUniverseAnnotation(rhs[0]);
+}
+
+function _isProbabilisticAssignment(node) {
+  return Array.isArray(node) &&
+    node.length === 4 &&
+    node[1] === 'has' &&
+    node[2] === 'probability' &&
+    isNum(node[3]);
+}
+
+function _isOperatorHead(head) {
+  return ['=','!=','and','or','not','is','?:','both','neither'].includes(head) || /[=!]/.test(head);
+}
+
+function _nodeContainsSymbol(node, symbol) {
+  if (typeof node === 'string') return node === symbol;
+  return Array.isArray(node) && node.some(child => _nodeContainsSymbol(child, symbol));
+}
+
+function _escapeIsabelleString(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function _isabelleBaseName(raw, fallback = 'x') {
+  let base = String(raw || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+  if (!base) base = fallback;
+  if (/^[0-9]/.test(base)) base = `${fallback}_${base}`;
+  return base;
+}
+
+function _isabelleTheoryName(raw) {
+  const stem = path.basename(String(raw || 'RML_Export')).replace(/\.[^.]*$/, '');
+  const parts = stem
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1).replace(/([a-z0-9])([A-Z])/g, '$1_$2'));
+  let name = parts.length ? parts.join('_') : 'RML_Export';
+  name = name.replace(/[^A-Za-z0-9_]/g, '_');
+  if (!/^[A-Z]/.test(name)) name = `RML_${name}`;
+  return name;
+}
+
+class IsabelleExportContext {
+  constructor(options = {}) {
+    this.theoryName = options.theoryName || _isabelleTheoryName(options.outputFile || options.file || 'RML_Export');
+    this.sourceFile = options.file || null;
+    this.typeNames = new Map();
+    this.termNames = new Map();
+    this.usedTypeNames = new Map();
+    this.usedTermNames = new Map();
+    this.typeDecls = [];
+    this.typeDeclSet = new Set();
+    this.datatypes = [];
+    this.datatypeNames = new Set();
+    this.datatypeConstructors = new Set();
+    this.consts = [];
+    this.constNames = new Set();
+    this.definitions = [];
+    this.definitionNames = new Set();
+    this.termTypes = new Map();
+  }
+
+  makeUnique(original, base, used) {
+    if (used.has(base) && used.get(base) === original) return base;
+    let candidate = base;
+    let index = 2;
+    while (used.has(candidate) && used.get(candidate) !== original) {
+      candidate = `${base}_${index}`;
+      index++;
+    }
+    used.set(candidate, original);
+    return candidate;
+  }
+
+  typeName(name) {
+    if (name === 'Prop') return 'bool';
+    if (this.typeNames.has(name)) return this.typeNames.get(name);
+    const base = `rml_${_isabelleBaseName(name, 'type')}`;
+    const unique = this.makeUnique(name, base, this.usedTypeNames);
+    this.typeNames.set(name, unique);
+    return unique;
+  }
+
+  termName(name) {
+    if (this.termNames.has(name)) return this.termNames.get(name);
+    const base = `rml_${_isabelleBaseName(name, 'term')}`;
+    const unique = this.makeUnique(name, base, this.usedTermNames);
+    this.termNames.set(name, unique);
+    return unique;
+  }
+
+  localName(name) {
+    let base = _isabelleBaseName(name, 'x');
+    if (ISABELLE_RESERVED.has(base)) base = `x_${base}`;
+    return base;
+  }
+
+  ensureTypedecl(name) {
+    if (name === 'Type' || name === 'Prop') return;
+    if (!this.typeDeclSet.has(name)) {
+      this.typeDeclSet.add(name);
+      this.typeDecls.push(name);
+    }
+  }
+
+  addConst(name, typeNode) {
+    if (this.datatypeConstructors.has(name) || this.definitionNames.has(name)) return;
+    if (!this.constNames.has(name)) {
+      this.constNames.add(name);
+      this.consts.push({ name, typeNode });
+    }
+    this.termTypes.set(name, typeNode);
+  }
+
+  addDefinition(name, typeNode, valueNode) {
+    if (this.definitionNames.has(name)) {
+      throw new IsabelleExportError(`duplicate definition "${name}"`);
+    }
+    this.definitionNames.add(name);
+    this.termTypes.set(name, typeNode);
+    this.definitions.push({ name, typeNode, valueNode });
+  }
+
+  addDatatype(decl) {
+    if (this.datatypeNames.has(decl.name)) {
+      throw new IsabelleExportError(`duplicate datatype "${decl.name}"`);
+    }
+    this.datatypeNames.add(decl.name);
+    for (const ctor of decl.constructors) {
+      this.datatypeConstructors.add(ctor.name);
+      this.termTypes.set(ctor.name, ctor.type);
+    }
+    this.datatypes.push(decl);
+  }
+
+  typeExpr(node) {
+    if (typeof node === 'string') {
+      if (node === 'Type') {
+        throw new IsabelleExportError('universe Type is not an Isabelle/HOL value type', node);
+      }
+      this.ensureTypedecl(node);
+      return this.typeName(node);
+    }
+    if (!Array.isArray(node)) {
+      throw new IsabelleExportError('unsupported type expression', node);
+    }
+    if (_isUniverseAnnotation(node)) {
+      throw new IsabelleExportError('universe levels cannot be exported as HOL value types', node);
+    }
+    if (node.length === 1 && node[0] === 'Prop') return 'bool';
+    if (node.length === 3 && node[0] === 'Pi') {
+      const binding = parseBinding(node[1]);
+      if (!binding) {
+        throw new IsabelleExportError('malformed Pi binder', node);
+      }
+      if (_nodeContainsSymbol(node[2], binding.paramName)) {
+        throw new IsabelleExportError(
+          `dependent Pi codomain mentions "${binding.paramName}", which is outside the Isabelle/HOL exporter subset`,
+          node,
+        );
+      }
+      const domain = this.typeExpr(binding.paramType);
+      const codomain = this.typeExpr(node[2]);
+      const left = Array.isArray(binding.paramType) &&
+        binding.paramType.length === 3 &&
+        binding.paramType[0] === 'Pi'
+        ? `(${domain})`
+        : domain;
+      return `${left} => ${codomain}`;
+    }
+    throw new IsabelleExportError('unsupported type expression', node);
+  }
+
+  inferTermType(node, locals = new Map()) {
+    if (typeof node === 'string') {
+      if (locals.has(node)) return locals.get(node).typeNode;
+      if (this.termTypes.has(node)) return this.termTypes.get(node);
+      throw new IsabelleExportError(`cannot infer type of "${node}"`, node);
+    }
+    if (!Array.isArray(node)) {
+      throw new IsabelleExportError('cannot infer type of term', node);
+    }
+    if (node.length === 3 && node[0] === 'lambda') {
+      const binding = parseBinding(node[1]);
+      if (!binding) throw new IsabelleExportError('malformed lambda binder', node);
+      const nextLocals = new Map(locals);
+      nextLocals.set(binding.paramName, {
+        typeNode: binding.paramType,
+        localName: this.localName(binding.paramName),
+      });
+      return ['Pi', [binding.paramType, binding.paramName], this.inferTermType(node[2], nextLocals)];
+    }
+    if (node.length === 3 && node[0] === 'apply') {
+      const fnType = this.inferTermType(node[1], locals);
+      const flat = _flattenPi(fnType);
+      if (!flat || flat.params.length === 0) {
+        throw new IsabelleExportError('application head does not have a Pi type', node);
+      }
+      return _buildPi(flat.params.slice(1), flat.result);
+    }
+    if (node.length > 0 && typeof node[0] === 'string') {
+      const fnType = this.termTypes.get(node[0]);
+      const flat = fnType ? _flattenPi(fnType) : null;
+      if (flat && flat.params.length >= node.length - 1) {
+        return _buildPi(flat.params.slice(node.length - 1), flat.result);
+      }
+    }
+    throw new IsabelleExportError('cannot infer type of term', node);
+  }
+
+  termExpr(node, locals = new Map()) {
+    if (typeof node === 'string') {
+      if (isNum(node)) return node;
+      if (locals.has(node)) return locals.get(node).localName;
+      return this.termName(node);
+    }
+    if (!Array.isArray(node)) {
+      throw new IsabelleExportError('unsupported term expression', node);
+    }
+    if (node.length === 3 && node[0] === 'lambda') {
+      const binding = parseBinding(node[1]);
+      if (!binding) throw new IsabelleExportError('malformed lambda binder', node);
+      const localName = this.localName(binding.paramName);
+      const nextLocals = new Map(locals);
+      nextLocals.set(binding.paramName, { typeNode: binding.paramType, localName });
+      return `(%${localName}. ${this.termExpr(node[2], nextLocals)})`;
+    }
+    if (node.length === 3 && node[0] === 'apply') {
+      return `(${this.termExpr(node[1], locals)} ${this.termExpr(node[2], locals)})`;
+    }
+    if (node.length === 3 && node[1] === '=') {
+      return `(${this.termExpr(node[0], locals)} = ${this.termExpr(node[2], locals)})`;
+    }
+    if (node.length > 0) {
+      const parts = node.map(part => this.termExpr(part, locals));
+      return `(${parts.join(' ')})`;
+    }
+    throw new IsabelleExportError('empty term expression', node);
+  }
+
+  processDefinition(head, rhs, node) {
+    if (head === 'range' || head === 'valence' || _isOperatorHead(head)) {
+      throw new IsabelleExportError('probabilistic configuration and operator definitions are outside the Isabelle exporter subset', node);
+    }
+    if (rhs.length === 1 && isNum(rhs[0])) {
+      throw new IsabelleExportError('symbol probability priors are outside the Isabelle exporter subset', node);
+    }
+    if (_isTypeSelfDeclaration(head, rhs)) {
+      if (head !== 'Type') this.ensureTypedecl(head);
+      return;
+    }
+    if (_isTypedSelfDeclaration(head, rhs)) {
+      this.addConst(head, rhs[0]);
+      return;
+    }
+    if (rhs.length === 1 && Array.isArray(rhs[0])) {
+      this.addConst(head, rhs[0]);
+      return;
+    }
+    if (rhs.length === 3 && rhs[0] === 'lambda') {
+      const typeNode = this.inferTermType(rhs);
+      this.addDefinition(head, typeNode, rhs);
+      return;
+    }
+    throw new IsabelleExportError('unsupported top-level definition form', node);
+  }
+
+  processForm(rawForm) {
+    let node = rawForm;
+    while (Array.isArray(node) && node.length === 1 && Array.isArray(node[0])) {
+      node = node[0];
+    }
+    if (!Array.isArray(node) || node.length === 0) return;
+    if (_isProbabilisticAssignment(node)) {
+      throw new IsabelleExportError('probability assignments are outside the Isabelle exporter subset', node);
+    }
+    if (node[0] === '?' || _isUniverseAnnotation(node)) return;
+    if (node[0] === 'inductive') {
+      this.addDatatype(parseInductiveForm(node));
+      return;
+    }
+    if (typeof node[0] === 'string' && node[0].endsWith(':')) {
+      this.processDefinition(node[0].slice(0, -1), node.slice(1), node);
+      return;
+    }
+    throw new IsabelleExportError('unsupported top-level form', node);
+  }
+
+  renderTypedecls() {
+    const lines = [];
+    for (const name of this.typeDecls) {
+      if (this.datatypeNames.has(name)) continue;
+      lines.push(`typedecl ${this.typeName(name)}`);
+    }
+    return lines;
+  }
+
+  renderDatatypes() {
+    const sections = [];
+    for (const decl of this.datatypes) {
+      const lines = [`datatype ${this.typeName(decl.name)} =`];
+      decl.constructors.forEach((ctor, index) => {
+        const args = ctor.params.map(param => this.typeExpr(param.type));
+        const rhs = [this.termName(ctor.name), ...args].join(' ');
+        lines.push(`  ${index === 0 ? '' : '| '}${rhs}`);
+      });
+      sections.push(lines.join('\n'));
+    }
+    return sections;
+  }
+
+  renderConsts() {
+    const lines = [];
+    for (const decl of this.consts) {
+      if (this.datatypeConstructors.has(decl.name) || this.definitionNames.has(decl.name)) continue;
+      lines.push(`  ${this.termName(decl.name)} :: "${_escapeIsabelleString(this.typeExpr(decl.typeNode))}"`);
+    }
+    return lines.length ? ['consts', ...lines] : [];
+  }
+
+  renderDefinitions() {
+    const sections = [];
+    for (const decl of this.definitions) {
+      const name = this.termName(decl.name);
+      const type = _escapeIsabelleString(this.typeExpr(decl.typeNode));
+      const body = _escapeIsabelleString(this.termExpr(decl.valueNode));
+      sections.push(`definition ${name} :: "${type}" where\n  "${name} = ${body}"`);
+    }
+    return sections;
+  }
+
+  render() {
+    const bodySections = [];
+    const typedecls = this.renderTypedecls();
+    if (typedecls.length) bodySections.push(typedecls.join('\n'));
+    const datatypes = this.renderDatatypes();
+    bodySections.push(...datatypes);
+    const consts = this.renderConsts();
+    if (consts.length) bodySections.push(consts.join('\n'));
+    bodySections.push(...this.renderDefinitions());
+
+    const lines = [
+      `theory ${this.theoryName}`,
+      '  imports Main',
+      'begin',
+      '',
+      '(* Generated by RML Isabelle exporter. *)',
+    ];
+    if (this.sourceFile) {
+      lines.push(`(* Source: ${_escapeIsabelleString(this.sourceFile)} *)`);
+    }
+    if (bodySections.length) {
+      lines.push('', bodySections.join('\n\n'));
+    }
+    lines.push('', 'end', '');
+    return lines.join('\n');
+  }
+}
+
+function exportIsabelle(sourceText, options = {}) {
+  const ctx = new IsabelleExportContext(options);
+  let forms;
+  try {
+    forms = parseLinoForms(sourceText);
+  } catch (err) {
+    throw new IsabelleExportError(`LiNo parse failure: ${err && err.message ? err.message : String(err)}`);
+  }
+  for (const form of forms) ctx.processForm(form);
+  return ctx.render();
+}
+
 // ---------- Runner ----------
 function run(text, options){
   return evaluate(text, options).results;
@@ -5010,6 +5762,10 @@ function run(text, options){
 // CLI (runs only when invoked directly, not when imported as a library).
 // The REPL subcommand lives in `./rml-repl.mjs` so we can `await import` it
 // without triggering an ESM circular-dependency deadlock.
+function _printMainUsage() {
+  console.error('Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export <lean|rocq|isabelle> <file.lino> [-o <file>] [--theory <Name>]');
+}
+
 async function runCli() {
   const argv = process.argv.slice(2);
   let trace = false;
@@ -5020,38 +5776,12 @@ async function runCli() {
   }
   const arg = positionals[0];
   if (!arg) {
-    console.error('Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export rocq <file.lino> [-o <file.v>]');
+    _printMainUsage();
     process.exit(1);
   }
   if (arg === 'export') {
-    const target = positionals[1];
-    const input = positionals[2];
-    if (target !== 'rocq' || !input) {
-      console.error('Usage: rml export rocq <file.lino> [-o <file.v>]');
-      process.exit(1);
-    }
-    let output = null;
-    for (let i = 3; i < positionals.length; i += 1) {
-      const flag = positionals[i];
-      if (flag === '-o' || flag === '--output') {
-        if (i + 1 >= positionals.length) {
-          console.error(`${flag} requires an output path`);
-          process.exit(1);
-        }
-        output = positionals[i + 1];
-        i += 1;
-      } else {
-        console.error(`Unknown export option: ${flag}`);
-        process.exit(1);
-      }
-    }
-    const text = fs.readFileSync(input, 'utf8');
-    const rocqUrl = new URL('./rml-rocq.mjs', import.meta.url).href;
-    const { exportRocq } = await import(rocqUrl);
-    const rendered = exportRocq(text, { sourcePath: input });
-    if (output) fs.writeFileSync(output, rendered, 'utf8');
-    else process.stdout.write(rendered);
-    return;
+    const status = await runExportCli(positionals.slice(1));
+    process.exit(status);
   }
   if (arg === 'repl') {
     const replUrl = new URL('./rml-repl.mjs', import.meta.url).href;
@@ -5079,6 +5809,71 @@ async function runCli() {
   if (out.diagnostics.length > 0) process.exit(1);
 }
 
+async function runExportCli(args) {
+  const [target, input] = args;
+  if (args.length < 2 || (target !== 'lean' && target !== 'rocq' && target !== 'isabelle')) {
+    console.error('Usage: rml export <lean|rocq|isabelle> <file.lino> [-o <file>] [--theory <Name>]');
+    return 2;
+  }
+  let output = null;
+  let theoryName = null;
+  for (let i = 2; i < args.length; i++) {
+    if ((args[i] === '-o' || args[i] === '--output') && i + 1 < args.length) {
+      output = args[i + 1];
+      i++;
+      continue;
+    }
+    if (target === 'isabelle' && args[i] === '--theory' && i + 1 < args.length) {
+      theoryName = args[i + 1];
+      i++;
+      continue;
+    }
+    console.error(`Unknown export option: ${args[i]}`);
+    console.error(`Usage: rml export ${target} <file.lino> [-o <file>]${target === 'isabelle' ? ' [--theory <Name>]' : ''}`);
+    return 2;
+  }
+  if (target === 'lean' && !output) {
+    console.error('Usage: rml export lean <file.lino> -o <file.lean>');
+    return 2;
+  }
+  let text;
+  try {
+    text = fs.readFileSync(input, 'utf8');
+  } catch (err) {
+    console.error(`Error reading ${input}: ${err.message}`);
+    return 1;
+  }
+  let rendered;
+  if (target === 'lean') {
+    const { exportLean } = await import(new URL('./lean-export.mjs', import.meta.url).href);
+    const out = exportLean(text, { file: input });
+    if (out.diagnostics.length > 0) {
+      for (const diag of out.diagnostics) {
+        console.error(formatDiagnostic(diag, text));
+      }
+      return 1;
+    }
+    rendered = out.source;
+  } else if (target === 'rocq') {
+    const { exportRocq } = await import(new URL('./rml-rocq.mjs', import.meta.url).href);
+    rendered = exportRocq(text, { sourcePath: input });
+  } else {
+    rendered = exportIsabelle(text, {
+      file: input,
+      outputFile: output,
+      theoryName: theoryName || _isabelleTheoryName(output || input),
+    });
+  }
+  try {
+    if (output) fs.writeFileSync(output, rendered, 'utf8');
+    else process.stdout.write(rendered);
+  } catch (err) {
+    console.error(`Error writing ${output}: ${err.message}`);
+    return 1;
+  }
+  return 0;
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   runCli().catch(err => {
     console.error(err && err.stack ? err.stack : err);
@@ -5103,10 +5898,10 @@ export {
   evalNode,
   buildProof,
   runTactics,
-  goalToTptp,
-  parseAtpStatus,
   rewrite,
   simplify,
+  goalToTptp,
+  parseAtpStatus,
   quantize,
   decRound,
   keyOf,
@@ -5129,6 +5924,9 @@ export {
   buildEliminatorType,
   parseCoinductiveForm,
   buildCorecursorType,
+  automaticSequencesDomainPlugin,
+  decideAutomaticSequenceTheorem,
   formalizeSelectedInterpretation,
   evaluateFormalization,
+  exportIsabelle,
 };

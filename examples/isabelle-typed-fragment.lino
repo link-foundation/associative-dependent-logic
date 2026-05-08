@@ -1,0 +1,16 @@
+# Typed fragment accepted by the Isabelle exporter.
+# This example intentionally avoids probabilistic operators.
+
+(Type: Type Type)
+(Natural: (Type 0) Natural)
+(Boolean: (Type 0) Boolean)
+
+(zero: Natural zero)
+(succ: (Pi (Natural n) Natural))
+(identity: lambda (Natural x) x)
+
+(inductive Tree
+  (constructor leaf)
+  (constructor (branch (Pi (Tree left) (Pi (Tree right) Tree)))))
+
+(? (zero of Natural))

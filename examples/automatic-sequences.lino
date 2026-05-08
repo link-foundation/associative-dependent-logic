@@ -1,0 +1,5 @@
+# Pecan-style automatic-sequence backend.
+(domain automatic-sequences
+  (theorem thue-morse-cube-free))
+
+(? thue-morse-cube-free)

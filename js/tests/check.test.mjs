@@ -29,6 +29,13 @@ describe('replay acceptance: structural-equality witness', () => {
     assert.strictEqual(r.ok[0].rule, 'structural-equality');
   });
 
+  it('accepts an explicit trusted SMT decision node', () => {
+    const r = checkProgram('(? (a = a))', '(by smt-trusted z3)');
+    assert.ok(isOk(r), JSON.stringify(r.errors));
+    assert.strictEqual(r.ok.length, 1);
+    assert.strictEqual(r.ok[0].rule, 'smt-trusted');
+  });
+
   it('matches proofs emitted by the evaluator for a varied program', () => {
     const program = [
       '(a: a is a)',
