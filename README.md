@@ -40,6 +40,8 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 - Query the truth value of complex expressions
 - Define dependent types as links — universe hierarchy, Pi-types, lambdas, type queries
 - Combine types with probabilistic logic in a unified framework
+- Delegate domain-specific decision blocks through evaluator plugins, including
+  `(domain automatic-sequences (theorem thue-morse-cube-free))`
 - Reuse the evaluator as a library, including a meta-expression adapter that accepts selected interpretations and explicit dependencies while keeping underspecified claims partial
 
 ## Supported Logic Types
@@ -742,6 +744,8 @@ The test suites cover:
 - Self-reasoning: meta-logic properties, comparing logic systems, paradox resolution in meta context
 - Markov chains: one-step and multi-step transitions, joint probability, stationary distribution, conditional transitions with links
 - Markov networks: cyclic graphs, pairwise joints, three-way cliques, clique potentials, normalization
+- Automatic sequences: a Pecan-style domain plugin that decides
+  `thue-morse-cube-free`
 - Comprehensive valence coverage: 0 (continuous), 1 (unary), 2–10, 100, 1000, with both ranges
 - English-readability lint: identifier shape, operator-only links, allow-list (see [English-readability lint](#english-readability-lint))
 

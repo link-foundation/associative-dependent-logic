@@ -67,6 +67,8 @@ import {
   runTactics,
   rewrite,
   simplify,
+  automaticSequencesDomainPlugin,
+  decideAutomaticSequenceTheorem,
   quantize,
   decRound,
   keyOf,
@@ -96,6 +98,11 @@ for (const d of diagnostics) {
 const env = new Env({ lo: 0, hi: 1, valence: 3 });
 const ast = parseOne(tokenizeOne('(a = a)'));
 const truthValue = evalNode(ast, env);
+
+// Register a domain plugin, or use the built-in automatic-sequences plugin
+// that is already registered on new Env instances.
+env.registerDomainPlugin('automatic-sequences', automaticSequencesDomainPlugin);
+const theorem = decideAutomaticSequenceTheorem('thue-morse-cube-free');
 
 // Apply link tactics to a proof state
 const tacticResult = runTactics(
@@ -147,6 +154,7 @@ The test suite covers:
 - Decimal-precision arithmetic and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, definitional equality, capture-avoiding substitution, freshness, type queries
 - Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, simplify, exact
+- Domain plugins: Pecan-style automatic-sequence theorem decisions
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types
 
 ## Dependencies

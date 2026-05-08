@@ -57,6 +57,7 @@ use rml::{
     run, evaluate, format_diagnostic, Diagnostic, EvaluateResult, RunResult, Span,
     tokenize_one, parse_one, Env, EnvOptions, eval_node, quantize, dec_round, subst,
     run_tactics, rewrite, simplify, ProofState,
+    automatic_sequences_domain_plugin, decide_automatic_sequence_theorem,
     formalize_selected_interpretation, evaluate_formalization,
     FormalizationRequest, Interpretation,
 };
@@ -79,6 +80,11 @@ let mut env = Env::new(Some(EnvOptions { lo: 0.0, hi: 1.0, valence: 3 }));
 let tokens = tokenize_one("(a = a)");
 let ast = parse_one(&tokens).unwrap();
 let truth_value = eval_node(&ast, &mut env);
+
+// Register a domain plugin, or use the built-in automatic-sequences plugin
+// that is already registered on new Env instances.
+env.register_domain_plugin("automatic-sequences", automatic_sequences_domain_plugin);
+let theorem = decide_automatic_sequence_theorem("thue-morse-cube-free");
 
 // Apply link tactics to a proof state
 let tactic = parse_one(&tokenize_one("(by reflexivity)")).unwrap();
@@ -121,6 +127,7 @@ The test suite covers:
 - Decimal-precision arithmetic and numeric equality
 - Dependent type system: universes, Pi-types, lambdas, application, definitional equality, capture-avoiding substitution, freshness, type queries
 - Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, simplify, exact
+- Domain plugins: Pecan-style automatic-sequence theorem decisions
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types
 
 ## Implementation Notes
