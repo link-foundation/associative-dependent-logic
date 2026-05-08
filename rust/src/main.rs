@@ -1,8 +1,8 @@
 // RML CLI — run a LiNo knowledge base or launch the interactive REPL
 use rml::repl::run_repl;
 use rml::{
-    evaluate_with_options, format_diagnostic, format_trace_event, EnvOptions, EvaluateOptions,
-    RunResult,
+    evaluate_with_options, format_diagnostic, format_trace_event, rocq::export_rocq, EnvOptions,
+    EvaluateOptions, RunResult,
 };
 use std::env;
 use std::fs;
@@ -21,10 +21,15 @@ fn main() -> ExitCode {
         }
     }
     if positionals.is_empty() {
-        eprintln!("Usage: rml [--trace] <kb.lino>   |   rml repl");
+        eprintln!(
+            "Usage: rml [--trace] <kb.lino>   |   rml repl   |   rml export rocq <file.lino> [-o <file.v>]"
+        );
         return ExitCode::from(1);
     }
     let arg = &positionals[0];
+    if arg == "export" {
+        return run_export(&positionals);
+    }
     if arg == "repl" {
         let stdin = io::stdin();
         let stdout = io::stdout();
@@ -33,7 +38,13 @@ fn main() -> ExitCode {
         let mut input = BufReader::new(stdin.lock());
         let mut out = stdout.lock();
         let mut err = stderr.lock();
-        if let Err(e) = run_repl(EnvOptions::default(), show_prompt, &mut input, &mut out, &mut err) {
+        if let Err(e) = run_repl(
+            EnvOptions::default(),
+            show_prompt,
+            &mut input,
+            &mut out,
+            &mut err,
+        ) {
             eprintln!("REPL error: {}", e);
             return ExitCode::from(1);
         }
@@ -80,4 +91,54 @@ fn main() -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn run_export(positionals: &[String]) -> ExitCode {
+    if positionals.len() < 3 || positionals[1] != "rocq" {
+        eprintln!("Usage: rml export rocq <file.lino> [-o <file.v>]");
+        return ExitCode::from(1);
+    }
+    let input = &positionals[2];
+    let mut output: Option<&str> = None;
+    let mut i = 3;
+    while i < positionals.len() {
+        match positionals[i].as_str() {
+            "-o" | "--output" => {
+                if i + 1 >= positionals.len() {
+                    eprintln!("{} requires an output path", positionals[i]);
+                    return ExitCode::from(1);
+                }
+                output = Some(positionals[i + 1].as_str());
+                i += 2;
+            }
+            other => {
+                eprintln!("Unknown export option: {}", other);
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    let text = match fs::read_to_string(input) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error reading {}: {}", input, e);
+            return ExitCode::from(1);
+        }
+    };
+    let rendered = match export_rocq(&text, Some(input)) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Rocq export error: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    if let Some(path) = output {
+        if let Err(e) = fs::write(path, rendered) {
+            eprintln!("Error writing {}: {}", path, e);
+            return ExitCode::from(1);
+        }
+    } else {
+        print!("{}", rendered);
+    }
+    ExitCode::SUCCESS
 }
