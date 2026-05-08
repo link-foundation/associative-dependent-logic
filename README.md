@@ -96,6 +96,15 @@ natural-deduction rule schemas from the `classical` namespace:
 (? (cl.excluded-middle p))
 ```
 
+The first-order library exports aliasable quantifier templates from the
+`first-order` namespace:
+
+```lino
+(import "lib/first-order/core.lino" as fo)
+(? (fo.forall (Term x) (predicate x)))
+(? ((fo.exists (Term x) (predicate x)) = (exists (Term x) (predicate x))))
+```
+
 ### Isabelle export
 
 ```bash
