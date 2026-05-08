@@ -1,0 +1,15 @@
+# Higher-order logic standard library.
+#
+# This file exports quantifier templates that accept higher-order binders under
+# the `higher-order` namespace. Import it with an alias such as:
+#
+#   (import "lib/higher-order/core.lino" as ho)
+#   (? (ho.forall ((Pi (Natural n) Boolean) P) (P zero)))
+
+(namespace higher-order)
+
+(template (forall binder body)
+  (forall binder body))
+
+(template (exists binder body)
+  (exists binder body))
