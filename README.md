@@ -226,6 +226,10 @@ The [self grammar library](./lib/self/grammar.lino) encodes the LiNo grammar as
 links so self-hosted parsing work can consume grammar rules through ordinary
 LiNo data.
 
+The [self evaluator library](./lib/self/evaluator.lino) encodes the RML host
+evaluator as `(rule ...)` links, including the built-in arithmetic, comparison,
+logical, equality, normalization, and typed-kernel evaluation forms.
+
 ### Isabelle export
 
 ```bash

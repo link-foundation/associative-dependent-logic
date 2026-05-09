@@ -1,0 +1,41 @@
+# Representative corpus for the encoded evaluator rules.
+
+(and: product)
+(or: probabilistic_sum)
+
+(p: p is p)
+(q: q is q)
+
+((p = true) has probability 0.25)
+((q = true) has probability 0.8)
+
+(? (p = true))
+(? (q != true))
+(? ((p = true) and (q = true)))
+(? ((p = true) or (q = true)))
+(? (not (p = true)))
+
+(? ((0.1 + 0.2) = 0.3))
+(? (4 / 2))
+(? (1 < 2))
+(? (2 <= 2))
+
+(Term: (Type 0) Term)
+(zero: Term zero)
+(identity: lambda (Term x) x)
+
+(? (zero of Term))
+(? (type of zero))
+(? (apply identity 0.42))
+(? (whnf (apply identity zero)))
+(? (normal-form (apply identity zero)))
+
+(range: -1 1)
+(? true)
+(? false)
+(? unknown)
+
+(valence: 3)
+(? 0.25)
+(and: avg)
+(? (1 and -1))
