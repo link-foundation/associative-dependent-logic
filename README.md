@@ -75,7 +75,9 @@ node src/rml-links.mjs export lean ../examples/lean-export-basic.lino -o out.lea
 
 Editor integration is available through the stdio language server; see
 [`docs/LANGUAGE_SERVER.md`](./docs/LANGUAGE_SERVER.md) for Neovim and Helix
-setup.
+setup, and [`vscode/`](./vscode/) for an installable VS Code extension with
+`.lino` syntax highlighting and LSP-backed diagnostics, hover,
+go-to-definition, and completion.
 
 ### Rust
 

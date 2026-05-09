@@ -29,6 +29,30 @@ rml-lsp
 The server speaks only LSP over stdin/stdout. Do not run it directly in a
 terminal unless an editor or test harness is managing the JSON-RPC stream.
 
+## VS Code
+
+A VS Code extension package lives in [`vscode/`](../vscode/). It contributes
+the `lino` language, TextMate syntax highlighting for `.lino` files, comment
+and bracket behavior, and starts the same `rml-lsp` server for diagnostics,
+hover, go-to-definition, and completion.
+
+Build an installable VSIX from the repository checkout:
+
+```sh
+cd vscode
+npm install
+npm run package
+code --install-extension relative-meta-logic.vsix
+```
+
+The package step copies the JavaScript LSP sources from `../js/src` into the
+extension's `server/` directory before creating the VSIX. In a checkout used
+for extension development, the extension falls back to `../js/src/rml-lsp.mjs`
+when the packaged copy has not been generated yet.
+
+If you prefer a globally installed server, set `rml.server.command` to
+`rml-lsp`. Additional server arguments can be provided with `rml.server.args`.
+
 ## Neovim
 
 For Neovim's built-in LSP client, add this to your Lua config:
@@ -91,4 +115,12 @@ initialize, diagnostics, hover, definition, completion, shutdown, and exit:
 ```sh
 cd js
 node --test tests/lsp.test.mjs
+```
+
+The VS Code extension smoke test verifies the language contributions and then
+starts the extension-resolved LSP command over stdio:
+
+```sh
+cd vscode
+npm test
 ```
