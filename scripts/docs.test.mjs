@@ -76,3 +76,35 @@ describe('generated API reference documentation', () => {
     assert.equal(packageJson.scripts.docs, 'jsdoc -c ../docs/api/jsdoc.json');
   });
 });
+
+describe('compatibility and release documentation', () => {
+  it('is linked from the README', () => {
+    const readme = read('README.md');
+    assert.match(
+      readme,
+      /\[Compatibility and release policy\]\(\.\/docs\/COMPATIBILITY\.md\)/,
+    );
+  });
+
+  it('covers semver, deprecations, and release cadence', () => {
+    const doc = read('docs/COMPATIBILITY.md');
+    for (const expected of [
+      'Semantic Versioning',
+      'Pre-1.0 Compatibility',
+      'Deprecation Procedure',
+      'Release Cadence',
+      '`js/package.json`',
+      '`rust/Cargo.toml`',
+    ]) {
+      assert.ok(doc.includes(expected), `missing ${expected}`);
+    }
+  });
+
+  it('keeps JavaScript and Rust package versions aligned', () => {
+    const packageJson = JSON.parse(read('js/package.json'));
+    const cargoToml = read('rust/Cargo.toml');
+    const cargoVersion = cargoToml.match(/^version = "([^"]+)"/m)?.[1];
+
+    assert.equal(packageJson.version, cargoVersion);
+  });
+});
