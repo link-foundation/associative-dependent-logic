@@ -14,6 +14,8 @@ This project provides two equivalent implementations:
 Both implementations pass the same comprehensive test suites and produce identical results.
 
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+For versioning, deprecations, and release expectations, see
+[Compatibility and release policy](./docs/COMPATIBILITY.md).
 
 ## Comparisons
 
