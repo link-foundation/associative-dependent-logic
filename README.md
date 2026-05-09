@@ -93,6 +93,24 @@ Examples are language-agnostic and live in [`/examples/`](./examples/). Both
 implementations execute the same files and are required to produce identical
 output (enforced by `examples/expected.lino` and the shared-examples tests).
 
+### Literate LiNo
+
+Evaluator entry points also accept literate `.lino.md` files. Prose is ignored
+and only fenced `lino` code blocks are evaluated, so mathematical exposition
+and runnable declarations can live in the same file:
+
+````markdown
+# Theorem
+
+```lino
+(a: a is a)
+((a = a) has probability 1)
+(? (a = a))
+```
+````
+
+The same extraction is used for files loaded through `(import "...")`.
+
 ### Standard libraries
 
 Reusable LiNo libraries live under [`/lib/`](./lib/). The classical Boolean
