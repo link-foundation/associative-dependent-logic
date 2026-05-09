@@ -222,6 +222,10 @@ LiNo imports:
 (? (px.fixed-point (px.liar s)))
 ```
 
+The [self grammar library](./lib/self/grammar.lino) encodes the LiNo grammar as
+links so self-hosted parsing work can consume grammar rules through ordinary
+LiNo data.
+
 ### Isabelle export
 
 ```bash
