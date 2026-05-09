@@ -4142,6 +4142,15 @@ function parseRelationForm(node) {
   if (node.length < 3) {
     throw new RmlError("E032", `Relation declaration for "${name}" must list at least one clause`);
   }
+  if (node.length === 4) {
+    const pattern = node[2];
+    const body = node[3];
+    const patternMatches = Array.isArray(pattern) && pattern.length >= 2 && pattern[0] === name;
+    const bodyLooksLikeClause = Array.isArray(body) && body.length >= 2 && body[0] === name;
+    if (patternMatches && !bodyLooksLikeClause) {
+      return { name, clauses: [[...pattern, body]] };
+    }
+  }
   const clauses = [];
   for (let i = 2; i < node.length; i++) {
     const clause = node[i];

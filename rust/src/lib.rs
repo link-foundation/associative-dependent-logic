@@ -5390,8 +5390,20 @@ fn check_mode_at_call(name: &str, args: &[Node], env: &Env) {
 // ---------- Relation declarations & totality (issue #44, D12) ----------
 // Mirrors the JavaScript helpers in `js/src/rml-links.mjs`. The
 // `(relation <name> <clause>...)` form stores the clause list per
-// relation, `(total <name>)` triggers `is_total`, and the same
-// `is_total` helper is exported for programmatic callers.
+// relation, and the single-rule shorthand
+// `(relation <name> (<name> arg...) body)` is normalized to that clause
+// shape. `(total <name>)` triggers `is_total`, and the same helper is
+// exported for programmatic callers.
+
+fn is_relation_clause_head(node: &Node, name: &str) -> bool {
+    match node {
+        Node::List(items) if items.len() >= 2 => match &items[0] {
+            Node::Leaf(head) => head == name,
+            _ => false,
+        },
+        _ => false,
+    }
+}
 
 fn parse_relation_form(children: &[Node]) -> (String, Vec<Node>) {
     // Caller already verified `children[0]` is the leaf `relation`.
@@ -5407,6 +5419,17 @@ fn parse_relation_form(children: &[Node]) -> (String, Vec<Node>) {
             "Relation declaration error: declaration for \"{}\" must list at least one clause",
             name
         );
+    }
+    if children.len() == 4 {
+        let pattern = &children[2];
+        let body = &children[3];
+        if is_relation_clause_head(pattern, &name) && !is_relation_clause_head(body, &name) {
+            if let Node::List(items) = pattern {
+                let mut clause = items.clone();
+                clause.push(body.clone());
+                return (name, vec![Node::List(clause)]);
+            }
+        }
     }
     let mut clauses = Vec::with_capacity(children.len() - 2);
     for (idx, clause) in children[2..].iter().enumerate() {
