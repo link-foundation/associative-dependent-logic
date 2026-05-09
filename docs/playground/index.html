@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RML Playground</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="../">relative-meta-logic</a>
+    <nav aria-label="Site">
+      <a href="../">API</a>
+      <a href="https://github.com/link-foundation/relative-meta-logic">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="playground" aria-label="RML Playground">
+    <section class="pane editor-pane" aria-labelledby="editor-title">
+      <div class="pane-header">
+        <div>
+          <p class="eyebrow">LiNo</p>
+          <h1 id="editor-title">RML Playground</h1>
+        </div>
+        <div class="status" id="status-line" data-tone="neutral">Ready</div>
+      </div>
+
+      <div class="toolbar" aria-label="Playground controls">
+        <label class="field">
+          <span>Example</span>
+          <select id="example-select"></select>
+        </label>
+        <button id="run-button" type="button">Run</button>
+        <button id="reset-button" type="button" class="secondary">Reset</button>
+        <button id="copy-link-button" type="button" class="secondary">Copy link</button>
+      </div>
+
+      <textarea
+        id="source-editor"
+        spellcheck="false"
+        autocomplete="off"
+        autocapitalize="off"
+        aria-label="LiNo source editor"
+      ></textarea>
+    </section>
+
+    <section class="pane output-pane" aria-labelledby="results-title">
+      <div class="pane-header">
+        <div>
+          <p class="eyebrow">Output</p>
+          <h2 id="results-title">Results</h2>
+        </div>
+      </div>
+      <ol id="results-list" class="results-list"></ol>
+      <pre id="diagnostics-block" class="diagnostics" hidden></pre>
+    </section>
+  </main>
+
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>

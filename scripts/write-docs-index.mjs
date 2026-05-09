@@ -2,9 +2,18 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const repoRoot = path.resolve(__dirname, '..');
 const outDir = path.resolve(process.argv[2] || '_site');
 fs.mkdirSync(outDir, { recursive: true });
+
+const playgroundSource = path.join(repoRoot, 'docs', 'playground');
+if (fs.existsSync(playgroundSource)) {
+  fs.cpSync(playgroundSource, path.join(outDir, 'playground'), { recursive: true });
+}
 
 const html = `<!doctype html>
 <html lang="en">
@@ -43,9 +52,10 @@ const html = `<!doctype html>
 </head>
 <body>
   <main>
-    <h1>relative-meta-logic API Reference</h1>
-    <p>Generated from the JavaScript JSDoc comments and Rust rustdoc output.</p>
+    <h1>relative-meta-logic</h1>
+    <p>Browser tools and generated reference documentation.</p>
     <ul>
+      <li><a href="./playground/">Online playground</a></li>
       <li><a href="./api/js/">JavaScript API reference</a></li>
       <li><a href="./api/rust/rml/">Rust API reference</a></li>
     </ul>

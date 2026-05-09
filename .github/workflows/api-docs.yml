@@ -6,9 +6,12 @@ on:
     paths:
       - '.github/workflows/api-docs.yml'
       - 'docs/api/**'
+      - 'docs/playground/**'
       - 'js/**'
       - 'rust/**'
       - 'scripts/docs.test.mjs'
+      - 'scripts/build-playground.mjs'
+      - 'scripts/playground.test.mjs'
       - 'scripts/write-docs-index.mjs'
       - 'README.md'
   push:
@@ -16,9 +19,12 @@ on:
     paths:
       - '.github/workflows/api-docs.yml'
       - 'docs/api/**'
+      - 'docs/playground/**'
       - 'js/**'
       - 'rust/**'
       - 'scripts/docs.test.mjs'
+      - 'scripts/build-playground.mjs'
+      - 'scripts/playground.test.mjs'
       - 'scripts/write-docs-index.mjs'
       - 'README.md'
   release:
@@ -48,6 +54,12 @@ jobs:
       - name: Install JavaScript dependencies
         working-directory: js
         run: npm ci
+      - name: Build browser playground runtime
+        working-directory: js
+        run: npm run build:playground
+      - name: Run playground regression tests
+        working-directory: js
+        run: npm run test:playground
       - name: Build JavaScript API docs
         working-directory: js
         run: npm run docs -- --destination ../_site/api/js

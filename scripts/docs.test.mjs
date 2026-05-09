@@ -3,7 +3,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -56,16 +58,29 @@ describe('generated API reference documentation', () => {
     );
   });
 
+  it('links the online playground from the README', () => {
+    const readme = read('README.md');
+    assert.match(
+      readme,
+      /\[Online playground\]\(https:\/\/link-foundation\.github\.io\/relative-meta-logic\/playground\/\)/,
+    );
+  });
+
   it('builds JavaScript and Rust API docs for GitHub Pages on release', () => {
     const workflow = read('.github/workflows/api-docs.yml');
     for (const expected of [
       'release:',
       'types: [published]',
       'npm run docs',
+      'npm run build:playground',
+      'npm run test:playground',
       'cargo doc',
       'actions/configure-pages',
       'actions/upload-pages-artifact',
       'actions/deploy-pages',
+      'docs/playground/**',
+      'scripts/build-playground.mjs',
+      'scripts/playground.test.mjs',
     ]) {
       assert.ok(workflow.includes(expected), `missing ${expected}`);
     }
@@ -74,6 +89,22 @@ describe('generated API reference documentation', () => {
   it('defines a JavaScript docs script for JSDoc generation', () => {
     const packageJson = JSON.parse(read('js/package.json'));
     assert.equal(packageJson.scripts.docs, 'jsdoc -c ../docs/api/jsdoc.json');
+  });
+
+  it('writes a Pages landing page and copies playground assets', () => {
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rml-docs-site-'));
+    try {
+      execFileSync(process.execPath, ['scripts/write-docs-index.mjs', outDir], {
+        cwd: REPO_ROOT,
+        stdio: 'pipe',
+      });
+      const index = fs.readFileSync(path.join(outDir, 'index.html'), 'utf8');
+      assert.ok(index.includes('./playground/'));
+      assert.ok(fs.existsSync(path.join(outDir, 'playground', 'index.html')));
+      assert.ok(fs.existsSync(path.join(outDir, 'playground', 'rml-playground-runtime.mjs')));
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
   });
 });
 
