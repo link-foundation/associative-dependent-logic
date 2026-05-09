@@ -1,0 +1,48 @@
+# Belnap bilattice standard library.
+#
+# This file exports truth-order and knowledge-order helpers for RML's
+# Belnap-style `both` and `neither` operators under the `belnap` namespace.
+# Import it with an alias such as:
+#
+#   (import "lib/probabilistic/belnap.lino" as bl)
+#   (? (bl.contradiction true false))
+#   (? (bl.knowledge-meet true false))
+
+(namespace belnap)
+
+(and: min)
+(or: max)
+(not: not)
+(!=: not =)
+(both: avg)
+(neither: product)
+
+(template (truth-meet left right)
+  (belnap.and left right))
+
+(template (truth-join left right)
+  (belnap.or left right))
+
+(template (contradiction left right)
+  (belnap.both left right))
+
+(template (gap left right)
+  (belnap.neither left right))
+
+(template (knowledge-join left right)
+  (belnap.contradiction left right))
+
+(template (knowledge-meet left right)
+  (belnap.gap left right))
+
+(template (consistent proposition)
+  (belnap.not
+    (belnap.contradiction proposition
+      (belnap.not proposition))))
+
+(template (complete proposition)
+  (belnap.truth-join proposition
+    (belnap.not proposition)))
+
+(template (bilattice-value name truth-evidence false-evidence)
+  (belnap.value name truth-evidence false-evidence))

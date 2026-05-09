@@ -1,0 +1,58 @@
+# Bayesian probabilistic standard library.
+#
+# This file exports Bayesian-network description helpers, prior and
+# conditional-probability assignment templates, and common probability
+# calculations under the `bayesian` namespace. Import it with an alias such as:
+#
+#   (import "lib/probabilistic/bayesian.lino" as bn)
+#   (bn.network sprinkler-network (nodes cloudy rain) (edges (bn.edge cloudy rain)))
+#   (? (bn.bayes 0.95 0.01 0.059))
+
+(namespace bayesian)
+
+(and: product)
+(or: probabilistic_sum)
+(not: not)
+(!=: not =)
+
+(template (event name)
+  (bayesian.event-node name))
+
+(template (edge cause effect)
+  (bayesian.directed-edge cause effect))
+
+(template (network name nodes edges)
+  (bayesian.network-description name nodes edges))
+
+(template (prior event probability-value)
+  ((event = true) has probability probability-value))
+
+(template (conditional event given probability-value)
+  ((bayesian.conditional event given) has probability probability-value))
+
+(template (joint left right)
+  (bayesian.and left right))
+
+(template (joint-three first second third)
+  (bayesian.and first second third))
+
+(template (union left right)
+  (bayesian.or left right))
+
+(template (union-three first second third)
+  (bayesian.or first second third))
+
+(template (complement event)
+  (bayesian.not event))
+
+(template (conditional-probability joint-probability evidence-probability)
+  (joint-probability / evidence-probability))
+
+(template (total-probability true-likelihood true-prior false-likelihood false-prior)
+  ((true-likelihood * true-prior) + (false-likelihood * false-prior)))
+
+(template (bayes likelihood prior evidence)
+  ((likelihood * prior) / evidence))
+
+(template (posterior likelihood prior evidence)
+  (bayesian.bayes likelihood prior evidence))
