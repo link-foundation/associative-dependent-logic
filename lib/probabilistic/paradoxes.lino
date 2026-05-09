@@ -1,0 +1,58 @@
+# Paradox catalogue standard library.
+#
+# This file exports reusable paradox schemas plus midpoint assignment helpers
+# for `[0, 1]` and balanced `[-1, 1]` ranges under the `paradoxes` namespace.
+# The schemas are intentionally lightweight: they package common self-reference
+# shapes while letting a caller choose the propositions, predicates, and range.
+# Import it with an alias such as:
+#
+#   (import "lib/probabilistic/paradoxes.lino" as px)
+#   (px.midpoint (px.liar s))
+#   (? (px.fixed-point (px.liar s)))
+
+(namespace paradoxes)
+
+(and: avg)
+(or: max)
+(not: not)
+(!=: not =)
+(both: avg)
+(neither: product)
+
+(template (implies antecedent consequent)
+  (paradoxes.or (paradoxes.not antecedent) consequent))
+
+(template (liar sentence)
+  (sentence = false))
+
+(template (truth-teller sentence)
+  (sentence = true))
+
+(template (midpoint proposition)
+  (proposition has probability 0.5))
+
+(template (balanced-midpoint proposition)
+  (proposition has probability 0))
+
+(template (fixed-point proposition)
+  (paradoxes.both proposition
+    (paradoxes.not proposition)))
+
+(template (russell member collection)
+  (= (member collection collection)
+     (paradoxes.not (member collection collection))))
+
+(template (barber shaves barber person)
+  (= (shaves barber person)
+     (paradoxes.not (shaves person person))))
+
+(template (curry sentence consequent)
+  (paradoxes.implies sentence consequent))
+
+(template (gap proposition)
+  (paradoxes.neither proposition
+    (paradoxes.not proposition)))
+
+(template (contradiction proposition)
+  (paradoxes.both proposition
+    (paradoxes.not proposition)))

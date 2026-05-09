@@ -1,0 +1,47 @@
+# Fuzzy logic and control standard library.
+#
+# This file exports Zadeh-style membership helpers and small fuzzy-control
+# calculation templates under the `fuzzy` namespace. Import it with an alias
+# such as:
+#
+#   (import "lib/probabilistic/fuzzy.lino" as fz)
+#   (fz.membership temperature hot 0.8)
+#   (? (fz.two-point-centroid 0.6 0.8 0.4 0.3))
+
+(namespace fuzzy)
+
+(and: min)
+(or: max)
+(not: not)
+(!=: not =)
+
+(template (membership subject predicate degree)
+  ((subject = predicate) has probability degree))
+
+(template (degree subject predicate)
+  (subject = predicate))
+
+(template (all left right)
+  (fuzzy.and left right))
+
+(template (any left right)
+  (fuzzy.or left right))
+
+(template (complement value)
+  (fuzzy.not value))
+
+(template (rule antecedent consequent)
+  (fuzzy.and antecedent consequent))
+
+(template (weighted-output activation output)
+  (activation * output))
+
+(template (two-point-centroid activation-a output-a activation-b output-b)
+  (((activation-a * output-a) + (activation-b * output-b)) /
+   (activation-a + activation-b)))
+
+(template (centroid2 activation-a output-a activation-b output-b)
+  (fuzzy.two-point-centroid activation-a output-a activation-b output-b))
+
+(template (control-action name condition output)
+  (fuzzy.control-action-description name condition output))

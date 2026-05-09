@@ -174,6 +174,27 @@ typing and small-step schemas, and type-safety theorem forms from the
 (? (pl.theorem preservation (pl.preservation term next T)))
 ```
 
+The [probabilistic library](./lib/probabilistic/) packages Bayesian-network,
+fuzzy-control, Belnap-bilattice, and paradox-catalogue helpers as standard
+LiNo imports:
+
+```lino
+(import "lib/probabilistic/bayesian.lino" as bn)
+(import "lib/probabilistic/fuzzy.lino" as fz)
+(import "lib/probabilistic/belnap.lino" as bl)
+(import "lib/probabilistic/paradoxes.lino" as px)
+(bn.network sprinkler-network (nodes cloudy rain) (edges (bn.edge cloudy rain)))
+(bn.prior rain 0.5)
+(fz.membership temperature hot 0.8)
+(fz.membership humidity wet 0.6)
+(s: s is s)
+(px.midpoint (px.liar s))
+(? (bn.joint (rain = true) (rain = true)))
+(? (fz.rule (fz.degree temperature hot) (fz.degree humidity wet)))
+(? (bl.contradiction true false))
+(? (px.fixed-point (px.liar s)))
+```
+
 ### Isabelle export
 
 ```bash
