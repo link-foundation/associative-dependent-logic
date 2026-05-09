@@ -13,6 +13,8 @@
   "scripts": {
     "test": "node --test tests/ ../scripts/",
     "docs": "jsdoc -c ../docs/api/jsdoc.json",
+    "build:playground": "node ../scripts/build-playground.mjs",
+    "test:playground": "node --test ../scripts/playground.test.mjs",
     "demo": "node src/rml-links.mjs ../examples/demo.lino",
     "check": "node src/rml-check.mjs",
     "meta": "node src/rml-meta.mjs",
@@ -33,6 +35,7 @@
     "links-notation": "^0.13.0"
   },
   "devDependencies": {
+    "esbuild": "^0.28.0",
     "jsdoc": "^4.0.5"
   },
   "engines": {
