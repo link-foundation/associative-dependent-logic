@@ -21,6 +21,10 @@ cargo build
 cargo run -- <file.lino>
 ```
 
+Literate `.lino.md` files are also accepted by evaluator entry points. Only
+fenced `lino` code blocks are evaluated; prose and other fenced languages are
+ignored. The same extraction applies to files loaded through `(import "...")`.
+
 ### Exporting Lean 4
 
 ```bash

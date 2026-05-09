@@ -328,6 +328,71 @@ pub fn parse_lino(text: &str) -> Vec<String> {
     all_links
 }
 
+fn is_literate_lino_path(file: Option<&str>) -> bool {
+    file.map(|path| path.to_ascii_lowercase().ends_with(".lino.md"))
+        .unwrap_or(false)
+}
+
+fn parse_markdown_fence(line: &str) -> Option<(char, usize, &str)> {
+    let trimmed = line.trim_start_matches(|c| c == ' ' || c == '\t');
+    let marker = trimmed.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let count = trimmed.chars().take_while(|c| *c == marker).count();
+    if count < 3 {
+        return None;
+    }
+    Some((marker, count, &trimmed[count..]))
+}
+
+fn is_closing_markdown_fence(line: &str, marker: char, min_len: usize) -> bool {
+    let Some((found_marker, found_len, rest)) = parse_markdown_fence(line) else {
+        return false;
+    };
+    found_marker == marker
+        && found_len >= min_len
+        && rest.chars().all(|c| c == ' ' || c == '\t')
+}
+
+fn is_lino_fence_info(info: &str) -> bool {
+    info.trim()
+        .split_whitespace()
+        .next()
+        .map(|tag| tag.eq_ignore_ascii_case("lino"))
+        .unwrap_or(false)
+}
+
+/// Extract LiNo code from fenced `lino` blocks in a literate `.lino.md` file.
+///
+/// Non-LiNo prose and other code fences become blank lines so diagnostics keep
+/// the original Markdown line numbers.
+pub fn extract_literate_lino(text: &str) -> String {
+    let mut out = Vec::new();
+    let mut active_fence: Option<(char, usize, bool)> = None;
+    for line in text.split('\n') {
+        if let Some((marker, min_len, include)) = active_fence {
+            if is_closing_markdown_fence(line, marker, min_len) {
+                active_fence = None;
+                out.push(String::new());
+            } else if include {
+                out.push(line.to_string());
+            } else {
+                out.push(String::new());
+            }
+            continue;
+        }
+
+        if let Some((marker, len, info)) = parse_markdown_fence(line) {
+            active_fence = Some((marker, len, is_lino_fence_info(info)));
+            out.push(String::new());
+        } else {
+            out.push(String::new());
+        }
+    }
+    out.join("\n")
+}
+
 // ========== AST ==========
 
 /// AST node: either a leaf string or a list of child nodes.
@@ -9025,9 +9090,15 @@ fn handle_import(
 
 fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &EvaluateOptions, ctx: &mut ImportContext) -> EvaluateResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
-    let spans = compute_form_spans(text, file);
+    let extracted_literate = if is_literate_lino_path(file) {
+        Some(extract_literate_lino(text))
+    } else {
+        None
+    };
+    let source_text = extracted_literate.as_deref().unwrap_or(text);
+    let spans = compute_form_spans(source_text, file);
 
-    let links = parse_lino(text);
+    let links = parse_lino(source_text);
     let forms: Vec<Node> = links
         .iter()
         .filter(|link_str| {

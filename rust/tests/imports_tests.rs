@@ -63,6 +63,61 @@ fn evaluate_file_reports_missing_file_as_e007() {
 }
 
 #[test]
+fn evaluate_file_extracts_literate_lino_markdown_blocks() {
+    let dir = make_tmp("literate");
+    let main = write(
+        &dir,
+        "literate.lino.md",
+        r#"# Literate theorem
+
+This prose mentions (not lino) and must not be parsed.
+
+```lino
+(a: a is a)
+((a = a) has probability 1)
+```
+
+```javascript
+throw new Error('not LiNo');
+```
+
+More exposition between blocks.
+
+```lino
+(? (a = a))
+```
+"#,
+    );
+    let out = evaluate_file(main.to_str().unwrap(), EvaluateOptions::default());
+    assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+    assert_eq!(out.results.len(), 1);
+    assert!((expect_num(&out.results[0]) - 1.0).abs() < 1e-9);
+    cleanup(&dir);
+}
+
+#[test]
+fn imports_extract_literate_lino_markdown_blocks() {
+    let dir = make_tmp("literate-import");
+    write(
+        &dir,
+        "library.lino.md",
+        r#"# Literate library
+
+```lino
+(b: b is b)
+((b = b) has probability 1)
+```
+"#,
+    );
+    let host = write(&dir, "host.lino", "(import \"library.lino.md\")\n(? (b = b))\n");
+    let out = evaluate_file(host.to_str().unwrap(), EvaluateOptions::default());
+    assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+    assert_eq!(out.results.len(), 1);
+    assert!((expect_num(&out.results[0]) - 1.0).abs() < 1e-9);
+    cleanup(&dir);
+}
+
+#[test]
 fn linear_chain_loads_declarations_across_three_files() {
     let dir = make_tmp("chain");
     write(

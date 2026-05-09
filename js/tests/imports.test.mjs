@@ -49,6 +49,53 @@ describe('evaluateFile() loads a file from disk', () => {
   });
 });
 
+describe('evaluateFile() loads literate .lino.md files', () => {
+  let dir;
+  before(() => {
+    dir = makeTmp();
+    fs.writeFileSync(path.join(dir, 'literate.lino.md'), `# Literate theorem
+
+This prose mentions (not lino) and must not be parsed.
+
+\`\`\`lino
+(a: a is a)
+((a = a) has probability 1)
+\`\`\`
+
+\`\`\`javascript
+throw new Error('not LiNo');
+\`\`\`
+
+More exposition between blocks.
+
+\`\`\`lino
+(? (a = a))
+\`\`\`
+`);
+    fs.writeFileSync(path.join(dir, 'library.lino.md'), `# Literate library
+
+\`\`\`lino
+(b: b is b)
+((b = b) has probability 1)
+\`\`\`
+`);
+    fs.writeFileSync(path.join(dir, 'host.lino'), '(import "library.lino.md")\n(? (b = b))\n');
+  });
+  after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('extracts only fenced lino code blocks before evaluation', () => {
+    const out = evaluateFile(path.join(dir, 'literate.lino.md'));
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('extracts fenced lino code blocks from imported literate files', () => {
+    const out = evaluateFile(path.join(dir, 'host.lino'));
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+});
+
 describe('(import "...") — linear chain', () => {
   let dir;
   before(() => {

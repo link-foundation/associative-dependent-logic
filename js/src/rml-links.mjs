@@ -4772,6 +4772,70 @@ function stripLinoComments(text) {
     .replace(/\n{3,}/g, '\n\n');
 }
 
+function isLiterateLinoPath(file) {
+  return typeof file === 'string' && /\.lino\.md$/i.test(file);
+}
+
+function parseMarkdownFence(line) {
+  const trimmed = String(line).replace(/^[ \t]*/, '');
+  const match = trimmed.match(/^(`{3,}|~{3,})(.*)$/);
+  if (!match) return null;
+  return {
+    marker: match[1][0],
+    length: match[1].length,
+    info: match[2] || '',
+  };
+}
+
+function isClosingMarkdownFence(line, fence) {
+  const parsed = parseMarkdownFence(line);
+  return parsed &&
+    parsed.marker === fence.marker &&
+    parsed.length >= fence.length &&
+    /^[ \t]*$/.test(parsed.info);
+}
+
+function isLinoFenceInfo(info) {
+  const tag = String(info).trim().split(/\s+/, 1)[0] || '';
+  return tag.toLowerCase() === 'lino';
+}
+
+/**
+ * Extract LiNo code from fenced `lino` blocks in a literate `.lino.md` file.
+ *
+ * Non-LiNo prose and other code fences become blank lines so diagnostics keep
+ * the original Markdown line numbers.
+ */
+function extractLiterateLino(text) {
+  const lines = String(text).split('\n');
+  const out = [];
+  let activeFence = null;
+  for (const line of lines) {
+    if (activeFence) {
+      if (isClosingMarkdownFence(line, activeFence)) {
+        activeFence = null;
+        out.push('');
+      } else {
+        out.push(activeFence.include ? line : '');
+      }
+      continue;
+    }
+    const fence = parseMarkdownFence(line);
+    if (fence) {
+      activeFence = { ...fence, include: isLinoFenceInfo(fence.info) };
+      out.push('');
+      continue;
+    }
+    out.push('');
+  }
+  return out.join('\n');
+}
+
+function sourceForEvaluation(code, file) {
+  const source = String(code);
+  return isLiterateLinoPath(file) ? extractLiterateLino(source) : source;
+}
+
 /**
  * Parse LiNo source text with the official links-notation parser.
  */
@@ -4887,7 +4951,7 @@ function computeFormSpans(text, file) {
 function evaluate(code, options) {
   const opts = options || {};
   const file = opts.file || null;
-  const sourceText = String(code);
+  const sourceText = sourceForEvaluation(code, file);
   const env = opts.env instanceof Env ? opts.env : new Env(opts.env || opts);
   const results = [];
   const diagnostics = [];
@@ -6292,6 +6356,7 @@ export {
   formatDiagnostic,
   formatTraceEvent,
   computeFormSpans,
+  extractLiterateLino,
   parseLino,
   tokenizeOne,
   parseOne,
