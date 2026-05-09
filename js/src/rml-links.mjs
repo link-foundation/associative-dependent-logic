@@ -2617,9 +2617,11 @@ function isGroundForMode(arg, env) {
 // `(relation <name> <clause>...)` records the clause list of a Twelf-style
 // relation. Each clause is shaped `(<name> arg1 arg2 ... result)`, where
 // `result` is the right-most argument (typically populated for relations
-// whose mode declaration ends with `-output`). The body may contain
-// recursive references to `<name>` whose `+input` slots must be strictly
-// smaller than the head's; the totality checker enforces that decrease.
+// whose mode declaration ends with `-output`). A single-rule shorthand
+// `(relation <name> (<name> arg...) body)` is normalized to that clause shape.
+// The body may contain recursive references to `<name>` whose `+input` slots
+// must be strictly smaller than the head's; the totality checker enforces
+// that decrease.
 //
 // `(total <name>)` triggers `isTotal(env, name)` and lifts the diagnostics
 // it returns into the active diagnostic list. The same `isTotal` helper is
@@ -2632,6 +2634,15 @@ function parseRelationForm(node) {
   const name = node[1];
   if (node.length < 3) {
     throw new RmlError('E032', `Relation declaration for "${name}" must list at least one clause`);
+  }
+  if (node.length === 4) {
+    const pattern = node[2];
+    const body = node[3];
+    const patternMatches = Array.isArray(pattern) && pattern.length >= 2 && pattern[0] === name;
+    const bodyLooksLikeClause = Array.isArray(body) && body.length >= 2 && body[0] === name;
+    if (patternMatches && !bodyLooksLikeClause) {
+      return { name, clauses: [[...pattern, body]] };
+    }
   }
   const clauses = [];
   for (let i = 2; i < node.length; i++) {
