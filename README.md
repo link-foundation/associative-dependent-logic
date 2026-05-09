@@ -935,6 +935,7 @@ The test suites cover:
 ## API
 
 See language-specific documentation:
+- [API reference](https://link-foundation.github.io/relative-meta-logic/) - generated from JSDoc and rustdoc on release
 - [JavaScript API](./js/README.md#api)
 - [Rust API](./rust/README.md#api)
 

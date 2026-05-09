@@ -20,6 +20,10 @@ import { Parser } from 'links-notation';
 // Every parser/evaluator error is reported as a `Diagnostic` with an error
 // code, human-readable message, and source span (file/line/col, 1-based).
 // See `docs/DIAGNOSTICS.md` for the full code list.
+/**
+ * Structured parser, evaluator, or type-checker diagnostic with a stable code
+ * and 1-based source span.
+ */
 class Diagnostic {
   constructor({ code, message, span }) {
     this.code = code;
@@ -44,6 +48,9 @@ class RmlError extends Error {
 // deterministic sequence of `TraceEvent` objects describing operator
 // resolutions, assignment lookups, and reduction steps. The CLI's `--trace`
 // flag prints each one as `[span <file>:<line>:<col>] <kind> <details>`.
+/**
+ * Trace record emitted when `evaluate()` or the CLI runs with tracing enabled.
+ */
 class TraceEvent {
   constructor({ kind, detail, span }) {
     this.kind = kind;
@@ -193,6 +200,10 @@ function quantize(x, valence, lo, hi) {
 }
 
 // ---------- Environment ----------
+/**
+ * Mutable evaluator environment that stores terms, assignments, operators,
+ * namespaces, imports, and type-checking context.
+ */
 class Env {
   constructor(options){
     const opts = options || {};
@@ -2472,6 +2483,15 @@ function evalEqualityNode(left, op, right, env, options = {}) {
   return env.clamp(env.getOp('not')(eq));
 }
 
+/**
+ * Check definitional equality by normalizing two terms in the supplied context.
+ *
+ * @param {*} left - Left AST term.
+ * @param {*} right - Right AST term.
+ * @param {object} [ctx] - Type-checking context.
+ * @param {object} [options] - Conversion options.
+ * @returns {boolean} True when the terms are convertible.
+ */
 function isConvertible(left, right, ctx, options) {
   const env = ctx instanceof Env ? ctx : new Env(ctx && ctx.env ? ctx.env : ctx);
   const opts = conversionOptionsFrom(ctx, options);
@@ -2511,6 +2531,9 @@ function flattenNeutralApplies(node, env) {
 
 // Public weak-head normal form API (issue #50, D4).
 // Reduces only the spine of `term` — leaves binders and arguments untouched.
+/**
+ * Reduce a term to weak-head normal form without descending into arguments.
+ */
 function whnf(term, ctx, options) {
   const env = ctx instanceof Env ? ctx : new Env(ctx && ctx.env ? ctx.env : ctx);
   const opts = conversionOptionsFrom(ctx, options);
@@ -2520,6 +2543,9 @@ function whnf(term, ctx, options) {
 // Public full normal form API (issue #50, D4).
 // Reduces every redex in `term`, including ones nested under binders and in
 // argument positions, until the term is in beta-(eta-)normal form.
+/**
+ * Reduce a term to normal form.
+ */
 function nf(term, ctx, options) {
   const env = ctx instanceof Env ? ctx : new Env(ctx && ctx.env ? ctx.env : ctx);
   const opts = conversionOptionsFrom(ctx, options);
@@ -4519,6 +4545,9 @@ function _synthOfMembership(node, env, span, diagnostics) {
   return ['Type', '0'];
 }
 
+/**
+ * Synthesize the type of a kernel term.
+ */
 function synth(term, ctx, options) {
   const env = _envFromCtx(ctx);
   const span = _spanFromCtx(ctx, options);
@@ -4640,6 +4669,9 @@ function synth(term, ctx, options) {
   return { type: null, diagnostics };
 }
 
+/**
+ * Check that a kernel term has the expected type.
+ */
 function check(term, expectedType, ctx, options) {
   const env = _envFromCtx(ctx);
   const span = _spanFromCtx(ctx, options);
@@ -4740,6 +4772,9 @@ function stripLinoComments(text) {
     .replace(/\n{3,}/g, '\n\n');
 }
 
+/**
+ * Parse LiNo source text with the official links-notation parser.
+ */
 function parseLino(text) {
   const parser = new Parser();
   return parser.parse(stripLinoComments(text)).map(link => String(link));
@@ -4765,6 +4800,9 @@ function parseLinoForms(text) {
 // like `stripLinoComments` does. Inline `# ...` comments that follow a closing
 // paren (matching `(\)[ \t]+)#.*$` in `stripLinoComments`) are also skipped so
 // parens inside the comment don't disturb the depth counter.
+/**
+ * Compute 1-based source spans for every top-level LiNo form in `text`.
+ */
 function computeFormSpans(text, file) {
   const spans = [];
   const lines = text.split('\n');
@@ -4835,6 +4873,17 @@ function computeFormSpans(text, file) {
 //
 // `options.env` may be an existing `Env` instance (used by the REPL to
 // preserve state across inputs) or a plain options object passed to `new Env`.
+/**
+ * Evaluate LiNo source and return query results plus structured diagnostics.
+ *
+ * @param {string} code - LiNo source text.
+ * @param {object} [options] - Evaluation options.
+ * @param {string} [options.file] - Source file path used in diagnostics.
+ * @param {Env|object} [options.env] - Existing environment or environment options.
+ * @param {boolean} [options.trace=false] - Include deterministic trace events.
+ * @param {boolean} [options.withProofs=false] - Include proof witnesses for queries.
+ * @returns {object} Results, diagnostics, and optional trace/proof arrays.
+ */
 function evaluate(code, options) {
   const opts = options || {};
   const file = opts.file || null;
@@ -5171,6 +5220,9 @@ function handleImport(rawTarget, alias, span, importingFile, env, importStack, i
 // Read a file from disk and evaluate it, honouring (import ...) directives.
 // Mirrors `evaluate()` but takes a path on disk and resolves relative imports
 // against the file's directory.
+/**
+ * Read and evaluate a LiNo file, resolving imports relative to that file.
+ */
 function evaluateFile(filePath, options) {
   const opts = options || {};
   const resolved = path.resolve(filePath);
@@ -5656,6 +5708,9 @@ function compileRustProgram(parsed) {
   return lines.join('\n');
 }
 
+/**
+ * Extract selected LiNo definitions into JavaScript or Rust source code.
+ */
 function extractProgram(code, target = 'js') {
   const normalized = normalizeExtractTarget(target);
   const parsed = parseExtractProgram(code);
@@ -6065,6 +6120,9 @@ class IsabelleExportContext {
   }
 }
 
+/**
+ * Export the supported typed LiNo fragment to Isabelle/HOL source text.
+ */
 function exportIsabelle(sourceText, options = {}) {
   const ctx = new IsabelleExportContext(options);
   let forms;
@@ -6078,6 +6136,9 @@ function exportIsabelle(sourceText, options = {}) {
 }
 
 // ---------- Runner ----------
+/**
+ * Compatibility wrapper that evaluates LiNo text and returns only query values.
+ */
 function run(text, options){
   return evaluate(text, options).results;
 }
