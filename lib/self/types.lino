@@ -1,0 +1,148 @@
+# RML bidirectional type layer encoded as links for the self-bootstrap layer.
+#
+# The rules below are data. They mirror the host `synth` and `check` surface
+# so a future self-hosted checker can consume `(rule ...)` links directly.
+
+(namespace self)
+
+(Type-layer: (Type 0) Type-layer)
+(Typing-context: (Type 0) Typing-context)
+(Typing-rule: (Type 0) Typing-rule)
+(Type-diagnostic: (Type 0) Type-diagnostic)
+
+(rml-type-layer: Type-layer rml-type-layer)
+(type-layer rml-type-layer matches relative-meta-logic version-0-19-0)
+(type-layer rml-type-layer has host-type-checker-presentation rule-links)
+
+# Judgement forms.
+
+(judgement (synth term type) reads context-synthesizes-term-as-type)
+(judgement (check term type) reads context-checks-term-against-type)
+(judgement (convert left right) reads left-and-right-are-definitionally-equal)
+
+(rule (context empty)
+  (has no-recorded-type-facts))
+
+(rule (context (extend context variable type))
+  (records variable type)
+  (restores previous-binding after-scope))
+
+(rule (lookup-type context expression)
+  (first-defined
+    (recorded-type expression)
+    (resolved-qualified-type expression)
+    (universe-successor-type expression)))
+
+# Synthesis mode.
+
+(rule (synth symbol)
+  (when (lookup-type context symbol))
+  (returns recorded-type))
+
+(rule (synth numeric-literal)
+  (returns no-type)
+  (emits no-diagnostic))
+
+(rule (synth (Type level))
+  (when (valid-universe-level level))
+  (returns (Type (successor level))))
+
+(rule (synth (Prop))
+  (returns (Type 1)))
+
+(rule (synth (Pi binding body))
+  (when (well-formed-binding binding))
+  (returns (Type 0)))
+
+(rule (synth (forall type-variable body))
+  (desugars-to (Pi (Type type-variable) body))
+  (continues-with synth))
+
+(rule (synth (lambda binding body))
+  (when (well-formed-binding binding))
+  (extends context with binding)
+  (synthesizes body as body-type)
+  (returns (Pi binding body-type)))
+
+(rule (synth (apply function argument))
+  (synthesizes function as (Pi (domain variable) codomain))
+  (checks argument against domain)
+  (returns (subst codomain variable argument)))
+
+(rule (synth (subst term variable replacement))
+  (reduces-to (subst term variable replacement))
+  (continues-with synth))
+
+(rule (synth (type of expression))
+  (synthesizes expression as expression-type)
+  (returns (Type 0)))
+
+(rule (synth (expression of expected-type))
+  (checks expression against expected-type)
+  (returns (Type 0)))
+
+(rule (synth recorded-expression)
+  (when (lookup-type context recorded-expression))
+  (returns recorded-type))
+
+# Checking mode.
+
+(rule (check expression expected-type)
+  (uses bidirectional-checking)
+  (returns ok-or-diagnostics))
+
+(rule (check numeric-literal expected-type)
+  (accepts any-non-empty-annotation))
+
+(rule (check (lambda (T x) body) (Pi (T x) U))
+  (opens x as T)
+  (checks body against U))
+
+(rule (check (lambda (domain variable) body) (Pi (expected-domain expected-variable) codomain))
+  (requires (convert domain expected-domain))
+  (checks body against (subst codomain expected-variable variable)))
+
+(rule (check (lambda binding body) non-pi-type)
+  (rejects with E023))
+
+(rule (check expression expected-type by-synthesis)
+  (synthesizes expression as actual-type)
+  (requires (convert actual-type expected-type)))
+
+# Convertibility and host helper rules.
+
+(rule (convert left right)
+  (expands-prenex-forall)
+  (normalizes left and right)
+  (compares structural-equality))
+
+(rule (valid-universe-level level)
+  (requires natural-number-token level))
+
+(rule (well-formed-binding (type variable))
+  (requires variable-name variable)
+  (records variable type))
+
+(rule (well-formed-binding (variable: type))
+  (records variable type))
+
+(rule (prenex-forall (forall type-variable body))
+  (desugars-to (Pi (Type type-variable) body)))
+
+(rule (diagnostic cannot-synthesize expression)
+  (emits E020))
+
+(rule (diagnostic type-mismatch expression actual-type expected-type)
+  (emits E021))
+
+(rule (diagnostic application-head-not-pi function actual-type)
+  (emits E022))
+
+(rule (diagnostic lambda-expected-pi expression expected-type)
+  (emits E023))
+
+(rule (diagnostic malformed-binder binding)
+  (emits E024))
+
+(rule (host-type-checker-presentation rml-type-layer)
+  (rule-links with synth-and-check-patterns))
