@@ -7,13 +7,15 @@
   "bin": {
     "rml": "src/rml-links.mjs",
     "rml-check": "src/rml-check.mjs",
-    "rml-meta": "src/rml-meta.mjs"
+    "rml-meta": "src/rml-meta.mjs",
+    "rml-lsp": "src/rml-lsp.mjs"
   },
   "scripts": {
     "test": "node --test tests/ ../scripts/",
     "demo": "node src/rml-links.mjs ../examples/demo.lino",
     "check": "node src/rml-check.mjs",
     "meta": "node src/rml-meta.mjs",
+    "lsp": "node src/rml-lsp.mjs",
     "lint:english": "node ../scripts/lint-english.mjs --allowlist ../scripts/lint-english.allowlist.json ../examples/*.lino ../lib/*/*.lino"
   },
   "keywords": [

@@ -61,6 +61,17 @@ node src/rml-links.mjs export rocq ../examples/dependent-types.lino -o dependent
 See [`../docs/ROCQ-EXPORT.md`](../docs/ROCQ-EXPORT.md) for the supported
 typed subset.
 
+### Language Server Protocol
+
+```bash
+node src/rml-lsp.mjs
+```
+
+The LSP server is stdio-based and is normally launched by an editor. It
+publishes evaluator diagnostics and supports hover, go-to-definition, and
+completion for `.lino` files. Neovim and Helix setup examples are documented
+in [`../docs/LANGUAGE_SERVER.md`](../docs/LANGUAGE_SERVER.md).
+
 ### Example
 
 ```lino
