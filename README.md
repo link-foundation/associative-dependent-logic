@@ -25,6 +25,7 @@ For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 - [Metatheorem checker](./docs/METATHEOREMS.md) - The C3 Twelf-style guarantee that composes D12 totality, D14 coverage, D15 modes, and D13 termination, plus the `rml-meta` CLI.
 - [Lean 4 export](./docs/LEAN_EXPORT.md) - The `rml export lean` bridge for typed, non-probabilistic RML fragments.
 - [Rocq export](./docs/ROCQ-EXPORT.md) - The supported typed LiNo subset for `rml export rocq <file.lino> -o <file.v>`.
+- [Language Server](./docs/LANGUAGE_SERVER.md) - Stdio LSP setup for diagnostics, hover, go-to-definition, and completion in Neovim and Helix.
 
 ## Overview
 
@@ -71,6 +72,10 @@ npm install
 node src/rml-links.mjs ../examples/demo.lino
 node src/rml-links.mjs export lean ../examples/lean-export-basic.lino -o out.lean
 ```
+
+Editor integration is available through the stdio language server; see
+[`docs/LANGUAGE_SERVER.md`](./docs/LANGUAGE_SERVER.md) for Neovim and Helix
+setup.
 
 ### Rust
 
