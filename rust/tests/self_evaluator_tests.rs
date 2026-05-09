@@ -71,7 +71,7 @@ fn evaluator_path() -> PathBuf {
 }
 
 fn self_corpus_dir() -> PathBuf {
-    repo_root().join("test-corpus").join("self")
+    repo_root().join("test-corpus")
 }
 
 fn parse_forms(path: &Path) -> Vec<Node> {
@@ -127,6 +127,7 @@ fn lino_files(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_else(|e| panic!("could not read {}: {}", dir.display(), e))
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("lino"))
+        .filter(|path| path.file_name().and_then(|s| s.to_str()) != Some("expected.lino"))
         .collect();
     files.sort();
     files

@@ -3,7 +3,7 @@
 // The evaluator file is data: it records the host evaluator as `(rule ...)`
 // links. These tests keep that data parseable, require the built-in operator
 // rule surface, and run a small rule-backed evaluator against the shared
-// example corpus so the encoded rules stay tied to host behavior.
+// test corpus and examples so the encoded rules stay tied to host behavior.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
@@ -29,7 +29,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 const evaluatorPath = join(repoRoot, 'lib', 'self', 'evaluator.lino');
 const examplesDir = join(repoRoot, 'examples');
-const selfCorpusDir = join(repoRoot, 'test-corpus', 'self');
+const selfCorpusDir = join(repoRoot, 'test-corpus');
 
 const REQUIRED_EVAL_RULES = [
   '(eval numeric-literal)',
@@ -798,7 +798,7 @@ describe('self evaluator', () => {
     }
   });
 
-  for (const file of readdirSync(selfCorpusDir).filter(f => f.endsWith('.lino')).sort()) {
+  for (const file of readdirSync(selfCorpusDir).filter(f => f.endsWith('.lino') && f !== 'expected.lino').sort()) {
     it(`replays self corpus ${file} like the host evaluator`, () => {
       const source = readFileSync(join(selfCorpusDir, file), 'utf8');
       const encoded = new EncodedEvaluator(evalRulePatterns(evaluatorForms()));

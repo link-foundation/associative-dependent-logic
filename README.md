@@ -93,6 +93,10 @@ Examples are language-agnostic and live in [`/examples/`](./examples/). Both
 implementations execute the same files and are required to produce identical
 output (enforced by `examples/expected.lino` and the shared-examples tests).
 
+Shared regression inputs live in [`/test-corpus/`](./test-corpus/). Both
+implementations walk `test-corpus/*.lino` and compare query results against
+`test-corpus/expected.lino`.
+
 ### Literate LiNo
 
 Evaluator entry points also accept literate `.lino.md` files. Prose is ignored
@@ -229,6 +233,8 @@ LiNo data.
 The [self evaluator library](./lib/self/evaluator.lino) encodes the RML host
 evaluator as `(rule ...)` links, including the built-in arithmetic, comparison,
 logical, equality, normalization, and typed-kernel evaluation forms.
+Representative evaluator inputs are covered by the shared
+[`test-corpus/`](./test-corpus/) regression suite.
 
 ### Isabelle export
 
