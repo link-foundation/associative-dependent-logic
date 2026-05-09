@@ -1,0 +1,104 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "LiNo",
+  "scopeName": "source.lino",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#definitions" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.lino",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.lino",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.lino",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "definitions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.definition.lino",
+          "match": "(?<=\\()[^\\s()#:\"]+(?=:)"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.lino",
+          "match": "\\b(?:import|as|namespace|template|relation|define|inductive|coinductive|constructor|mode|covers|fresh|in|lambda|apply|type|of|has|probability|range|valence|theorem|by|rewrite|simplify|exact|suppose|introduce|reflexivity|symmetry|transitivity|induction|atp)\\b|\\?"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.lino",
+          "match": "\\b(?:Type|Prop|Pi|Boolean|Natural)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.lino",
+          "match": "(?<![\\w.])-?\\d+(?:\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.logical.lino",
+          "match": "\\b(?:and|or|not|both|neither|is)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.lino",
+          "match": "!?=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.arithmetic.lino",
+          "match": "\\+|-|\\*|/"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.parens.begin.lino",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.section.parens.end.lino",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.separator.key-value.lino",
+          "match": ":"
+        }
+      ]
+    }
+  }
+}

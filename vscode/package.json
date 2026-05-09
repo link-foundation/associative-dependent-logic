@@ -1,0 +1,90 @@
+{
+  "name": "relative-meta-logic",
+  "displayName": "Relative Meta Logic",
+  "description": "VS Code language support for Relative Meta Logic .lino files.",
+  "version": "0.1.0",
+  "publisher": "link-foundation",
+  "license": "Unlicense",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/link-foundation/relative-meta-logic.git",
+    "directory": "vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/link-foundation/relative-meta-logic/issues"
+  },
+  "homepage": "https://github.com/link-foundation/relative-meta-logic#readme",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "rml",
+    "lino",
+    "logic",
+    "language server"
+  ],
+  "activationEvents": [
+    "onLanguage:lino"
+  ],
+  "main": "./src/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lino",
+        "aliases": [
+          "LiNo",
+          "lino"
+        ],
+        "extensions": [
+          ".lino"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lino",
+        "scopeName": "source.lino",
+        "path": "./syntaxes/lino.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Relative Meta Logic",
+      "properties": {
+        "rml.server.command": {
+          "type": "string",
+          "default": "",
+          "description": "Override command used to start the RML language server. Leave empty to use the bundled server."
+        },
+        "rml.server.args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional arguments passed to the RML language server command."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "copy-server": "node scripts/copy-server.mjs",
+    "pretest": "npm run copy-server",
+    "test": "node --test test/*.test.mjs",
+    "vscode:prepublish": "npm run copy-server",
+    "package": "npm run copy-server && vsce package --out relative-meta-logic.vsix"
+  },
+  "dependencies": {
+    "links-notation": "^0.13.0",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.9.1"
+  }
+}
