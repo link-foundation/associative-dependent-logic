@@ -588,7 +588,7 @@ pub fn dec_round(x: f64) -> f64 {
 /// For N=2 (Boolean): levels are {lo, hi}
 /// For N=3 (ternary): levels are {lo, mid, hi}
 /// For N<2 (continuous/unary): no quantization
-/// See: https://en.wikipedia.org/wiki/Many-valued_logic
+/// See: <https://en.wikipedia.org/wiki/Many-valued_logic>
 pub fn quantize(x: f64, valence: u32, lo: f64, hi: f64) -> f64 {
     if valence < 2 {
         return x; // unary or continuous — no quantization
@@ -2094,7 +2094,7 @@ fn normalize_term(node: &Node, env: &mut Env, options: ConvertOptions) -> Node {
 /// Weak-head normal form (D4): reduce the spine of `node` — i.e. unfold the
 /// head as long as there are arguments to apply to it — without descending
 /// into binders or argument positions. Mirrors `whnfTerm` in the JS runtime
-/// and `nf`/`is_convertible` already use [`normalize_term`] for the full
+/// and `nf`/`is_convertible` already use `normalize_term` for the full
 /// version. Substitution may expose a redex inside the residual body, but
 /// that is no longer on the original spine, so this routine returns it
 /// unevaluated; full normalization is the place that descends into those

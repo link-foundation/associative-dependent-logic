@@ -46,3 +46,33 @@ describe('soundness documentation', () => {
     }
   });
 });
+
+describe('generated API reference documentation', () => {
+  it('is linked from the README', () => {
+    const readme = read('README.md');
+    assert.match(
+      readme,
+      /\[API reference\]\(https:\/\/link-foundation\.github\.io\/relative-meta-logic\/\)/,
+    );
+  });
+
+  it('builds JavaScript and Rust API docs for GitHub Pages on release', () => {
+    const workflow = read('.github/workflows/api-docs.yml');
+    for (const expected of [
+      'release:',
+      'types: [published]',
+      'npm run docs',
+      'cargo doc',
+      'actions/configure-pages',
+      'actions/upload-pages-artifact',
+      'actions/deploy-pages',
+    ]) {
+      assert.ok(workflow.includes(expected), `missing ${expected}`);
+    }
+  });
+
+  it('defines a JavaScript docs script for JSDoc generation', () => {
+    const packageJson = JSON.parse(read('js/package.json'));
+    assert.equal(packageJson.scripts.docs, 'jsdoc -c ../docs/api/jsdoc.json');
+  });
+});
