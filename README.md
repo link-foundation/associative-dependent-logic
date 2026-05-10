@@ -31,9 +31,22 @@ For versioning, deprecations, and release expectations, see
 
 ## Tutorials
 
-- [RML in RML self-bootstrap tutorial](./docs/tutorials/self-bootstrap.md) - A beginner-friendly narrative walkthrough of
-  the encoded grammar, evaluator, type layer, operators, metatheorem checker,
-  and bootstrap CI gate.
+- [Tutorial path](./docs/tutorials/) - Start here for the progressive
+  walkthrough sequence.
+- [Classical logic tutorial](./docs/tutorials/classical.md) - Boolean truth
+  values, declarations, assignments, queries, and the classical library.
+- [Fuzzy logic tutorial](./docs/tutorials/fuzzy.md) - Continuous truth values,
+  degree-based predicates, fuzzy connectives, and fuzzy-control helpers.
+- [Probabilistic reasoning tutorial](./docs/tutorials/probabilistic.md) -
+  Independent events, probabilistic sum, Bayesian-network helpers, and Bayes
+  calculations.
+- [Typed LiNo tutorial](./docs/tutorials/typed.md) - Type declarations,
+  universes, `Pi`, `lambda`, `apply`, and type queries.
+- [Metatheory tutorial](./docs/tutorials/metatheory.md) - Modes, coverage,
+  totality, termination, and the `rml-meta` CLI.
+- [RML in RML self-bootstrap tutorial](./docs/tutorials/self-bootstrap.md) -
+  The capstone walkthrough of the encoded grammar, evaluator, type layer,
+  operators, metatheorem checker, and bootstrap CI gate.
 
 ## Overview
 
