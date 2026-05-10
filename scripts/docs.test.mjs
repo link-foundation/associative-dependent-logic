@@ -176,3 +176,77 @@ describe('self-bootstrap tutorial documentation', () => {
     }
   });
 });
+
+describe('progressive tutorial documentation', () => {
+  const tutorials = [
+    ['Classical logic tutorial', './docs/tutorials/classical.md'],
+    ['Fuzzy logic tutorial', './docs/tutorials/fuzzy.md'],
+    ['Probabilistic reasoning tutorial', './docs/tutorials/probabilistic.md'],
+    ['Typed LiNo tutorial', './docs/tutorials/typed.md'],
+    ['Metatheory tutorial', './docs/tutorials/metatheory.md'],
+    ['RML in RML self-bootstrap tutorial', './docs/tutorials/self-bootstrap.md'],
+  ];
+
+  it('links the tutorial path from the README in learning order', () => {
+    const readme = read('README.md');
+
+    let previous = -1;
+    for (const [label, href] of tutorials) {
+      const markdown = `[${label}](${href})`;
+      const index = readme.indexOf(markdown);
+      assert.ok(index > previous, `${markdown} missing or out of order`);
+      previous = index;
+    }
+  });
+
+  it('provides a docs/tutorials index in the same learning order', () => {
+    const indexDoc = read('docs/tutorials/README.md');
+    const orderedPaths = [
+      './classical.md',
+      './fuzzy.md',
+      './probabilistic.md',
+      './typed.md',
+      './metatheory.md',
+      './self-bootstrap.md',
+    ];
+
+    let previous = -1;
+    for (const expected of orderedPaths) {
+      const index = indexDoc.indexOf(expected);
+      assert.ok(index > previous, `${expected} missing or out of order`);
+      previous = index;
+    }
+  });
+
+  it('connects each tutorial to its runnable source material', () => {
+    const expectedReferences = {
+      'docs/tutorials/classical.md': [
+        '../../examples/classical-logic.lino',
+        '../../lib/classical/core.lino',
+      ],
+      'docs/tutorials/fuzzy.md': [
+        '../../examples/fuzzy-logic.lino',
+        '../../lib/probabilistic/fuzzy.lino',
+      ],
+      'docs/tutorials/probabilistic.md': [
+        '../../examples/bayesian-network.lino',
+        '../../lib/probabilistic/bayesian.lino',
+      ],
+      'docs/tutorials/typed.md': [
+        '../../examples/dependent-types.lino',
+        '../../docs/KERNEL.md',
+      ],
+      'docs/tutorials/metatheory.md': [
+        '../../docs/METATHEOREMS.md',
+        '../../examples/lambda-calculus.lino',
+      ],
+    };
+
+    for (const [docPath, references] of Object.entries(expectedReferences)) {
+      const doc = read(docPath);
+      for (const expected of references) {
+        assert.ok(doc.includes(expected), `${docPath} missing ${expected}`);
+      }
+    }
+  });
+});
