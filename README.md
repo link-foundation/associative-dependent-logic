@@ -29,6 +29,12 @@ For versioning, deprecations, and release expectations, see
 - [Rocq export](./docs/ROCQ-EXPORT.md) - The supported typed LiNo subset for `rml export rocq <file.lino> -o <file.v>`.
 - [Language Server](./docs/LANGUAGE_SERVER.md) - Stdio LSP setup for diagnostics, hover, go-to-definition, and completion in Neovim and Helix.
 
+## Tutorials
+
+- [RML in RML self-bootstrap tutorial](./docs/tutorials/self-bootstrap.md) - A beginner-friendly narrative walkthrough of
+  the encoded grammar, evaluator, type layer, operators, metatheorem checker,
+  and bootstrap CI gate.
+
 ## Overview
 
 RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minimal probabilistic logic system built on top of [LiNo (Links Notation)](https://github.com/link-foundation/links-notation). It supports [many-valued logics](https://en.wikipedia.org/wiki/Many-valued_logic) from unary (1-valued) through continuous probabilistic ([fuzzy](https://en.wikipedia.org/wiki/Fuzzy_logic)), allowing you to:

@@ -139,3 +139,40 @@ describe('compatibility and release documentation', () => {
     assert.equal(packageJson.version, cargoVersion);
   });
 });
+
+describe('self-bootstrap tutorial documentation', () => {
+  it('is linked from the README', () => {
+    const readme = read('README.md');
+    assert.ok(
+      readme.includes('[RML in RML self-bootstrap tutorial](./docs/tutorials/self-bootstrap.md)'),
+      'README must link docs/tutorials/self-bootstrap.md',
+    );
+  });
+
+  it('walks through the encoded self-bootstrap files in narrative order', () => {
+    const doc = read('docs/tutorials/self-bootstrap.md');
+    const expectedOrder = [
+      './lib/self/grammar.lino',
+      './lib/self/evaluator.lino',
+      './lib/self/types.lino',
+      './lib/self/operators.lino',
+      './lib/self/metatheorem.lino',
+      './.github/workflows/bootstrap.yml',
+    ];
+
+    let previous = -1;
+    for (const expected of expectedOrder) {
+      const index = doc.indexOf(expected);
+      assert.ok(index > previous, `${expected} missing or out of order`);
+      previous = index;
+    }
+
+    for (const expected of [
+      'npm run test:bootstrap',
+      './test-corpus/evaluator-operators.lino',
+      './test-corpus/expected.lino',
+    ]) {
+      assert.ok(doc.includes(expected), `missing ${expected}`);
+    }
+  });
+});
