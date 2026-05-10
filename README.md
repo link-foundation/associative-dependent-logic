@@ -109,6 +109,17 @@ cargo build --manifest-path rust/Cargo.toml --bin rml
 node scripts/check-corpus-parity.mjs
 ```
 
+The `bootstrap` GitHub Actions workflow runs the host-driven encoded evaluator
+from [`lib/self/evaluator.lino`](./lib/self/evaluator.lino) over every root
+`test-corpus/*.lino` file and fails if any encoded RML result diverges from the
+host JavaScript evaluator. To run the same bootstrap gate locally:
+
+```bash
+cd js
+npm ci
+npm run test:bootstrap
+```
+
 ### Literate LiNo
 
 Evaluator entry points also accept literate `.lino.md` files. Prose is ignored

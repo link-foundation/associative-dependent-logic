@@ -12,6 +12,7 @@
   },
   "scripts": {
     "test": "node --test tests/ ../scripts/",
+    "test:bootstrap": "node --test --test-name-pattern \"replays self corpus\" tests/self-evaluator.test.mjs",
     "docs": "jsdoc -c ../docs/api/jsdoc.json",
     "build:playground": "node ../scripts/build-playground.mjs",
     "test:playground": "node --test ../scripts/playground.test.mjs",
