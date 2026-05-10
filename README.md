@@ -97,6 +97,18 @@ Shared regression inputs live in [`/test-corpus/`](./test-corpus/). Both
 implementations walk `test-corpus/*.lino` and compare query results against
 `test-corpus/expected.lino`.
 
+The `parity` GitHub Actions workflow also builds the Rust CLI and runs
+`node scripts/check-corpus-parity.mjs`, which executes every root
+`test-corpus/*.lino` file through both implementations and fails when their
+exit status, stdout, or stderr diverge. To run the same parity gate locally:
+
+```bash
+cd js && npm ci
+cd ..
+cargo build --manifest-path rust/Cargo.toml --bin rml
+node scripts/check-corpus-parity.mjs
+```
+
 ### Literate LiNo
 
 Evaluator entry points also accept literate `.lino.md` files. Prose is ignored
