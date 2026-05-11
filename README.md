@@ -108,6 +108,33 @@ cargo run -- ../examples/demo.lino
 cargo run -- export lean ../examples/lean-export-basic.lino -o out.lean
 ```
 
+### Docker
+
+Container images for both implementations live under
+[`docker/`](./docker/) and are built on every pull request by the
+`docker` GitHub Actions workflow. From the repository root:
+
+```bash
+# JavaScript implementation
+docker build -f docker/Dockerfile.js -t rml-js .
+docker run --rm rml-js                                     # runs examples/demo.lino
+
+# Rust implementation
+docker build -f docker/Dockerfile.rust -t rml-rust .
+docker run --rm rml-rust                                   # runs examples/demo.lino
+```
+
+Both services are also wired into [`docker/docker-compose.yml`](./docker/docker-compose.yml):
+
+```bash
+docker compose -f docker/docker-compose.yml run --rm rml-js
+docker compose -f docker/docker-compose.yml run --rm rml-rust
+```
+
+See [`docker/README.md`](./docker/README.md) for build cache layout,
+mounting local `.lino` files, and using the extra `rml-check` and
+`rml-meta` binaries from the Rust image.
+
 Examples are language-agnostic and live in [`/examples/`](./examples/). Both
 implementations execute the same files and are required to produce identical
 output (enforced by `examples/expected.lino` and the shared-examples tests).
