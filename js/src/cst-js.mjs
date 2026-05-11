@@ -29,7 +29,7 @@ const JS = DIALECTS.js;
  * Parse JavaScript source into a `lino-cst.js.*` CST.
  *
  * @param {string} src JS source.
- * @returns {import('./cst.mjs').CstNode}
+ * @returns {CstNode}
  */
 export function parseJs(src) {
   return list(`${JS}.program`, tokeniseJs(String(src)));
@@ -37,7 +37,7 @@ export function parseJs(src) {
 
 /**
  * Print a JS CST back to source.
- * @param {import('./cst.mjs').CstNode} node
+ * @param {CstNode} node
  * @returns {string}
  */
 export function printJs(node) {

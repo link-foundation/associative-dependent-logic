@@ -30,7 +30,7 @@ const LEAN = DIALECTS.lean;
  * Parse Lean 4 source into a `lino-cst.lean.*` CST.
  *
  * @param {string} src Lean source.
- * @returns {import('./cst.mjs').CstNode}
+ * @returns {CstNode}
  */
 export function parseLean(src) {
   return list(`${LEAN}.module`, tokeniseLean(String(src)));
@@ -38,7 +38,7 @@ export function parseLean(src) {
 
 /**
  * Print a Lean CST back to source.
- * @param {import('./cst.mjs').CstNode} node
+ * @param {CstNode} node
  * @returns {string}
  */
 export function printLean(node) {

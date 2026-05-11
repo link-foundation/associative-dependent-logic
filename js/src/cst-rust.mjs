@@ -40,7 +40,7 @@ const RUST = DIALECTS.rust;
  * src` for any well-tokenised input.
  *
  * @param {string} src Rust source.
- * @returns {import('./cst.mjs').CstNode} CST root.
+ * @returns {CstNode} CST root.
  */
 export function parseRust(src) {
   const children = tokeniseRust(String(src));
@@ -50,7 +50,7 @@ export function parseRust(src) {
 /**
  * Print a Rust CST back to source. Inverse of `parseRust`.
  *
- * @param {import('./cst.mjs').CstNode} node
+ * @param {CstNode} node
  * @returns {string}
  */
 export function printRust(node) {

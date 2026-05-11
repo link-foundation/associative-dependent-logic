@@ -41,7 +41,7 @@ export const SUPPORTED_LANGUAGES = Object.freeze(['rust', 'js', 'javascript', 'l
  *
  * @param {string} src host-language source.
  * @param {'rust'|'js'|'javascript'|'lean'|'rocq'} lang
- * @returns {import('./cst.mjs').CstNode}
+ * @returns {CstNode}
  */
 export function parseToCst(src, lang) {
   const parse = PARSERS[lang];
@@ -52,7 +52,7 @@ export function parseToCst(src, lang) {
 /**
  * Print a CST node back to host-language source.
  *
- * @param {import('./cst.mjs').CstNode} node CST tree.
+ * @param {CstNode} node CST tree.
  * @param {'rust'|'js'|'javascript'|'lean'|'rocq'} lang
  * @returns {string}
  */

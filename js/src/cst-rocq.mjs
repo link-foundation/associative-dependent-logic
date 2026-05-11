@@ -23,7 +23,7 @@ const ROCQ = DIALECTS.rocq;
 /**
  * Parse Rocq source into a `lino-cst.rocq.*` CST.
  * @param {string} src
- * @returns {import('./cst.mjs').CstNode}
+ * @returns {CstNode}
  */
 export function parseRocq(src) {
   return list(`${ROCQ}.document`, tokeniseRocq(String(src)));
@@ -31,7 +31,7 @@ export function parseRocq(src) {
 
 /**
  * Print a Rocq CST back to source.
- * @param {import('./cst.mjs').CstNode} node
+ * @param {CstNode} node
  * @returns {string}
  */
 export function printRocq(node) {

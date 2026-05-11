@@ -21,17 +21,35 @@
 // and the placement of trivia. The printer is content-agnostic — it simply
 // concatenates `text` in document order.
 
-/** @typedef {{ kind: 'list', tag: string|null, open: string|null, close: string|null, children: CstNode[] }} CstListNode */
-/** @typedef {{ kind: 'token', tag: string|null, text: string }} CstTokenNode */
-/** @typedef {{ kind: 'trivia', tag: string|null, text: string }} CstTriviaNode */
+/** @typedef {Object} CstListNode
+ *  @property {'list'} kind
+ *  @property {string|null} tag
+ *  @property {string|null} open
+ *  @property {string|null} close
+ *  @property {CstNode[]} children
+ */
+/** @typedef {Object} CstTokenNode
+ *  @property {'token'} kind
+ *  @property {string|null} tag
+ *  @property {string} text
+ */
+/** @typedef {Object} CstTriviaNode
+ *  @property {'trivia'} kind
+ *  @property {string|null} tag
+ *  @property {string} text
+ */
 /** @typedef {CstListNode|CstTokenNode|CstTriviaNode} CstNode */
+/** @typedef {Object} CstListOptions
+ *  @property {string|null} [open]
+ *  @property {string|null} [close]
+ */
 
 /**
  * Construct a `list` CST node.
  *
  * @param {string|null} tag dialect-specific symbol, e.g. `lino-cst.rust.fn`.
  * @param {CstNode[]} children child nodes in document order.
- * @param {{ open?: string|null, close?: string|null }} [opts]
+ * @param {CstListOptions} [opts]
  *   optional `open`/`close` delimiter strings to emit around the children.
  * @returns {CstListNode}
  */
