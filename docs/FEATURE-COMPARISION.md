@@ -88,7 +88,7 @@ Core logical concepts are compared separately in
 | Public source repository | Yes | Yes | N/A/theory | Yes | Yes | Yes | Yes | Yes | Yes/downloads | Yes | Yes | Yes |
 | Active language/runtime ecosystem | Node.js/Rust | Standard ML legacy | N/A | Haskell/Cabal | Isabelle/ML | OCaml/opam | Lean/Lake | Lean/Lake | Isabelle | OCaml/opam | Teyjus/OCaml ecosystem | Python/Docker |
 | CI-friendly batch mode | Yes | Yes | N/A | Yes | Yes | Yes | Yes | Host | Yes | Yes | Yes | Yes |
-| Docker support | No repository-level Docker | No | N/A | No | Ecosystem possible | Ecosystem possible | Ecosystem possible | No | No | No | No | Yes |
+| Docker support | Yes: `docker/Dockerfile.js`, `docker/Dockerfile.rust`, and `docker/docker-compose.yml` for both implementations, built in CI | No | N/A | No | Ecosystem possible | Ecosystem possible | Ecosystem possible | No | No | No | No | Yes |
 | Package manager install | npm/cargo layout; package release dependent | Source/distribution | N/A | Hackage/Cabal | Isabelle distribution | OPAM/packages | Lake/elan | Lake/GitHub | AFP download/releases | OPAM | Depends on implementation | pip requirements/manual |
 | Generated API/reference docs | Part | Part | N/A | Hackage page | Yes | Yes | Yes | Yes | Yes | Part | Part | Manual |
 | Tutorials/walkthroughs | README/examples | Yes | Papers/docs | README/examples | Yes | Yes | Yes | Catalogue/docs | Entry docs | Yes | Manuals/examples | README/manual |

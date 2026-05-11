@@ -1,0 +1,38 @@
+# Image for the JavaScript implementation of Relative Meta-Logic (RML).
+#
+# Build (from the repository root):
+#   docker build -f docker/Dockerfile.js -t rml-js .
+#
+# Run the demo knowledge base:
+#   docker run --rm rml-js
+#
+# Run an arbitrary .lino file from the bundled examples:
+#   docker run --rm rml-js node src/rml-links.mjs ../examples/classical-logic.lino
+#
+# Mount a local file to evaluate it:
+#   docker run --rm -v "$PWD/my.lino:/work/my.lino" rml-js \
+#     node src/rml-links.mjs /work/my.lino
+
+FROM node:20-alpine
+
+WORKDIR /repo/js
+
+# Install JS dependencies first so they are cached across source changes.
+COPY js/package.json js/package-lock.json ./
+RUN npm ci --omit=dev
+
+# Copy the JS sources alongside the cached node_modules.
+COPY js/src ./src
+COPY js/tests ./tests
+
+# Copy the language-agnostic resources the entry points read at runtime.
+WORKDIR /repo
+COPY examples ./examples
+COPY lib ./lib
+COPY test-corpus ./test-corpus
+COPY scripts ./scripts
+
+WORKDIR /repo/js
+
+ENTRYPOINT ["node", "src/rml-links.mjs"]
+CMD ["../examples/demo.lino"]

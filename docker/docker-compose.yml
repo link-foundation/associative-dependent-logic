@@ -1,0 +1,31 @@
+# docker-compose for the Relative Meta-Logic (RML) reference implementations.
+#
+# From the repository root:
+#   docker compose -f docker/docker-compose.yml build
+#   docker compose -f docker/docker-compose.yml run --rm rml-js
+#   docker compose -f docker/docker-compose.yml run --rm rml-rust
+#
+# Both services mount the repository read-only at /repo so local edits to
+# `.lino` files under `examples/` and `lib/` are visible inside the
+# container without rebuilding.
+
+services:
+  rml-js:
+    image: rml-js
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.js
+    volumes:
+      - ..:/repo:ro
+    working_dir: /repo/js
+    command: ["../examples/demo.lino"]
+
+  rml-rust:
+    image: rml-rust
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.rust
+    volumes:
+      - ..:/repo:ro
+    working_dir: /repo
+    command: ["/repo/examples/demo.lino"]
