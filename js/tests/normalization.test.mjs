@@ -193,6 +193,16 @@ describe('proof witness names for whnf and nf', () => {
     assert.strictEqual(out.proofs[1][0], 'by');
     assert.strictEqual(out.proofs[1][1], 'nf-reduction');
   });
+
+  it('attaches a whnf proof witness under the global withProofs flag', () => {
+    // Mirror of rust/tests/normalization_tests.rs::
+    // whnf_proof_witness_under_global_with_proofs_flag.
+    const src = '(? (whnf (apply (lambda (Natural x) x) zero)))';
+    const out = evaluate(src, { withProofs: true });
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.ok(Array.isArray(out.proofs) && out.proofs[0]);
+    assert.strictEqual(out.proofs[0][1], 'whnf-reduction');
+  });
 });
 
 describe('isConvertible already uses full normalization', () => {
