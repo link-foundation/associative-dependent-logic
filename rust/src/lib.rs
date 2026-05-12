@@ -9517,3 +9517,11 @@ pub mod repl;
 pub mod check;
 pub mod meta;
 pub mod rocq;
+
+// Universal CST converters (issue #138).
+pub mod cst;
+pub mod cst_rust;
+pub mod cst_js;
+pub mod cst_lean;
+pub mod cst_rocq;
+pub mod cst_convert;
