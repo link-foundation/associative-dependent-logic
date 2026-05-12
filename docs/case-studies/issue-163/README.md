@@ -143,14 +143,21 @@ this out for the maintainer.
 
 ### 4.3 Upstream template issues (R4)
 
-Filed reports against the four pipeline-template repositories. The JS and
-Rust templates are already correct, so the issue against them is a
-documentation note that asks them to keep the “deploy on push to main”
-pattern stable and to add a checklist item reminding users to flip the
-Pages source. The Python and C# templates don't currently ship a Pages
-deployment workflow, so the issue against them is a feature request to
-add one mirroring the JS/Rust pattern, with the
-`.github/workflows/api-docs.yml` rewrite in this PR as a concrete example.
+Filed reports against all four pipeline-template repositories:
+
+- [link-foundation/js-ai-driven-development-pipeline-template#60](https://github.com/link-foundation/js-ai-driven-development-pipeline-template/issues/60)
+  — document the one-time “Settings → Pages → Source = GitHub Actions”
+  prerequisite that the workflow cannot set itself.
+- [link-foundation/rust-ai-driven-development-pipeline-template#50](https://github.com/link-foundation/rust-ai-driven-development-pipeline-template/issues/50)
+  — same documentation request for the `deploy-docs` job in `release.yml`.
+- [link-foundation/python-ai-driven-development-pipeline-template#8](https://github.com/link-foundation/python-ai-driven-development-pipeline-template/issues/8)
+  — feature request to add a Pages deployment workflow mirroring the
+  JS/Rust pattern (this template currently ships none).
+- [link-foundation/csharp-ai-driven-development-pipeline-template#15](https://github.com/link-foundation/csharp-ai-driven-development-pipeline-template/issues/15)
+  — same feature request for the C# template.
+
+Each upstream issue contains a reproducible example, a workaround, and a
+suggested workflow sketch.
 
 ### 4.4 Existing components / libraries considered
 
