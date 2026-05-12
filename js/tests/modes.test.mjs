@@ -6,7 +6,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { evaluate, Env } from '../src/rml-links.mjs';
+import { evaluate, Env, parseModeFlag } from '../src/rml-links.mjs';
 
 describe('(mode ...) declarations are parsed and stored', () => {
   it('records the per-argument flag list on the Env', () => {
@@ -21,6 +21,14 @@ describe('(mode ...) declarations are parsed and stored', () => {
     const out = evaluate('(mode lookup +input *either -output)', { env });
     assert.strictEqual(out.diagnostics.length, 0);
     assert.deepStrictEqual(env.modes.get('lookup'), ['in', 'either', 'out']);
+  });
+
+  it('mode flag token round-trip', () => {
+    // Mirror of rust/tests/modes_tests.rs::mode_flag_token_round_trip.
+    assert.strictEqual(parseModeFlag('+input'), 'in');
+    assert.strictEqual(parseModeFlag('-output'), 'out');
+    assert.strictEqual(parseModeFlag('*either'), 'either');
+    assert.strictEqual(parseModeFlag('+other'), null);
   });
 });
 

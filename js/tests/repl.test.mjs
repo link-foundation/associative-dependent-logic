@@ -7,8 +7,10 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable, Writable } from 'node:stream';
 import {
   Repl,
+  runRepl,
   formatEnv,
   makeCompleter,
   envCompletionCandidates,
@@ -190,5 +192,40 @@ describe('formatEnv()', () => {
     repl.feed('(valence: 2)');
     const text = formatEnv(repl.env);
     assert.ok(text.includes('valence:  2'), text);
+  });
+});
+
+describe('Repl.feed step shape', () => {
+  it('the no-op feed result is { output: "", error: "", exit: false }', () => {
+    // Mirror of rust/tests/repl_tests.rs::replstep_default_is_empty_no_exit.
+    const repl = new Repl();
+    const blank = repl.feed('   ');
+    assert.strictEqual(blank.output, '');
+    assert.strictEqual(blank.error, '');
+    assert.strictEqual(blank.exit, false);
+  });
+});
+
+describe('runRepl drives IO streams to completion', () => {
+  it('reads from stdin, writes results to stdout, and exits on :quit', async () => {
+    // Mirror of rust/tests/repl_tests.rs::run_repl_drives_io_streams_to_completion.
+    const input = Readable.from([
+      '(a: a is a)\n',
+      '((a = a) has probability 1)\n',
+      '(? (a = a))\n',
+      ':quit\n',
+    ]);
+    const outChunks = [];
+    const errChunks = [];
+    const output = new Writable({
+      write(chunk, _enc, cb) { outChunks.push(chunk.toString('utf8')); cb(); },
+    });
+    const errOutput = new Writable({
+      write(chunk, _enc, cb) { errChunks.push(chunk.toString('utf8')); cb(); },
+    });
+    await runRepl({ input, output, errOutput, showPrompt: false, banner: false });
+    const stdout = outChunks.join('');
+    assert.strictEqual(stdout.trim(), '1');
+    assert.strictEqual(errChunks.join(''), '');
   });
 });

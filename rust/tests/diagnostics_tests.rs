@@ -34,6 +34,18 @@ fn unknown_op_surfaces_as_e001_with_span() {
 }
 
 #[test]
+fn lino_parse_error_surfaces_as_e006_not_panic() {
+    // Mirror of js/tests/diagnostics.test.mjs::"E006 — LiNo parse error
+    // is reported as a diagnostic, not thrown".
+    let out = evaluate("(=: foo bar", Some("inline.lino"), None);
+    assert_eq!(out.diagnostics.len(), 1);
+    let d = &out.diagnostics[0];
+    assert_eq!(d.code, "E006");
+    assert_eq!(d.span.file.as_deref(), Some("inline.lino"));
+    assert_eq!(d.span.line, 1);
+}
+
+#[test]
 fn unknown_aggregator_surfaces_as_e004() {
     let out = evaluate("(and: bogus_agg)", Some("agg.lino"), None);
     assert_eq!(out.diagnostics.len(), 1);

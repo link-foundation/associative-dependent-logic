@@ -290,6 +290,14 @@ fn inline_comment_index(line: &str) -> Option<usize> {
 
 /// Parse LiNo text into a vector of link strings (each a top-level parenthesized expression).
 pub fn parse_lino(text: &str) -> Vec<String> {
+    parse_lino_with_errors(text).0
+}
+
+/// Parse LiNo text and return both the parsed links and any error messages from
+/// the underlying parser. Used by `evaluate_inner` to surface E006 diagnostics
+/// for unbalanced/invalid input — mirrors `parseLinoForms` in
+/// `js/src/rml-links.mjs`, which throws and is caught into an E006 diagnostic.
+fn parse_lino_with_errors(text: &str) -> (Vec<String>, Vec<String>) {
     // Strip both full-line and inline comments (# ...) before parsing —
     // the LiNo parser doesn't handle them and an inline comment containing a
     // colon would otherwise be misread as a binding.
@@ -311,6 +319,7 @@ pub fn parse_lino(text: &str) -> Vec<String> {
     // The links-notation crate treats blank lines as group separators,
     // so we split the input by blank lines and parse each segment separately.
     let mut all_links = Vec::new();
+    let mut errors = Vec::new();
     for segment in stripped.split("\n\n") {
         let trimmed = segment.trim();
         if trimmed.is_empty() {
@@ -322,10 +331,12 @@ pub fn parse_lino(text: &str) -> Vec<String> {
                     all_links.push(link.to_string());
                 }
             }
-            Err(_) => {}
+            Err(e) => {
+                errors.push(format!("{}", e));
+            }
         }
     }
-    all_links
+    (all_links, errors)
 }
 
 fn is_literate_lino_path(file: Option<&str>) -> bool {
@@ -9121,7 +9132,14 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
     let source_text = extracted_literate.as_deref().unwrap_or(text);
     let spans = compute_form_spans(source_text, file);
 
-    let links = parse_lino(source_text);
+    let (links, parse_errors) = parse_lino_with_errors(source_text);
+    for parse_err in parse_errors {
+        diagnostics.push(Diagnostic::new(
+            "E006",
+            format!("LiNo parse failure: {}", parse_err),
+            Span::new(file.map(|s| s.to_string()), 1, 1, 0),
+        ));
+    }
     let forms: Vec<Node> = links
         .iter()
         .filter(|link_str| {

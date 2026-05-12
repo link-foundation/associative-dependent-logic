@@ -6407,4 +6407,5 @@ export {
   evaluateFormalization,
   extractProgram,
   exportIsabelle,
+  parseModeFlag,
 };
