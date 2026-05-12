@@ -49,6 +49,6 @@ After the tutorial path, the main reference documents are:
 - [`../../docs/KERNEL.md`](../../docs/KERNEL.md) for the typed-kernel rules.
 - [`../../docs/METATHEOREMS.md`](../../docs/METATHEOREMS.md) for metatheorem
   checking details.
-- [`../../docs/CONCEPTS-COMPARISION.md`](../../docs/CONCEPTS-COMPARISION.md)
-  and [`../../docs/FEATURE-COMPARISION.md`](../../docs/FEATURE-COMPARISION.md)
+- [`../../docs/CONCEPTS-COMPARISON.md`](../../docs/CONCEPTS-COMPARISON.md)
+  and [`../../docs/FEATURE-COMPARISON.md`](../../docs/FEATURE-COMPARISON.md)
   for positioning against nearby systems.

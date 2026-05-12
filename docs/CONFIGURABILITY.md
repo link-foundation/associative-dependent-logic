@@ -85,8 +85,8 @@ exchange for the ability to reconfigure into whichever logic system the
 problem demands.
 
 For the longer feature-by-feature comparison, see
-[CONCEPTS-COMPARISION.md](./CONCEPTS-COMPARISION.md) and
-[FEATURE-COMPARISION.md](./FEATURE-COMPARISION.md).
+[CONCEPTS-COMPARISON.md](./CONCEPTS-COMPARISON.md) and
+[FEATURE-COMPARISON.md](./FEATURE-COMPARISON.md).
 
 ## What is configurable
 
@@ -323,8 +323,8 @@ meta-logic** rather than a fixed object logic.
 | [Pecan](https://github.com/ReedOei/Pecan) | Buchi automata over fixed numeration systems | Many-valued/probabilistic semantics |
 
 For the comprehensive matrix, see
-[CONCEPTS-COMPARISION.md](./CONCEPTS-COMPARISION.md) and
-[FEATURE-COMPARISION.md](./FEATURE-COMPARISION.md).
+[CONCEPTS-COMPARISON.md](./CONCEPTS-COMPARISON.md) and
+[FEATURE-COMPARISON.md](./FEATURE-COMPARISON.md).
 
 ## See also
 

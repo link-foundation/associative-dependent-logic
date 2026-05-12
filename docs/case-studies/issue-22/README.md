@@ -8,8 +8,8 @@ Relative Meta-Logic (RML) is currently strongest as a small, executable, probabi
 
 User-facing standalone comparison tables are available in:
 
-- [Core Concept Comparison](../../CONCEPTS-COMPARISION.md)
-- [Product Feature Comparison](../../FEATURE-COMPARISION.md)
+- [Core Concept Comparison](../../CONCEPTS-COMPARISON.md)
+- [Product Feature Comparison](../../FEATURE-COMPARISON.md)
 
 The compared systems cluster into five groups:
 
