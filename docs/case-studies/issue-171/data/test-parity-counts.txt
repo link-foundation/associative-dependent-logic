@@ -1,0 +1,55 @@
+file (slug)                                JS tests Rust tests
+-------------------------------------------------------------------
+isabelle_export
+lsp
+	rml
+rml_links
+
+Per-file test counts:
+automatic_sequences                               4          4
+bidirectional                                    17         17
+check                                            22         22
+coinductive                                      16         16
+coverage                                         12         12
+cst                                              23         20
+diagnostics                                      13         12
+extract                                           4          4
+hoas                                              6          6
+imports                                          13         13
+inductive                                        14         14
+isabelle_export                                   4          -
+kernel                                           14         14
+lean_export                                       3          3
+lib_algebra                                       3          3
+lib_arithmetic                                    3          3
+lib_classical                                     3          3
+lib_first_order                                   3          3
+lib_higher_order                                  2          2
+lib_modal                                         4          4
+lib_probabilistic                                 5          5
+lib_programming_language                          3          3
+lib_provability                                   3          3
+lib_set_theory                                    3          3
+lsp                                               1          -
+metatheorems                                     11         11
+modes                                            11         12
+namespaces                                       11         11
+normalization                                    16         17
+prenex_polymorphism                               8          8
+proofs                                           18         18
+repl                                             20         21
+rml_links                                       312          -
+rocq_export                                       4          4
+self_evaluator                                    4          3
+self_grammar                                      3          3
+self_metatheorem                                 11         11
+self_operators                                    3          3
+self_types                                        4          2
+shared_examples                                   4          2
+shared_test_corpus                                5          2
+tactics                                          19         19
+templates                                         4          4
+termination                                      17         17
+totality                                         13         13
+trace                                            10         10
+worlds                                           13         13
