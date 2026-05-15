@@ -43,12 +43,12 @@
 (root-construct canonical-printer
   (kind printer)
   (status host-primitive)
-  (encoded-as keyOf))
+  (encoded-as key-of))
 
 (root-construct structural-equality
   (kind equality-layer)
   (status host-primitive)
-  (encoded-as isStructurallySame))
+  (encoded-as is-structurally-same))
 
 # ---------------------------------------------------------------------------
 # Numeric layer. Arithmetic and ordered comparison are host primitives that
@@ -59,7 +59,7 @@
 (root-construct decimal-12-arithmetic
   (kind numeric-domain)
   (status host-primitive)
-  (encoded-as decRound)
+  (encoded-as dec-round)
   (pure-links-ready no))
 
 (root-construct +
@@ -230,7 +230,7 @@
 (root-construct freshness
   (kind meta-operation)
   (status host-primitive)
-  (encoded-as evalFresh))
+  (encoded-as eval-fresh))
 
 (root-construct alpha-renaming
   (kind meta-operation)
@@ -239,13 +239,13 @@
 (root-construct normalization
   (kind reduction-rule)
   (status host-primitive)
-  (encoded-as normalizeTerm)
+  (encoded-as normalize-term)
   (depends-on beta-reduction))
 
 (root-construct whnf
   (kind reduction-rule)
   (status host-primitive)
-  (encoded-as whnfTerm)
+  (encoded-as whnf-term)
   (depends-on beta-reduction))
 
 # ---------------------------------------------------------------------------
