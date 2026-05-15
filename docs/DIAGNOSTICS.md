@@ -102,6 +102,9 @@ The exit code is `1` whenever any diagnostic is emitted, `0` otherwise.
 | `E040` | Template expansion error. Triggered by a malformed `(template (<name> <param>...) <body>)` declaration, a template use with the wrong number of arguments, or a recursive template expansion cycle. |
 | `E041` | Domain plugin error. Triggered by a malformed `(domain <name> ...)` block, an unknown domain plugin, or an unsupported request inside a registered domain plugin such as `automatic-sequences`. |
 | `E050` | Lean export error. Triggered when `rml export lean` sees forms outside the typed non-probabilistic subset, such as `has probability`, range/valence configuration, operator redefinitions, imports, namespaces, or templates. |
+| `E060` | Malformed `(root-construct …)` declaration. Triggered by a missing or non-symbolic name, an unrecognised child clause shape, or a non-symbolic value where a status / kind / dependency name is expected. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
+| `E061` | Malformed `(foundation …)` declaration. Triggered by a missing name, an unrecognised child clause shape, or a malformed `(defines <op> <aggregator>)` / `(extends …)` / `(numeric-domain …)` / `(truth-domain …)` clause. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
+| `E062` | `(with-foundation <name> …)` references a foundation that has not been registered. Evaluation skips the body but continues with the surrounding forms; the active foundation remains the previously-active one. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
 
 Codes are stable identifiers — they do not change between releases unless we
 explicitly note a breaking change in the changelog. The accompanying

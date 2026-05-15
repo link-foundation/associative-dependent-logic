@@ -56,6 +56,10 @@ const REQUIRED_EVAL_RULES: &[&str] = &[
     "(eval (type of expression))",
     "(eval (expression of type))",
     "(eval (domain name request))",
+    "(eval (root-construct name details))",
+    "(eval (foundation name details))",
+    "(eval (with-foundation name body))",
+    "(eval foundation-report)",
 ];
 
 const REQUIRED_OPERATORS: &[&str] = &[
