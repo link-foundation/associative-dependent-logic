@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-Issue #95 is the **tracking epic** for the universal-formal-system constructor effort first laid out in the planning issue [#26](https://github.com/link-foundation/relative-meta-logic/issues/26) and elaborated as a case study under [`docs/case-studies/issue-26/`](../issue-26/) (delivered by PR [#27](https://github.com/link-foundation/relative-meta-logic/pull/27)). The plan filed **67 phase issues (A1–J7)** plus this epic, organised across ten phases:
+Issue #95 is the **tracking epic** for the universal-formal-system constructor effort first laid out in the planning issue [#26](https://github.com/link-foundation/relative-meta-logic/issues/26) and elaborated as a case study under [`docs/case-studies/issue-26/`](../issue-26/) (delivered by PR [#27](https://github.com/link-foundation/relative-meta-logic/pull/27)). The plan filed **66 phase issues (A1–J7)** plus this epic, organised across ten phases:
 
 - **A–H** — reach parity with traditional proving systems
 - **I** — keep the JS and Rust implementations honest with each other
@@ -16,7 +16,7 @@ This audit records the closing state of the epic. It walks the four acceptance c
 
 | # | Acceptance criterion | Status | Evidence |
 |---|----------------------|--------|----------|
-| 1 | Every phase issue (A1–J7) is closed | Met | See [§ Phase deliverables](#phase-deliverables) — 67 of 67 closed |
+| 1 | Every phase issue (A1–J7) is closed | Met | See [§ Phase deliverables](#phase-deliverables) — 66 of 66 closed |
 | 2 | Every `Part`/`No`/weaker row in [`gap-matrix.md`](../issue-26/gap-matrix.md) is mapped to a closed plan-ID or marked as deliberate divergence | Met | [Gap-matrix coverage](#gap-matrix-coverage) cross-checks every row |
 | 3 | J6 (#91) bootstrap test green in CI | Met | [`.github/workflows/bootstrap.yml`](../../../.github/workflows/bootstrap.yml) `encoded-rml-corpus` job — green on `main` |
 | 4 | J7 (#92) tutorial published and linked from README | Met | [`docs/tutorials/self-bootstrap.md`](../../tutorials/self-bootstrap.md) — linked from [README.md § Tutorials](../../../README.md#tutorials) |
@@ -141,13 +141,13 @@ Every phase issue below is closed. PR column shows the merged PR that delivered 
 | J6 | [#91](https://github.com/link-foundation/relative-meta-logic/issues/91) | Bootstrap test: encoded RML evaluates the example corpus | Closed |
 | J7 | [#92](https://github.com/link-foundation/relative-meta-logic/issues/92) | Tutorial: "RML in RML" | Closed |
 
-**Roll-up:** 67 / 67 phase issues closed.
+**Roll-up:** 66 / 66 phase issues closed.
 
 ## Gap-matrix coverage
 
 [`docs/case-studies/issue-26/gap-matrix.md`](../issue-26/gap-matrix.md) (in PR [#27](https://github.com/link-foundation/relative-meta-logic/pull/27)) walks every `Part`, `No`, or weaker row from the two comparison docs and assigns it one of three outcomes:
 
-1. **Closed phase issue** — A1 through J7. All 67 are closed (see above).
+1. **Closed phase issue** — A1 through J7. All 66 are closed (see above).
 2. **Deliberate divergence** — three rows are intentionally not converged: circular definitions as ordinary data (RML keeps paradox tolerance), type classes (RML keeps overloading dynamic via redefinable operators), and proof irrelevance / propositions (handled by the probabilistic equality model). These are recorded in [`issue-plan.md § Deliberate divergences`](../issue-26/issue-plan.md#deliberate-divergences).
 3. **Deferred** — proof repair/refactoring tools is listed as deferred (depends on tactics + LSP) and called out in [`issue-plan.md § Deferred`](../issue-26/issue-plan.md#deferred).
 
