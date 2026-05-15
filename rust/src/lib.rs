@@ -878,6 +878,64 @@ pub struct Env {
     pub domain_plugins: HashMap<String, DomainPluginFn>,
     /// Decisions recorded by the built-in automatic-sequences plugin.
     pub automatic_sequence_decisions: HashMap<String, AutomaticSequenceDecision>,
+    /// Root-construct registry (issue #97). Records what every kernel
+    /// construct depends on and whether the user has overridden it.
+    /// Data-only: descriptors never alter evaluator behaviour. Consumed by
+    /// the foundation report (`(foundation-report)`) and the CLI trust audit.
+    pub root_constructs: HashMap<String, RootConstructDescriptor>,
+    /// Foundation registry (issue #97). A foundation bundles a coherent
+    /// set of root-construct interpretations. `default-rml` is preregistered
+    /// with the host-implemented semantics; user files can register
+    /// alternative foundations and select them with `(with-foundation …)`.
+    /// Backward compatibility is preserved by defaulting to `default-rml`.
+    pub foundations: HashMap<String, FoundationDescriptor>,
+    pub active_foundation: String,
+    pub foundation_stack: Vec<String>,
+}
+
+/// A root-construct descriptor. Stored on the `Env` for the foundation
+/// registry (issue #97). Every field is purely informational: declaring a
+/// descriptor never changes evaluator behaviour. The CLI's foundation
+/// report and tests inspect these records to verify the trust contract.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RootConstructDescriptor {
+    pub name: String,
+    pub status: Option<String>,
+    pub kind: Option<String>,
+    pub depends_on: Vec<String>,
+    pub encoded_as: Option<String>,
+    pub pure_links_ready: Option<bool>,
+    pub override_with: Option<String>,
+    pub planned_as: Option<String>,
+    pub foundation: Option<String>,
+}
+
+/// A foundation descriptor. Bundles a coherent set of root-construct
+/// interpretations. Selecting a foundation never silently rewires
+/// behaviour; the host operators always run, but the active-foundation
+/// tag is exposed via the foundation report so users can audit which
+/// foundation they are trusting.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FoundationDescriptor {
+    pub name: String,
+    pub description: Option<String>,
+    pub uses: Vec<String>,
+    pub defines: Vec<(String, String)>, // construct -> implementation
+    pub extends: Option<String>,
+    pub numeric_domain: Option<String>,
+    pub truth_domain: Option<String>,
+}
+
+/// Snapshot of the foundation/root-construct state for the trust report.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FoundationReport {
+    pub active_foundation: String,
+    pub description: Option<String>,
+    pub numeric_domain: Option<String>,
+    pub truth_domain: Option<String>,
+    pub root_constructs: Vec<RootConstructDescriptor>,
+    pub by_status: Vec<(String, Vec<String>)>,
+    pub foundations: Vec<FoundationDescriptor>,
 }
 
 /// One constructor of an inductive datatype.
@@ -1025,6 +1083,10 @@ impl Env {
             coinductives: HashMap::new(),
             domain_plugins: HashMap::new(),
             automatic_sequence_decisions: HashMap::new(),
+            root_constructs: HashMap::new(),
+            foundations: HashMap::new(),
+            active_foundation: "default-rml".to_string(),
+            foundation_stack: Vec::new(),
         };
 
         // Initialize truth constants: true, false, unknown, undefined
@@ -1034,6 +1096,7 @@ impl Env {
         // They can be redefined by the user via (true: <value>), (false: <value>), etc.
         env.init_truth_constants();
         env.register_domain_plugin("automatic-sequences", automatic_sequences_domain_plugin);
+        env.register_default_foundation();
         env
     }
 
@@ -1080,6 +1143,117 @@ impl Env {
 
     pub fn get_domain_plugin(&self, name: &str) -> Option<DomainPluginFn> {
         self.domain_plugins.get(name).copied()
+    }
+
+    // ---------- Foundation / root-construct registry (issue #97) ----------
+    /// Preregister the `default-rml` foundation and seed the built-in
+    /// root-construct descriptors that describe the current host
+    /// implementation. These are data-only and never change behaviour.
+    pub fn register_default_foundation(&mut self) {
+        let default = FoundationDescriptor {
+            name: "default-rml".to_string(),
+            description: Some(
+                "Default RML foundation: host-implemented configurable kernel".to_string(),
+            ),
+            uses: Vec::new(),
+            defines: Vec::new(),
+            extends: None,
+            numeric_domain: Some("decimal-12".to_string()),
+            truth_domain: Some("default-truth".to_string()),
+        };
+        self.foundations.insert(default.name.clone(), default);
+        seed_builtin_root_constructs(self);
+    }
+
+    pub fn register_root_construct(
+        &mut self,
+        descriptor: RootConstructDescriptor,
+    ) -> Result<RootConstructDescriptor, String> {
+        if descriptor.name.is_empty() {
+            return Err("root-construct descriptor requires a name".to_string());
+        }
+        let prev = self.root_constructs.get(&descriptor.name).cloned();
+        let merged = merge_root_construct_descriptors(prev, descriptor);
+        self.root_constructs.insert(merged.name.clone(), merged.clone());
+        Ok(merged)
+    }
+
+    pub fn get_root_construct(&self, name: &str) -> Option<&RootConstructDescriptor> {
+        self.root_constructs.get(name)
+    }
+
+    pub fn list_root_constructs(&self) -> Vec<RootConstructDescriptor> {
+        let mut v: Vec<RootConstructDescriptor> =
+            self.root_constructs.values().cloned().collect();
+        v.sort_by(|a, b| a.name.cmp(&b.name));
+        v
+    }
+
+    pub fn register_foundation(
+        &mut self,
+        foundation: FoundationDescriptor,
+    ) -> Result<FoundationDescriptor, String> {
+        if foundation.name.is_empty() {
+            return Err("foundation declaration requires a name".to_string());
+        }
+        let prev = self.foundations.get(&foundation.name).cloned();
+        let merged = merge_foundation_descriptors(prev, foundation);
+        self.foundations.insert(merged.name.clone(), merged.clone());
+        Ok(merged)
+    }
+
+    pub fn get_foundation(&self, name: &str) -> Option<&FoundationDescriptor> {
+        self.foundations.get(name)
+    }
+
+    pub fn enter_foundation(&mut self, name: &str) -> Result<(), String> {
+        if !self.foundations.contains_key(name) {
+            return Err(format!("Unknown foundation: {}", name));
+        }
+        self.foundation_stack
+            .push(std::mem::take(&mut self.active_foundation));
+        self.active_foundation = name.to_string();
+        Ok(())
+    }
+
+    pub fn exit_foundation(&mut self) {
+        if let Some(prev) = self.foundation_stack.pop() {
+            self.active_foundation = prev;
+        } else {
+            self.active_foundation = "default-rml".to_string();
+        }
+    }
+
+    pub fn foundation_report(&self) -> FoundationReport {
+        let active = if self.active_foundation.is_empty() {
+            "default-rml".to_string()
+        } else {
+            self.active_foundation.clone()
+        };
+        let foundation = self.foundations.get(&active).cloned();
+        let constructs = self.list_root_constructs();
+        let mut by_status_map: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for rc in &constructs {
+            let key = rc.status.clone().unwrap_or_else(|| "unknown".to_string());
+            by_status_map.entry(key).or_default().push(rc.name.clone());
+        }
+        for v in by_status_map.values_mut() {
+            v.sort();
+        }
+        let by_status: Vec<(String, Vec<String>)> = by_status_map.into_iter().collect();
+        let mut foundations: Vec<FoundationDescriptor> =
+            self.foundations.values().cloned().collect();
+        foundations.sort_by(|a, b| a.name.cmp(&b.name));
+        FoundationReport {
+            active_foundation: active,
+            description: foundation.as_ref().and_then(|f| f.description.clone()),
+            numeric_domain: foundation.as_ref().and_then(|f| f.numeric_domain.clone()),
+            truth_domain: foundation.as_ref().and_then(|f| f.truth_domain.clone()),
+            root_constructs: constructs,
+            by_status,
+            foundations,
+        }
     }
 
     pub fn get_op(&self, name: &str) -> Option<&Op> {
@@ -1867,6 +2041,520 @@ fn validate_template_pattern(pattern: &Node) -> Result<(String, Vec<String>), St
         params.push(p);
     }
     Ok((name, params))
+}
+
+/// Merge an incoming root-construct descriptor with the previously stored
+/// one. The merge prefers explicitly set fields from the new descriptor
+/// but preserves information the new descriptor leaves unspecified, so
+/// multiple `(root-construct …)` forms can build the record incrementally
+/// without clobbering already-known fields.
+fn merge_root_construct_descriptors(
+    previous: Option<RootConstructDescriptor>,
+    next: RootConstructDescriptor,
+) -> RootConstructDescriptor {
+    let mut base = previous.unwrap_or_else(|| RootConstructDescriptor {
+        name: next.name.clone(),
+        ..Default::default()
+    });
+    base.name = next.name;
+    if next.status.is_some() {
+        base.status = next.status;
+    }
+    if next.kind.is_some() {
+        base.kind = next.kind;
+    }
+    if !next.depends_on.is_empty() {
+        let mut seen: std::collections::HashSet<String> =
+            base.depends_on.iter().cloned().collect();
+        for d in next.depends_on {
+            if !seen.contains(&d) {
+                seen.insert(d.clone());
+                base.depends_on.push(d);
+            }
+        }
+    }
+    if next.encoded_as.is_some() {
+        base.encoded_as = next.encoded_as;
+    }
+    if next.pure_links_ready.is_some() {
+        base.pure_links_ready = next.pure_links_ready;
+    }
+    if next.override_with.is_some() {
+        base.override_with = next.override_with;
+    }
+    if next.planned_as.is_some() {
+        base.planned_as = next.planned_as;
+    }
+    if next.foundation.is_some() {
+        base.foundation = next.foundation;
+    }
+    base
+}
+
+fn merge_foundation_descriptors(
+    previous: Option<FoundationDescriptor>,
+    next: FoundationDescriptor,
+) -> FoundationDescriptor {
+    let mut base = previous.unwrap_or_else(|| FoundationDescriptor {
+        name: next.name.clone(),
+        ..Default::default()
+    });
+    base.name = next.name;
+    if next.description.is_some() {
+        base.description = next.description;
+    }
+    if !next.uses.is_empty() {
+        let mut seen: std::collections::HashSet<String> = base.uses.iter().cloned().collect();
+        for u in next.uses {
+            if !seen.contains(&u) {
+                seen.insert(u.clone());
+                base.uses.push(u);
+            }
+        }
+    }
+    if !next.defines.is_empty() {
+        for (k, v) in next.defines {
+            if let Some(existing) = base.defines.iter_mut().find(|(name, _)| name == &k) {
+                existing.1 = v;
+            } else {
+                base.defines.push((k, v));
+            }
+        }
+    }
+    if next.extends.is_some() {
+        base.extends = next.extends;
+    }
+    if next.numeric_domain.is_some() {
+        base.numeric_domain = next.numeric_domain;
+    }
+    if next.truth_domain.is_some() {
+        base.truth_domain = next.truth_domain;
+    }
+    base
+}
+
+/// Seed the registry with the built-in descriptors that describe what the
+/// current host implementation actually trusts. Mirrors the JS
+/// `seedBuiltinRootConstructs` list verbatim so the trust report is
+/// identical across JS and Rust.
+fn seed_builtin_root_constructs(env: &mut Env) {
+    let seeds: Vec<(&str, &str, &str, Vec<&str>, Option<&str>, Option<bool>)> = vec![
+        // (name, kind, status, depends_on, encoded_as, pure_links_ready)
+        ("lino-parser", "parser", "external-trusted", vec![], Some("links-notation"), Some(false)),
+        ("canonical-printer", "printer", "host-primitive", vec![], Some("keyOf"), None),
+        ("structural-equality", "equality-layer", "host-primitive", vec![], Some("isStructurallySame"), None),
+        ("decimal-12-arithmetic", "numeric-domain", "host-primitive", vec![], Some("decRound"), Some(false)),
+        ("+", "arithmetic-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
+        ("-", "arithmetic-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
+        ("*", "arithmetic-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
+        ("/", "arithmetic-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
+        ("<", "comparison-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
+        ("<=", "comparison-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
+        ("truth-range", "truth-domain", "user-configurable", vec![], Some("Env.lo/Env.hi"), None),
+        ("valence", "truth-domain", "user-configurable", vec![], Some("Env.valence"), None),
+        ("clamp", "truth-normalization", "host-primitive", vec![], Some("Env.clamp"), None),
+        ("quantize", "truth-normalization", "host-primitive", vec![], Some("quantize"), None),
+        ("true", "truth-constant", "user-configurable", vec![], None, None),
+        ("false", "truth-constant", "user-configurable", vec![], None, None),
+        ("unknown", "truth-constant", "user-configurable", vec![], None, None),
+        ("undefined", "truth-constant", "user-configurable", vec![], None, None),
+        ("avg", "aggregator", "host-primitive", vec![], None, None),
+        ("min", "aggregator", "host-primitive", vec![], None, None),
+        ("max", "aggregator", "host-primitive", vec![], None, None),
+        ("product", "aggregator", "host-primitive", vec![], None, None),
+        ("probabilistic_sum", "aggregator", "host-primitive", vec![], None, None),
+        ("not", "truth-operator", "user-configurable", vec!["truth-range"], None, None),
+        ("and", "truth-operator", "user-configurable", vec!["avg"], None, None),
+        ("or", "truth-operator", "user-configurable", vec!["max"], None, None),
+        ("both", "truth-operator", "user-configurable", vec!["avg"], None, None),
+        ("neither", "truth-operator", "user-configurable", vec!["product"], None, None),
+        ("=", "equality-layer", "host-primitive", vec!["structural-equality", "decimal-12-arithmetic"], None, None),
+        ("!=", "equality-layer", "host-derived", vec!["=", "not"], None, None),
+        ("assigned-equality", "equality-layer", "host-primitive", vec![], None, None),
+        ("numeric-equality", "equality-layer", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
+        ("definitional-equality", "equality-layer", "host-primitive", vec!["beta-reduction", "structural-equality"], None, None),
+        ("Type", "universe-form", "host-primitive", vec![], None, Some(false)),
+        ("Prop", "universe-form", "host-primitive", vec!["Type"], None, None),
+        ("Pi", "binder", "host-primitive", vec!["Type", "substitution", "freshness"], None, None),
+        ("lambda", "binder", "host-primitive", vec!["Pi", "substitution"], None, None),
+        ("apply", "eliminator", "host-primitive", vec!["lambda", "beta-reduction"], None, None),
+        ("beta-reduction", "reduction-rule", "host-primitive", vec!["substitution", "freshness", "alpha-renaming"], None, None),
+        ("substitution", "meta-operation", "host-primitive", vec![], Some("substitute"), None),
+        ("freshness", "meta-operation", "host-primitive", vec![], Some("evalFresh"), None),
+        ("alpha-renaming", "meta-operation", "host-primitive", vec![], None, None),
+        ("normalization", "reduction-rule", "host-primitive", vec!["beta-reduction"], Some("normalizeTerm"), None),
+        ("whnf", "reduction-rule", "host-primitive", vec!["beta-reduction"], Some("whnfTerm"), None),
+        ("inductive", "declaration", "host-primitive", vec!["Type", "Pi"], None, None),
+        ("coinductive", "declaration", "host-primitive", vec!["Type", "Pi"], None, None),
+        ("proof-replay", "replay-checker", "host-primitive", vec![], Some("check.mjs"), None),
+        ("by", "proof-rule", "host-primitive", vec![], None, None),
+        ("smt-trusted", "external-decision", "external-trusted", vec![], None, None),
+        ("atp-trusted", "external-decision", "external-trusted", vec![], None, None),
+        ("mode", "mode-declaration", "host-primitive", vec![], None, None),
+        ("totality-check", "metatheorem", "host-primitive", vec![], None, None),
+        ("coverage-check", "metatheorem", "host-primitive", vec![], None, None),
+        ("termination-check", "metatheorem", "host-primitive", vec![], None, None),
+        ("self.evaluator", "self-bootstrap", "links-encoded", vec![], Some("lib/self/evaluator.lino"), None),
+        ("self.grammar", "self-bootstrap", "links-encoded", vec![], Some("lib/self/grammar.lino"), None),
+        ("self.types", "self-bootstrap", "links-encoded", vec![], Some("lib/self/types.lino"), None),
+        ("self.operators", "self-bootstrap", "links-encoded", vec![], Some("lib/self/operators.lino"), None),
+        ("self.metatheorem", "self-bootstrap", "links-encoded", vec![], Some("lib/self/metatheorem.lino"), None),
+    ];
+    // Special-case the universe form's planned-as field (Type is planned as links-defined).
+    for (name, kind, status, depends_on, encoded_as, pure_links_ready) in seeds {
+        let descriptor = RootConstructDescriptor {
+            name: name.to_string(),
+            status: Some(status.to_string()),
+            kind: Some(kind.to_string()),
+            depends_on: depends_on.into_iter().map(String::from).collect(),
+            encoded_as: encoded_as.map(String::from),
+            pure_links_ready,
+            override_with: None,
+            planned_as: if name == "Type" { Some("links-defined".to_string()) } else { None },
+            foundation: None,
+        };
+        env.root_constructs.insert(descriptor.name.clone(), descriptor);
+    }
+}
+
+/// Parse a `(root-construct <name> (status …) (kind …) …)` form into a
+/// descriptor record. Mirrors the JS `parseRootConstructForm` helper.
+fn parse_root_construct_form(node: &Node) -> Result<RootConstructDescriptor, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => return Err("root-construct form must be `(root-construct <name> …)`".to_string()),
+    };
+    if children.len() < 2 {
+        return Err("root-construct form must be `(root-construct <name> …)`".to_string());
+    }
+    let head = match &children[0] {
+        Node::Leaf(s) if s == "root-construct" => s,
+        _ => return Err("root-construct form must be `(root-construct <name> …)`".to_string()),
+    };
+    let _ = head;
+    let name = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err("root-construct name must be a non-empty identifier".to_string()),
+    };
+    let mut descriptor = RootConstructDescriptor {
+        name,
+        ..Default::default()
+    };
+    for child in &children[2..] {
+        let clause = match child {
+            Node::List(items) => items,
+            _ => {
+                return Err(
+                    "root-construct child clauses must be lists led by a keyword".to_string(),
+                );
+            }
+        };
+        if clause.is_empty() {
+            return Err(
+                "root-construct child clauses must be lists led by a keyword".to_string(),
+            );
+        }
+        let key = match &clause[0] {
+            Node::Leaf(s) => s.as_str(),
+            _ => {
+                return Err(
+                    "root-construct child clauses must be lists led by a keyword".to_string(),
+                );
+            }
+        };
+        let rest: Vec<&Node> = clause.iter().skip(1).collect();
+        match key {
+            "status" => {
+                if rest.len() != 1 {
+                    return Err("(status …) requires one symbol".to_string());
+                }
+                if let Node::Leaf(v) = rest[0] {
+                    descriptor.status = Some(v.clone());
+                } else {
+                    return Err("(status …) requires one symbol".to_string());
+                }
+            }
+            "kind" => {
+                if rest.len() != 1 {
+                    return Err("(kind …) requires one symbol".to_string());
+                }
+                if let Node::Leaf(v) = rest[0] {
+                    descriptor.kind = Some(v.clone());
+                } else {
+                    return Err("(kind …) requires one symbol".to_string());
+                }
+            }
+            "depends-on" => {
+                for r in &rest {
+                    descriptor.depends_on.push(key_of(r));
+                }
+            }
+            "encoded-as" | "implemented-by" => {
+                let joined = rest
+                    .iter()
+                    .map(|n| key_of(n))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                descriptor.encoded_as = Some(joined);
+            }
+            "pure-links-ready" => {
+                if rest.len() != 1 {
+                    return Err("(pure-links-ready …) must be `yes` or `no`".to_string());
+                }
+                if let Node::Leaf(v) = rest[0] {
+                    descriptor.pure_links_ready = Some(match v.as_str() {
+                        "yes" => true,
+                        "no" => false,
+                        _ => {
+                            return Err(
+                                "(pure-links-ready …) must be `yes` or `no`".to_string()
+                            );
+                        }
+                    });
+                } else {
+                    return Err("(pure-links-ready …) must be `yes` or `no`".to_string());
+                }
+            }
+            "override" => {
+                let joined = rest
+                    .iter()
+                    .map(|n| key_of(n))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                descriptor.override_with = Some(joined);
+            }
+            "planned-as" => {
+                let joined = rest
+                    .iter()
+                    .map(|n| key_of(n))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                descriptor.planned_as = Some(joined);
+            }
+            "foundation" => {
+                if rest.len() != 1 {
+                    return Err("(foundation …) must be a single name".to_string());
+                }
+                if let Node::Leaf(v) = rest[0] {
+                    descriptor.foundation = Some(v.clone());
+                } else {
+                    return Err("(foundation …) must be a single name".to_string());
+                }
+            }
+            "surface" | "description" | "used-by" => {
+                // free-form annotations; accepted syntactically.
+            }
+            _ => {
+                // Unknown clauses are accepted for forward compatibility.
+            }
+        }
+    }
+    Ok(descriptor)
+}
+
+/// Parse a `(foundation <name> (description …) (uses …) …)` form into a
+/// descriptor record. Mirrors the JS `parseFoundationForm` helper.
+fn parse_foundation_form(node: &Node) -> Result<FoundationDescriptor, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => return Err("foundation form must be `(foundation <name> …)`".to_string()),
+    };
+    if children.len() < 2 {
+        return Err("foundation form must be `(foundation <name> …)`".to_string());
+    }
+    let head = match &children[0] {
+        Node::Leaf(s) if s == "foundation" => s,
+        _ => return Err("foundation form must be `(foundation <name> …)`".to_string()),
+    };
+    let _ = head;
+    let name = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err("foundation name must be a non-empty identifier".to_string()),
+    };
+    let mut foundation = FoundationDescriptor {
+        name,
+        ..Default::default()
+    };
+    for child in &children[2..] {
+        let clause = match child {
+            Node::List(items) => items,
+            _ => {
+                return Err(
+                    "foundation child clauses must be lists led by a keyword".to_string(),
+                );
+            }
+        };
+        if clause.is_empty() {
+            return Err(
+                "foundation child clauses must be lists led by a keyword".to_string(),
+            );
+        }
+        let key = match &clause[0] {
+            Node::Leaf(s) => s.as_str(),
+            _ => {
+                return Err(
+                    "foundation child clauses must be lists led by a keyword".to_string(),
+                );
+            }
+        };
+        let rest: Vec<&Node> = clause.iter().skip(1).collect();
+        match key {
+            "uses" => {
+                for r in &rest {
+                    foundation.uses.push(key_of(r));
+                }
+            }
+            "defines" => {
+                if rest.is_empty() {
+                    return Err(
+                        "(defines <construct> <implementation>) requires a construct name"
+                            .to_string(),
+                    );
+                }
+                let construct = match rest[0] {
+                    Node::Leaf(s) => s.clone(),
+                    _ => {
+                        return Err(
+                            "(defines <construct> <implementation>) requires a construct name"
+                                .to_string(),
+                        );
+                    }
+                };
+                let impl_str = if rest.len() > 1 {
+                    rest.iter()
+                        .skip(1)
+                        .map(|n| key_of(n))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    "links-defined".to_string()
+                };
+                foundation.defines.push((construct, impl_str));
+            }
+            "extends" => {
+                if rest.len() != 1 {
+                    return Err("(extends …) requires one foundation name".to_string());
+                }
+                if let Node::Leaf(v) = rest[0] {
+                    foundation.extends = Some(v.clone());
+                } else {
+                    return Err("(extends …) requires one foundation name".to_string());
+                }
+            }
+            "numeric-domain" => {
+                if rest.len() != 1 {
+                    return Err("(numeric-domain …) requires one name".to_string());
+                }
+                if let Node::Leaf(v) = rest[0] {
+                    foundation.numeric_domain = Some(v.clone());
+                } else {
+                    return Err("(numeric-domain …) requires one name".to_string());
+                }
+            }
+            "truth-domain" => {
+                if rest.len() != 1 {
+                    return Err("(truth-domain …) requires one name".to_string());
+                }
+                if let Node::Leaf(v) = rest[0] {
+                    foundation.truth_domain = Some(v.clone());
+                } else {
+                    return Err("(truth-domain …) requires one name".to_string());
+                }
+            }
+            "description" => {
+                foundation.description = Some(
+                    rest.iter()
+                        .map(|n| key_of(n))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            }
+            _ => {
+                // Unknown clauses are accepted for forward compatibility.
+            }
+        }
+    }
+    Ok(foundation)
+}
+
+/// Render the foundation report as a human-readable text block. Mirrors
+/// the JS `formatFoundationReport` helper.
+pub fn format_foundation_report(report: &FoundationReport) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("Foundation report:".to_string());
+    lines.push(format!("  active foundation: {}", report.active_foundation));
+    if let Some(d) = &report.description {
+        lines.push(format!("  description: {}", d));
+    }
+    if let Some(n) = &report.numeric_domain {
+        lines.push(format!("  numeric domain: {}", n));
+    }
+    if let Some(t) = &report.truth_domain {
+        lines.push(format!("  truth domain: {}", t));
+    }
+    let ordered_statuses = [
+        "host-primitive",
+        "host-derived",
+        "external-trusted",
+        "user-configurable",
+        "links-encoded",
+        "links-defined",
+        "user-overridden",
+        "planned",
+    ];
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for status in ordered_statuses.iter() {
+        if let Some((_, names)) = report.by_status.iter().find(|(s, _)| s == status) {
+            if !names.is_empty() {
+                lines.push(String::new());
+                lines.push(format!("{}:", status));
+                for n in names {
+                    lines.push(format!("  - {}", n));
+                }
+                seen.insert((*status).to_string());
+            }
+        }
+    }
+    for (status, names) in &report.by_status {
+        if seen.contains(status) || names.is_empty() {
+            continue;
+        }
+        lines.push(String::new());
+        lines.push(format!("{}:", status));
+        for n in names {
+            lines.push(format!("  - {}", n));
+        }
+    }
+    if !report.foundations.is_empty() {
+        lines.push(String::new());
+        lines.push("foundations:".to_string());
+        for f in &report.foundations {
+            let suffix = f
+                .description
+                .as_ref()
+                .map(|d| format!(" — {}", d))
+                .unwrap_or_default();
+            lines.push(format!("  - {}{}", f.name, suffix));
+            if let Some(n) = &f.numeric_domain {
+                lines.push(format!("      numeric domain: {}", n));
+            }
+            if let Some(t) = &f.truth_domain {
+                lines.push(format!("      truth domain: {}", t));
+            }
+            if !f.uses.is_empty() {
+                lines.push(format!("      uses: {}", f.uses.join(", ")));
+            }
+            if !f.defines.is_empty() {
+                let parts: Vec<String> = f
+                    .defines
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect();
+                lines.push(format!("      defines: {}", parts.join(", ")));
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn register_template_form(form: &Node, env: &mut Env) -> Result<String, String> {
@@ -8805,11 +9493,13 @@ pub fn extract_program(text: &str, target: ExtractTarget) -> Result<String, Stri
 
 // ========== Runner ==========
 
-/// A result from running a query: either a numeric value or a type string.
+/// A result from running a query: a numeric value, a type string, or a
+/// foundation report (issue #97).
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunResult {
     Num(f64),
     Type(String),
+    Foundation(FoundationReport),
 }
 
 /// Evaluate a complete LiNo knowledge base and return both results and any
@@ -9315,6 +10005,160 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
             }
         }
 
+        // Foundation / root-construct registry (issue #97). Data-only:
+        // declarations record what the prover trusts but never change
+        // host operator behaviour. `(with-foundation <name> body...)`
+        // pushes a foundation tag for the duration of the body so the
+        // trust report and audit can attribute reductions to it.
+        if let Node::List(children) = &form {
+            if let Some(Node::Leaf(head)) = children.first() {
+                if head == "root-construct" {
+                    match parse_root_construct_form(&form) {
+                        Ok(descriptor) => {
+                            let name = descriptor.name.clone();
+                            if let Err(message) = env.register_root_construct(descriptor) {
+                                diagnostics.push(Diagnostic::new(
+                                    "E060",
+                                    message,
+                                    span.clone(),
+                                ));
+                            } else if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "root-construct",
+                                    name,
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E060", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "foundation" {
+                    match parse_foundation_form(&form) {
+                        Ok(foundation) => {
+                            let name = foundation.name.clone();
+                            if let Err(message) = env.register_foundation(foundation) {
+                                diagnostics.push(Diagnostic::new(
+                                    "E061",
+                                    message,
+                                    span.clone(),
+                                ));
+                            } else if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "foundation",
+                                    name,
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E061", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "with-foundation" {
+                    if children.len() < 2 {
+                        diagnostics.push(Diagnostic::new(
+                            "E062",
+                            "with-foundation form must be `(with-foundation <name> <body>...)`",
+                            span.clone(),
+                        ));
+                        continue;
+                    }
+                    let fname = match &children[1] {
+                        Node::Leaf(s) if !s.is_empty() => s.clone(),
+                        _ => {
+                            diagnostics.push(Diagnostic::new(
+                                "E062",
+                                "with-foundation requires a foundation name",
+                                span.clone(),
+                            ));
+                            continue;
+                        }
+                    };
+                    if let Err(message) = env.enter_foundation(&fname) {
+                        diagnostics.push(Diagnostic::new(
+                            "E062",
+                            message,
+                            span.clone(),
+                        ));
+                        continue;
+                    }
+                    if options.trace {
+                        env.trace_events.push(TraceEvent::new(
+                            "with-foundation/enter",
+                            fname.clone(),
+                            span.clone(),
+                        ));
+                    }
+                    for body in &children[2..] {
+                        let mut inner = body.clone();
+                        loop {
+                            match inner {
+                                Node::List(ref nested) if nested.len() == 1 => {
+                                    if let Node::List(_) = &nested[0] {
+                                        inner = nested[0].clone();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                _ => break,
+                            }
+                        }
+                        let inner_result = catch_unwind(AssertUnwindSafe(|| {
+                            let mut stack = Vec::new();
+                            let expanded = expand_templates(&inner, env, &mut stack);
+                            let eval_res = eval_node(&expanded, env);
+                            (expanded, eval_res)
+                        }));
+                        match inner_result {
+                            Ok((_, eval_res)) => match eval_res {
+                                EvalResult::Query(v) => results.push(RunResult::Num(v)),
+                                EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
+                                _ => {}
+                            },
+                            Err(payload) => {
+                                let (code, message) = decode_panic_payload(&payload);
+                                diagnostics.push(Diagnostic::new(
+                                    &code,
+                                    message,
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                    }
+                    env.exit_foundation();
+                    if options.trace {
+                        env.trace_events.push(TraceEvent::new(
+                            "with-foundation/exit",
+                            fname,
+                            span.clone(),
+                        ));
+                    }
+                    continue;
+                }
+                if head == "foundation-report" || head == "foundation-report?" {
+                    let report = env.foundation_report();
+                    if options.trace {
+                        env.trace_events.push(TraceEvent::new(
+                            "foundation-report",
+                            report.active_foundation.clone(),
+                            span.clone(),
+                        ));
+                    }
+                    results.push(RunResult::Foundation(report));
+                    if let Some(p) = proofs.as_mut() {
+                        p.push(None);
+                    }
+                    continue;
+                }
+            }
+        }
+
         let result = catch_unwind(AssertUnwindSafe(|| {
             let mut stack = Vec::new();
             let expanded_form = expand_templates(&form, env, &mut stack);
@@ -9524,6 +10368,7 @@ pub fn run(text: &str, options: Option<EnvOptions>) -> Vec<f64> {
         .filter_map(|result| match result {
             RunResult::Num(v) => Some(v),
             RunResult::Type(_) => None,
+            RunResult::Foundation(_) => None,
         })
         .collect()
 }

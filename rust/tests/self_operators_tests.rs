@@ -113,6 +113,10 @@ fn single_number(out: EvaluateResult, label: &str) -> f64 {
     match out.results[0] {
         RunResult::Num(value) => value,
         RunResult::Type(ref value) => panic!("{}: expected number, got {}", label, value),
+        RunResult::Foundation(ref report) => panic!(
+            "{}: expected number, got foundation report for {}",
+            label, report.active_foundation
+        ),
     }
 }
 

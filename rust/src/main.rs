@@ -1,8 +1,8 @@
 // RML CLI — run a LiNo knowledge base or launch the interactive REPL
 use rml::repl::run_repl;
 use rml::{
-    evaluate_with_options, export_lean, extract_program, format_diagnostic, format_trace_event,
-    rocq::export_rocq, EnvOptions, EvaluateOptions, ExtractTarget, RunResult,
+    evaluate_with_options, export_lean, extract_program, format_diagnostic, format_foundation_report,
+    format_trace_event, rocq::export_rocq, EnvOptions, EvaluateOptions, ExtractTarget, RunResult,
 };
 use std::env;
 use std::fs;
@@ -83,6 +83,9 @@ fn main() -> ExitCode {
                 println!("{}", formatted);
             }
             RunResult::Type(s) => println!("{}", s),
+            RunResult::Foundation(report) => {
+                println!("{}", format_foundation_report(&report));
+            }
         }
     }
     let has_diagnostics = !evaluation.diagnostics.is_empty();
