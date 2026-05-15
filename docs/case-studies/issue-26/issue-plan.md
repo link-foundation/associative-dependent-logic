@@ -2,7 +2,10 @@
 
 This file is the executable artefact of the case study. Each entry below is a planned GitHub issue with title, labels, body template, dependencies, and acceptance criteria.
 
-**Status: filed.** All 67 planned issues plus the tracking epic have been filed on GitHub with full body, labels, and resolved `Depends on` / `Blocks` cross-references. See the [Filed-issue index](#filed-issue-index) at the bottom of this file for the planned-ID → GitHub-issue-number map. The tracking epic is [#95](https://github.com/link-foundation/relative-meta-logic/issues/95).
+Source comparisons: [CONCEPTS-COMPARISON.md](../../CONCEPTS-COMPARISON.md) and
+[FEATURE-COMPARISON.md](../../FEATURE-COMPARISON.md).
+
+**Status: filed.** All 66 planned feature issues plus the tracking epic have been filed on GitHub with full body, labels, and resolved `Depends on` / `Blocks` cross-references. See the [Filed-issue index](#filed-issue-index) at the bottom of this file for the planned-ID → GitHub-issue-number map. The tracking epic is [#95](https://github.com/link-foundation/relative-meta-logic/issues/95).
 
 ## Index
 
@@ -838,7 +841,7 @@ The table below maps every planned issue ID to its filed GitHub issue number. Al
 | J7 | [#92](https://github.com/link-foundation/relative-meta-logic/issues/92) | Tutorial: "RML in RML" |
 | J-EPIC | [#95](https://github.com/link-foundation/relative-meta-logic/issues/95) | Universal formal-system constructor: feature-parity audit |
 
-Total: 67 planned issues + 1 tracking epic = 68 GitHub issues. Filed in topological order so every `Depends on #N` resolves immediately.
+Total: 66 planned feature issues + 1 tracking epic = 67 GitHub issues. Filed in topological order so every `Depends on #N` resolves immediately.
 
 The filing tooling lives in [`experiments/issue-26-filing/`](https://github.com/link-foundation/relative-meta-logic/tree/main/experiments/issue-26-filing) (`issues.json` + `file-issues.mjs` + `validate.mjs`) and is reusable for future plan updates.
 
@@ -846,7 +849,7 @@ The filing tooling lives in [`experiments/issue-26-filing/`](https://github.com/
 
 ## Summary
 
-The plan distils into **67 issues** across 10 phases plus one tracking epic. The dependency graph in this file has been validated visually; the filing order followed:
+The plan distils into **66 feature issues** across 10 phases plus one tracking epic. The dependency graph in this file has been validated visually; the filing order followed:
 
 1. Phase A first (5 issues), all unblocked.
 2. Phases B and D-foundations (D1, D8) once A1 lands.

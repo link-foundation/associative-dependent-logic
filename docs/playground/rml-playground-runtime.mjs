@@ -1984,7 +1984,7 @@ var Parser = class {
   }
 };
 
-// ../../rml-playground-build-VuSIrM/rml-links-browser-entry.mjs
+// src/rml-links-browser-entry.mjs
 var process = {
   argv: [],
   env: {},
@@ -2199,6 +2199,11 @@ var Env = class {
     this.namespace = null;
     this.aliases = /* @__PURE__ */ new Map();
     this.imported = /* @__PURE__ */ new Set();
+    this.rootConstructs = /* @__PURE__ */ new Map();
+    this.foundations = /* @__PURE__ */ new Map();
+    this.activeFoundation = "default-rml";
+    this._foundationStack = [];
+    this._registerDefaultFoundation();
     this._tracer = null;
     this._currentSpan = null;
     this.lo = opts.lo !== void 0 ? opts.lo : 0;
@@ -2356,7 +2361,458 @@ var Env = class {
     }
     return name;
   }
+  // ---------- Foundation / root-construct registry (issue #97) ----------
+  // Preregister the default `default-rml` foundation and bake in the
+  // built-in root-construct descriptors that describe the current host
+  // implementation. These are *data only*; they never change behaviour.
+  _registerDefaultFoundation() {
+    this.foundations.set("default-rml", {
+      name: "default-rml",
+      description: "Default RML foundation: host-implemented configurable kernel",
+      uses: [],
+      defines: /* @__PURE__ */ new Map(),
+      extends: null,
+      numericDomain: "decimal-12",
+      truthDomain: "default-truth"
+    });
+    seedBuiltinRootConstructs(this);
+  }
+  registerRootConstruct(descriptor) {
+    if (!descriptor || typeof descriptor.name !== "string" || !descriptor.name) {
+      throw new RmlError("E060", "root-construct descriptor requires a name");
+    }
+    const previous = this.rootConstructs.get(descriptor.name) || null;
+    const merged = mergeRootConstructDescriptors(previous, descriptor);
+    this.rootConstructs.set(merged.name, merged);
+    return merged;
+  }
+  getRootConstruct(name) {
+    return this.rootConstructs.get(name) || null;
+  }
+  listRootConstructs() {
+    return [...this.rootConstructs.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  }
+  registerFoundation(foundation) {
+    if (!foundation || typeof foundation.name !== "string" || !foundation.name) {
+      throw new RmlError("E061", "foundation declaration requires a name");
+    }
+    const previous = this.foundations.get(foundation.name) || null;
+    const merged = mergeFoundationDescriptors(previous, foundation);
+    this.foundations.set(merged.name, merged);
+    return merged;
+  }
+  getFoundation(name) {
+    return this.foundations.get(name) || null;
+  }
+  enterFoundation(name) {
+    const foundation = this.foundations.get(name);
+    if (!foundation) {
+      throw new RmlError("E062", `Unknown foundation: ${name}`);
+    }
+    const snapshot = /* @__PURE__ */ new Map();
+    if (foundation.defines && foundation.defines.size > 0) {
+      for (const [opName, implName] of foundation.defines.entries()) {
+        const fn = aggregatorOpFromName(this, implName);
+        if (fn === null) continue;
+        snapshot.set(opName, this.ops.has(opName) ? this.ops.get(opName) : null);
+        this.ops.set(opName, fn);
+      }
+    }
+    this._foundationStack.push({ name: this.activeFoundation, snapshot });
+    this.activeFoundation = name;
+  }
+  exitFoundation() {
+    if (this._foundationStack.length === 0) {
+      this.activeFoundation = "default-rml";
+      return;
+    }
+    const frame = this._foundationStack.pop();
+    if (frame && frame.snapshot) {
+      for (const [opName, op] of frame.snapshot.entries()) {
+        if (op === null) {
+          this.ops.delete(opName);
+        } else {
+          this.ops.set(opName, op);
+        }
+      }
+    }
+    this.activeFoundation = frame && typeof frame.name === "string" ? frame.name : "default-rml";
+  }
+  // Build a structured trust / foundation report. The shape is intentionally
+  // plain so callers can stringify it (CLI, docs) or test against it (unit
+  // tests).
+  foundationReport() {
+    const active = this.activeFoundation || "default-rml";
+    const foundation = this.foundations.get(active) || null;
+    const byStatus = /* @__PURE__ */ new Map();
+    for (const rc of this.listRootConstructs()) {
+      const status = rc.status || "unknown";
+      if (!byStatus.has(status)) byStatus.set(status, []);
+      byStatus.get(status).push(rc.name);
+    }
+    const buckets = {};
+    for (const [status, names] of byStatus.entries()) {
+      buckets[status] = names.slice().sort();
+    }
+    return {
+      activeFoundation: active,
+      description: foundation ? foundation.description : null,
+      numericDomain: foundation ? foundation.numericDomain : null,
+      truthDomain: foundation ? foundation.truthDomain : null,
+      rootConstructs: this.listRootConstructs().map((rc) => ({
+        name: rc.name,
+        kind: rc.kind || null,
+        status: rc.status || null,
+        dependsOn: (rc.dependsOn || []).slice(),
+        encodedAs: rc.encodedAs || null,
+        pureLinksReady: typeof rc.pureLinksReady === "boolean" ? rc.pureLinksReady : null,
+        override: rc.override || null,
+        plannedAs: rc.plannedAs || null
+      })),
+      byStatus: buckets,
+      foundations: [...this.foundations.values()].map((f) => ({
+        name: f.name,
+        description: f.description || null,
+        uses: (f.uses || []).slice(),
+        defines: [...(f.defines || /* @__PURE__ */ new Map()).entries()].map(([k, v]) => ({ construct: k, implementation: v })),
+        extends: f.extends || null,
+        numericDomain: f.numericDomain || null,
+        truthDomain: f.truthDomain || null
+      })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+    };
+  }
 };
+function mergeRootConstructDescriptors(previous, next) {
+  const base = previous ? { ...previous } : {
+    name: next.name,
+    status: null,
+    kind: null,
+    dependsOn: [],
+    encodedAs: null,
+    pureLinksReady: null,
+    override: null,
+    plannedAs: null,
+    foundation: null
+  };
+  base.name = next.name;
+  if (next.status !== void 0 && next.status !== null) base.status = next.status;
+  if (next.kind !== void 0 && next.kind !== null) base.kind = next.kind;
+  if (Array.isArray(next.dependsOn) && next.dependsOn.length > 0) {
+    const seen = new Set(base.dependsOn || []);
+    const deps = (base.dependsOn || []).slice();
+    for (const dep of next.dependsOn) {
+      if (!seen.has(dep)) {
+        seen.add(dep);
+        deps.push(dep);
+      }
+    }
+    base.dependsOn = deps;
+  } else if (!Array.isArray(base.dependsOn)) {
+    base.dependsOn = [];
+  }
+  if (next.encodedAs !== void 0 && next.encodedAs !== null) base.encodedAs = next.encodedAs;
+  if (typeof next.pureLinksReady === "boolean") base.pureLinksReady = next.pureLinksReady;
+  if (next.override !== void 0 && next.override !== null) base.override = next.override;
+  if (next.plannedAs !== void 0 && next.plannedAs !== null) base.plannedAs = next.plannedAs;
+  if (next.foundation !== void 0 && next.foundation !== null) base.foundation = next.foundation;
+  return base;
+}
+function mergeFoundationDescriptors(previous, next) {
+  const base = previous ? {
+    name: previous.name,
+    description: previous.description || null,
+    uses: (previous.uses || []).slice(),
+    defines: new Map(previous.defines || []),
+    extends: previous.extends || null,
+    numericDomain: previous.numericDomain || null,
+    truthDomain: previous.truthDomain || null
+  } : {
+    name: next.name,
+    description: null,
+    uses: [],
+    defines: /* @__PURE__ */ new Map(),
+    extends: null,
+    numericDomain: null,
+    truthDomain: null
+  };
+  base.name = next.name;
+  if (next.description) base.description = next.description;
+  if (Array.isArray(next.uses) && next.uses.length > 0) {
+    const seen = new Set(base.uses);
+    for (const u of next.uses) {
+      if (!seen.has(u)) {
+        seen.add(u);
+        base.uses.push(u);
+      }
+    }
+  }
+  if (next.defines instanceof Map) {
+    for (const [k, v] of next.defines.entries()) base.defines.set(k, v);
+  }
+  if (next.extends) base.extends = next.extends;
+  if (next.numericDomain) base.numericDomain = next.numericDomain;
+  if (next.truthDomain) base.truthDomain = next.truthDomain;
+  return base;
+}
+function aggregatorOpFromName(env, sel) {
+  if (typeof sel !== "string") return null;
+  const lo = env.lo;
+  const agg = sel === "avg" ? (xs) => xs.reduce((a, b) => a + b, 0) / xs.length : sel === "min" ? (xs) => xs.length ? Math.min(...xs) : lo : sel === "max" ? (xs) => xs.length ? Math.max(...xs) : lo : sel === "product" || sel === "prod" ? (xs) => xs.reduce((a, b) => a * b, 1) : sel === "probabilistic_sum" || sel === "ps" ? (xs) => 1 - xs.reduce((a, b) => a * (1 - b), 1) : null;
+  if (!agg) return null;
+  return (...xs) => xs.length ? agg(xs) : lo;
+}
+function seedBuiltinRootConstructs(env) {
+  const seeds = [
+    // Parsing / LiNo layer
+    { name: "lino-parser", kind: "parser", status: "external-trusted", encodedAs: "links-notation", pureLinksReady: false },
+    { name: "canonical-printer", kind: "printer", status: "host-primitive", encodedAs: "keyOf" },
+    { name: "structural-equality", kind: "equality-layer", status: "host-primitive", encodedAs: "isStructurallySame" },
+    // Numeric layer
+    { name: "decimal-12-arithmetic", kind: "numeric-domain", status: "host-primitive", encodedAs: "decRound", pureLinksReady: false },
+    { name: "+", kind: "arithmetic-operator", status: "host-primitive", dependsOn: ["decimal-12-arithmetic"] },
+    { name: "-", kind: "arithmetic-operator", status: "host-primitive", dependsOn: ["decimal-12-arithmetic"] },
+    { name: "*", kind: "arithmetic-operator", status: "host-primitive", dependsOn: ["decimal-12-arithmetic"] },
+    { name: "/", kind: "arithmetic-operator", status: "host-primitive", dependsOn: ["decimal-12-arithmetic"] },
+    { name: "<", kind: "comparison-operator", status: "host-primitive", dependsOn: ["decimal-12-arithmetic"] },
+    { name: "<=", kind: "comparison-operator", status: "host-primitive", dependsOn: ["decimal-12-arithmetic"] },
+    // Truth / aggregator layer
+    { name: "truth-range", kind: "truth-domain", status: "user-configurable", encodedAs: "Env.lo/Env.hi" },
+    { name: "valence", kind: "truth-domain", status: "user-configurable", encodedAs: "Env.valence" },
+    { name: "clamp", kind: "truth-normalization", status: "host-primitive", encodedAs: "Env.clamp" },
+    { name: "quantize", kind: "truth-normalization", status: "host-primitive", encodedAs: "quantize" },
+    { name: "true", kind: "truth-constant", status: "user-configurable" },
+    { name: "false", kind: "truth-constant", status: "user-configurable" },
+    { name: "unknown", kind: "truth-constant", status: "user-configurable" },
+    { name: "undefined", kind: "truth-constant", status: "user-configurable" },
+    { name: "avg", kind: "aggregator", status: "host-primitive" },
+    { name: "min", kind: "aggregator", status: "host-primitive" },
+    { name: "max", kind: "aggregator", status: "host-primitive" },
+    { name: "product", kind: "aggregator", status: "host-primitive" },
+    { name: "probabilistic_sum", kind: "aggregator", status: "host-primitive" },
+    // Logical layer
+    { name: "not", kind: "truth-operator", status: "user-configurable", dependsOn: ["truth-range"] },
+    { name: "and", kind: "truth-operator", status: "user-configurable", dependsOn: ["avg"] },
+    { name: "or", kind: "truth-operator", status: "user-configurable", dependsOn: ["max"] },
+    { name: "both", kind: "truth-operator", status: "user-configurable", dependsOn: ["avg"] },
+    { name: "neither", kind: "truth-operator", status: "user-configurable", dependsOn: ["product"] },
+    // Equality layer
+    { name: "=", kind: "equality-layer", status: "host-primitive", dependsOn: ["structural-equality", "decimal-12-arithmetic"] },
+    { name: "!=", kind: "equality-layer", status: "host-derived", dependsOn: ["=", "not"] },
+    { name: "assigned-equality", kind: "equality-layer", status: "host-primitive" },
+    { name: "numeric-equality", kind: "equality-layer", status: "host-primitive", dependsOn: ["decimal-12-arithmetic"] },
+    { name: "definitional-equality", kind: "equality-layer", status: "host-primitive", dependsOn: ["beta-reduction", "structural-equality"] },
+    // Typed kernel layer
+    { name: "Type", kind: "universe-form", status: "host-primitive", pureLinksReady: false, plannedAs: "links-defined" },
+    { name: "Prop", kind: "universe-form", status: "host-primitive", dependsOn: ["Type"] },
+    { name: "Pi", kind: "binder", status: "host-primitive", dependsOn: ["Type", "substitution", "freshness"] },
+    { name: "lambda", kind: "binder", status: "host-primitive", dependsOn: ["Pi", "substitution"] },
+    { name: "apply", kind: "eliminator", status: "host-primitive", dependsOn: ["lambda", "beta-reduction"] },
+    { name: "beta-reduction", kind: "reduction-rule", status: "host-primitive", dependsOn: ["substitution", "freshness", "alpha-renaming"] },
+    { name: "substitution", kind: "meta-operation", status: "host-primitive", encodedAs: "substitute" },
+    { name: "freshness", kind: "meta-operation", status: "host-primitive", encodedAs: "evalFresh" },
+    { name: "alpha-renaming", kind: "meta-operation", status: "host-primitive" },
+    { name: "normalization", kind: "reduction-rule", status: "host-primitive", encodedAs: "normalizeTerm", dependsOn: ["beta-reduction"] },
+    { name: "whnf", kind: "reduction-rule", status: "host-primitive", encodedAs: "whnfTerm", dependsOn: ["beta-reduction"] },
+    // Inductive / coinductive
+    { name: "inductive", kind: "declaration", status: "host-primitive", dependsOn: ["Type", "Pi"] },
+    { name: "coinductive", kind: "declaration", status: "host-primitive", dependsOn: ["Type", "Pi"] },
+    // Proof / tactics layer
+    { name: "proof-replay", kind: "replay-checker", status: "host-primitive", encodedAs: "check.mjs" },
+    { name: "by", kind: "proof-rule", status: "host-primitive" },
+    { name: "smt-trusted", kind: "external-decision", status: "external-trusted" },
+    { name: "atp-trusted", kind: "external-decision", status: "external-trusted" },
+    // Metatheorem layer
+    { name: "mode", kind: "mode-declaration", status: "host-primitive" },
+    { name: "totality-check", kind: "metatheorem", status: "host-primitive" },
+    { name: "coverage-check", kind: "metatheorem", status: "host-primitive" },
+    { name: "termination-check", kind: "metatheorem", status: "host-primitive" },
+    // Self-bootstrap layer
+    { name: "self.evaluator", kind: "self-bootstrap", status: "links-encoded", encodedAs: "lib/self/evaluator.lino" },
+    { name: "self.grammar", kind: "self-bootstrap", status: "links-encoded", encodedAs: "lib/self/grammar.lino" },
+    { name: "self.types", kind: "self-bootstrap", status: "links-encoded", encodedAs: "lib/self/types.lino" },
+    { name: "self.operators", kind: "self-bootstrap", status: "links-encoded", encodedAs: "lib/self/operators.lino" },
+    { name: "self.metatheorem", kind: "self-bootstrap", status: "links-encoded", encodedAs: "lib/self/metatheorem.lino" }
+  ];
+  for (const seed of seeds) {
+    env.rootConstructs.set(seed.name, mergeRootConstructDescriptors(null, seed));
+  }
+}
+function parseRootConstructForm(node) {
+  if (!Array.isArray(node) || node[0] !== "root-construct" || node.length < 2) {
+    throw new RmlError("E060", "root-construct form must be `(root-construct <name> ...)`");
+  }
+  const rawName = node[1];
+  if (typeof rawName !== "string" || !rawName) {
+    throw new RmlError("E060", "root-construct name must be a non-empty identifier");
+  }
+  const descriptor = { name: rawName };
+  for (let i = 2; i < node.length; i++) {
+    const child = node[i];
+    if (!Array.isArray(child) || child.length < 1 || typeof child[0] !== "string") {
+      throw new RmlError("E060", "root-construct child clauses must be lists led by a keyword");
+    }
+    const key = child[0];
+    const rest = child.slice(1);
+    switch (key) {
+      case "status":
+        if (rest.length !== 1 || typeof rest[0] !== "string") {
+          throw new RmlError("E060", "(status ...) requires one symbol");
+        }
+        descriptor.status = rest[0];
+        break;
+      case "kind":
+        if (rest.length !== 1 || typeof rest[0] !== "string") {
+          throw new RmlError("E060", "(kind ...) requires one symbol");
+        }
+        descriptor.kind = rest[0];
+        break;
+      case "depends-on":
+        descriptor.dependsOn = rest.map((t) => Array.isArray(t) ? keyOf(t) : String(t));
+        break;
+      case "encoded-as":
+        descriptor.encodedAs = rest.map((t) => Array.isArray(t) ? keyOf(t) : String(t)).join(" ");
+        break;
+      case "pure-links-ready":
+        if (rest.length !== 1 || rest[0] !== "yes" && rest[0] !== "no") {
+          throw new RmlError("E060", "(pure-links-ready ...) must be `yes` or `no`");
+        }
+        descriptor.pureLinksReady = rest[0] === "yes";
+        break;
+      case "override":
+        descriptor.override = rest.map((t) => Array.isArray(t) ? keyOf(t) : String(t)).join(" ");
+        break;
+      case "planned-as":
+        descriptor.plannedAs = rest.map((t) => Array.isArray(t) ? keyOf(t) : String(t)).join(" ");
+        break;
+      case "foundation":
+        if (rest.length !== 1 || typeof rest[0] !== "string") {
+          throw new RmlError("E060", "(foundation ...) must be a single name");
+        }
+        descriptor.foundation = rest[0];
+        break;
+      case "implemented-by":
+        descriptor.encodedAs = rest.map((t) => Array.isArray(t) ? keyOf(t) : String(t)).join(" ");
+        break;
+      case "surface":
+      case "description":
+      case "used-by":
+        break;
+      default:
+        break;
+    }
+  }
+  return descriptor;
+}
+function parseFoundationForm(node) {
+  if (!Array.isArray(node) || node[0] !== "foundation" || node.length < 2) {
+    throw new RmlError("E061", "foundation form must be `(foundation <name> ...)`");
+  }
+  const rawName = node[1];
+  if (typeof rawName !== "string" || !rawName) {
+    throw new RmlError("E061", "foundation name must be a non-empty identifier");
+  }
+  const foundation = { name: rawName, uses: [], defines: /* @__PURE__ */ new Map() };
+  for (let i = 2; i < node.length; i++) {
+    const child = node[i];
+    if (!Array.isArray(child) || child.length < 1 || typeof child[0] !== "string") {
+      throw new RmlError("E061", "foundation child clauses must be lists led by a keyword");
+    }
+    const key = child[0];
+    const rest = child.slice(1);
+    switch (key) {
+      case "uses":
+        for (const u of rest) foundation.uses.push(Array.isArray(u) ? keyOf(u) : String(u));
+        break;
+      case "defines":
+        if (rest.length < 1 || typeof rest[0] !== "string") {
+          throw new RmlError("E061", "(defines <construct> <implementation>) requires a construct name");
+        }
+        foundation.defines.set(rest[0], rest.slice(1).map((t) => Array.isArray(t) ? keyOf(t) : String(t)).join(" ") || "links-defined");
+        break;
+      case "extends":
+        if (rest.length !== 1 || typeof rest[0] !== "string") {
+          throw new RmlError("E061", "(extends ...) requires one foundation name");
+        }
+        foundation.extends = rest[0];
+        break;
+      case "numeric-domain":
+        if (rest.length !== 1 || typeof rest[0] !== "string") {
+          throw new RmlError("E061", "(numeric-domain ...) requires one name");
+        }
+        foundation.numericDomain = rest[0];
+        break;
+      case "truth-domain":
+        if (rest.length !== 1 || typeof rest[0] !== "string") {
+          throw new RmlError("E061", "(truth-domain ...) requires one name");
+        }
+        foundation.truthDomain = rest[0];
+        break;
+      case "description":
+        foundation.description = rest.map((t) => Array.isArray(t) ? keyOf(t) : String(t)).join(" ");
+        break;
+      default:
+        break;
+    }
+  }
+  return foundation;
+}
+function formatFoundationReport(report) {
+  const lines = [];
+  lines.push(`Foundation report:`);
+  lines.push(`  active foundation: ${report.activeFoundation}`);
+  if (report.description) {
+    lines.push(`  description: ${report.description}`);
+  }
+  if (report.numericDomain) {
+    lines.push(`  numeric domain: ${report.numericDomain}`);
+  }
+  if (report.truthDomain) {
+    lines.push(`  truth domain: ${report.truthDomain}`);
+  }
+  const orderedStatuses = [
+    "host-primitive",
+    "host-derived",
+    "external-trusted",
+    "user-configurable",
+    "links-encoded",
+    "links-defined",
+    "user-overridden",
+    "planned"
+  ];
+  const seen = /* @__PURE__ */ new Set();
+  for (const status of orderedStatuses) {
+    const names = report.byStatus[status];
+    if (Array.isArray(names) && names.length > 0) {
+      lines.push("");
+      lines.push(`${status}:`);
+      for (const name of names) lines.push(`  - ${name}`);
+      seen.add(status);
+    }
+  }
+  for (const [status, names] of Object.entries(report.byStatus)) {
+    if (seen.has(status)) continue;
+    if (Array.isArray(names) && names.length > 0) {
+      lines.push("");
+      lines.push(`${status}:`);
+      for (const name of names) lines.push(`  - ${name}`);
+    }
+  }
+  if (report.foundations && report.foundations.length > 0) {
+    lines.push("");
+    lines.push("foundations:");
+    for (const f of report.foundations) {
+      lines.push(`  - ${f.name}${f.description ? ` \u2014 ${f.description}` : ""}`);
+      if (f.numericDomain) lines.push(`      numeric domain: ${f.numericDomain}`);
+      if (f.truthDomain) lines.push(`      truth domain: ${f.truthDomain}`);
+      if (f.uses && f.uses.length) lines.push(`      uses: ${f.uses.join(", ")}`);
+      if (f.defines && f.defines.length) {
+        const defStrs = f.defines.map((d) => `${d.construct}=${d.implementation}`);
+        lines.push(`      defines: ${defStrs.join(", ")}`);
+      }
+    }
+  }
+  return lines.join("\n");
+}
 function desugarHoas(node) {
   if (!Array.isArray(node)) return node;
   const mapped = node.map(desugarHoas);
@@ -5852,6 +6308,74 @@ function evaluate(code, options) {
     if (proofs !== null) out2.proofs = proofs;
     return out2;
   }
+  const runWithFoundation = (form, span) => {
+    if (form.length < 2 || typeof form[1] !== "string") {
+      diagnostics.push(new Diagnostic({
+        code: "E062",
+        message: "with-foundation form must be `(with-foundation <name> <body>...)`",
+        span
+      }));
+      return;
+    }
+    const fname = form[1];
+    let entered = false;
+    try {
+      env.enterFoundation(fname);
+      entered = true;
+      if (traceEnabled && trace) {
+        trace.push(new TraceEvent({ kind: "with-foundation/enter", detail: fname, span }));
+      }
+      for (let bi = 2; bi < form.length; bi++) {
+        let body = form[bi];
+        while (Array.isArray(body) && body.length === 1 && Array.isArray(body[0])) {
+          body = body[0];
+        }
+        try {
+          if (Array.isArray(body) && body[0] === "with-foundation") {
+            runWithFoundation(body, span);
+          } else if (Array.isArray(body) && (body[0] === "foundation-report" || body[0] === "foundation-report?")) {
+            const report = env.foundationReport();
+            results.push(report);
+            if (proofs !== null) proofs.push(null);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: "foundation-report", detail: report.activeFoundation, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === "foundation") {
+            const foundation = parseFoundationForm(body);
+            env.registerFoundation(foundation);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: "foundation", detail: foundation.name, span }));
+            }
+          } else {
+            const expanded = expandTemplates(body, env);
+            const res = evalNode(expanded, env);
+            if (res && res.query) {
+              results.push(res.value);
+              if (proofs !== null) proofs.push(null);
+            }
+          }
+        } catch (innerErr) {
+          const diagSpan = innerErr && innerErr.span || span;
+          const code2 = innerErr && innerErr.code || "E000";
+          const message = innerErr && innerErr.message ? innerErr.message : String(innerErr);
+          diagnostics.push(new Diagnostic({ code: code2, message, span: diagSpan }));
+        }
+      }
+    } catch (err) {
+      diagnostics.push(new Diagnostic({
+        code: err && err.code || "E062",
+        message: err && err.message ? err.message : String(err),
+        span: err && err.span || span
+      }));
+    } finally {
+      if (entered) {
+        env.exitFoundation();
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: "with-foundation/exit", detail: fname, span }));
+        }
+      }
+    }
+  };
   for (let idx = 0; idx < forms.length; idx++) {
     let form = forms[idx];
     while (Array.isArray(form) && form.length === 1 && Array.isArray(form[0])) {
@@ -5903,6 +6427,51 @@ function evaluate(code, options) {
           message: err && err.message ? err.message : String(err),
           span: err && err.span || span
         }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === "root-construct") {
+      try {
+        const descriptor = parseRootConstructForm(form);
+        env.registerRootConstruct(descriptor);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: "root-construct", detail: descriptor.name, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: err && err.code || "E060",
+          message: err && err.message ? err.message : String(err),
+          span: err && err.span || span
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === "foundation") {
+      try {
+        const foundation = parseFoundationForm(form);
+        env.registerFoundation(foundation);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: "foundation", detail: foundation.name, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: err && err.code || "E061",
+          message: err && err.message ? err.message : String(err),
+          span: err && err.span || span
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === "with-foundation") {
+      runWithFoundation(form, span);
+      continue;
+    }
+    if (Array.isArray(form) && (form[0] === "foundation-report" || form[0] === "foundation-report?")) {
+      const report = env.foundationReport();
+      results.push(report);
+      if (proofs !== null) proofs.push(null);
+      if (traceEnabled && trace) {
+        trace.push(new TraceEvent({ kind: "foundation-report", detail: report.activeFoundation, span }));
       }
       continue;
     }
@@ -6977,6 +7546,7 @@ export {
   extractProgram,
   formalizeSelectedInterpretation,
   formatDiagnostic,
+  formatFoundationReport,
   formatTraceEvent,
   goalToTptp,
   isConvertible,
@@ -6992,9 +7562,12 @@ export {
   parseBindings,
   parseCoinductiveForm,
   parseDefineForm,
+  parseFoundationForm,
   parseInductiveForm,
   parseLino,
+  parseModeFlag,
   parseOne,
+  parseRootConstructForm,
   quantize,
   rewrite,
   run,

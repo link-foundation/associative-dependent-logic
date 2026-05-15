@@ -4,7 +4,7 @@
     "title": "[A1] Structured diagnostics with source spans",
     "labels": ["enhancement", "area:diagnostics", "phase:A"],
     "phase": "A",
-    "motivation": "Today, parser/evaluator errors are plain strings without spans. This makes IDE integration impossible. The CONCEPTS-COMPARISION and FEATURE-COMPARISION docs flag diagnostics as a parity gap against Lean/Rocq/Isabelle.",
+    "motivation": "Today, parser/evaluator errors are plain strings without spans. This makes IDE integration impossible. The CONCEPTS-COMPARISON and FEATURE-COMPARISON docs flag diagnostics as a parity gap against Lean/Rocq/Isabelle.",
     "goal": "Every error returned by parser, evaluator, and (later) type checker is a structured `Diagnostic { code, message, span: { file, line, col } }`.",
     "lino": "n/a (host-language refactor).",
     "api": "- JS: `evaluate(code: string): { results: number[]; diagnostics: Diagnostic[] }`.\n- Rust: `pub fn evaluate(src: &str) -> EvaluateResult { results: Vec<f64>, diagnostics: Vec<Diagnostic> }`.",

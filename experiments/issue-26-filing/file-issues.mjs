@@ -77,7 +77,7 @@ function renderBody(spec) {
   lines.push('');
   lines.push(`## References`);
   lines.push(`- Source case study: [\`docs/case-studies/issue-26/\`](https://github.com/link-foundation/relative-meta-logic/tree/main/docs/case-studies/issue-26)`);
-  lines.push(`- Comparison docs: [CONCEPTS-COMPARISION.md](https://github.com/link-foundation/relative-meta-logic/blob/main/docs/CONCEPTS-COMPARISION.md), [FEATURE-COMPARISION.md](https://github.com/link-foundation/relative-meta-logic/blob/main/docs/FEATURE-COMPARISION.md)`);
+  lines.push(`- Comparison docs: [CONCEPTS-COMPARISON.md](https://github.com/link-foundation/relative-meta-logic/blob/main/docs/CONCEPTS-COMPARISON.md), [FEATURE-COMPARISON.md](https://github.com/link-foundation/relative-meta-logic/blob/main/docs/FEATURE-COMPARISON.md)`);
   lines.push(`- Planning issue: #26`);
   lines.push('');
   lines.push(`## Dependencies`);

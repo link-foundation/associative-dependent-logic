@@ -4,8 +4,13 @@
 
 **Source comparisons used as input:**
 
-- [Core Concept Comparison](../../CONCEPTS-COMPARISION.md)
-- [Product Feature Comparison](../../FEATURE-COMPARISION.md)
+- [Core Concept Comparison](../../CONCEPTS-COMPARISON.md)
+- [Product Feature Comparison](../../FEATURE-COMPARISON.md)
+
+The original issue linked the historical misspelled paths
+`CONCEPTS-COMPARISION.md` and `FEATURE-COMPARISION.md`; those files now exist
+only as compatibility stubs that point to the corrected `*-COMPARISON.md`
+documents above.
 
 **Companion artifacts in this folder:**
 
@@ -13,6 +18,7 @@
 - [`gap-matrix.md`](./gap-matrix.md) — Per-row distillation of each gap from the comparison docs into a planned issue.
 - [`issue-plan.md`](./issue-plan.md) — The full proposed GitHub issue plan with phases, labels, dependencies, and templates.
 - [`research.md`](./research.md) — Notes on related libraries, prior art, and references that inform implementation.
+- [`completion-audit.md`](./completion-audit.md) — Post-merge audit showing that the filed plan issues are closed and covered by the repository test gates.
 
 ## Executive Summary
 
@@ -20,7 +26,7 @@ Issue #26 asks for a complete development plan that turns Relative Meta-Logic (R
 
 The plan must:
 
-1. Use the existing [concept](../../CONCEPTS-COMPARISION.md) and [feature](../../FEATURE-COMPARISION.md) comparison tables as the source of truth for *every* gap.
+1. Use the existing [concept](../../CONCEPTS-COMPARISON.md) and [feature](../../FEATURE-COMPARISON.md) comparison tables as the source of truth for *every* gap.
 2. Produce one GitHub issue per gap, each with concrete acceptance criteria.
 3. Wire up issue dependencies (`blocks` / `blocked by`) so the dependency graph is traversable in GitHub.
 4. Apply consistent labels (existing repo labels: `bug`, `documentation`, `enhancement`, `good first issue`, `help wanted`, `question`; plus a small set of new labels proposed in [`issue-plan.md`](./issue-plan.md)) and group issues into **phases** so the order of work is obvious.
@@ -29,9 +35,14 @@ The plan must:
 
 This case study captures the analysis **and the filed plan**. As of the latest update of PR #27, every planned issue (A1–J7 plus the J-EPIC tracking issue) has been filed on GitHub with full body, labels, and `Depends on` / `Blocks` cross-references — see the [filed-issue index in `issue-plan.md`](./issue-plan.md#filed-issue-index) and tracking epic [#95](https://github.com/link-foundation/relative-meta-logic/issues/95).
 
+After merging the current default branch into PR #27, all 66 planned feature
+issues and the J-EPIC tracking issue are closed. The completion state is
+recorded in [`completion-audit.md`](./completion-audit.md) and the dedicated
+[#95 case study](../issue-95/README.md).
+
 ## Scope of the Plan
 
-The plan covers everything visible in [CONCEPTS-COMPARISION.md](../../CONCEPTS-COMPARISION.md) and [FEATURE-COMPARISION.md](../../FEATURE-COMPARISION.md) where RML is currently `Part`, `No`, or weaker than at least one peer system. That includes:
+The plan covers everything visible in [CONCEPTS-COMPARISON.md](../../CONCEPTS-COMPARISON.md) and [FEATURE-COMPARISON.md](../../FEATURE-COMPARISON.md) where RML is currently `Part`, `No`, or weaker than at least one peer system. That includes:
 
 | Area | Source columns | What's missing |
 |------|----------------|----------------|
@@ -95,7 +106,7 @@ The issue body raises eight distinct requirements. They are tracked atomically i
 
 | Risk / question | Mitigation |
 |-----------------|------------|
-| Filing 80+ issues at once will spam watchers and obscure priorities. | All 67 planned issues are filed in topological order so each `Depends on #N` reference resolves immediately. The tracking epic [#95](https://github.com/link-foundation/relative-meta-logic/issues/95) consolidates them so watchers can subscribe once. |
+| Filing the whole plan at once will spam watchers and obscure priorities. | All 66 planned feature issues and the tracking epic are filed in topological order so each `Depends on #N` reference resolves immediately. The tracking epic [#95](https://github.com/link-foundation/relative-meta-logic/issues/95) consolidates them so watchers can subscribe once. |
 | Some "gaps" in the comparison docs reflect design choices, not omissions (e.g. RML accepts self-reference where Lean rejects it). | Each issue marks whether it is a *parity* goal or a *deliberate divergence* goal. Some Lean/Rocq features will not be ported because they conflict with RML's paradox-tolerant semantics. |
 | Self-reimplementation may run into RML's current evaluator limits (no full normalization, prototype types). | Phase J explicitly depends on phases B, C, D, and E. If phase D cannot deliver full normalization for all link forms, phase J ships an *interpretive* (small-step) self-evaluator instead of a *compiled* one and documents the limitation. |
 | Bridges to mature provers (Lean/Rocq/Isabelle) require domain expertise the project may not have in-house. | Phase F issues are explicitly marked `help wanted` and start with an export pilot to a single target (Lean) before generalizing. |
@@ -113,3 +124,4 @@ The issue body raises eight distinct requirements. They are tracked atomically i
 | LiNo style guidance for English-readable links | Done — see [`issue-plan.md`](./issue-plan.md#naming-and-template-conventions) |
 | External research and prior-art references collected | Done — see [`research.md`](./research.md) |
 | Issues actually filed on GitHub with proper labels and dependencies | Done — see [filed-issue index](./issue-plan.md#filed-issue-index) and tracking epic [#95](https://github.com/link-foundation/relative-meta-logic/issues/95) |
+| Filed plan fulfilled on the current default branch | Done — see [`completion-audit.md`](./completion-audit.md) |

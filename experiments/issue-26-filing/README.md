@@ -1,6 +1,6 @@
 # Issue-26 filing tool
 
-Files the planned issues from `../../docs/case-studies/issue-26/issue-plan.md` on GitHub. Used once to file 67 issues + 1 tracking epic from PR #27 (issue #26). Kept here so the same workflow can be re-run for future plans (just edit `issues.json` and run `file-issues.mjs`).
+Files the planned issues from `../../docs/case-studies/issue-26/issue-plan.md` on GitHub. Used once to file 66 planned feature issues + 1 tracking epic from PR #27 (issue #26). Kept here so the same workflow can be re-run for future plans (just edit `issues.json` and run `file-issues.mjs`).
 
 ## Files
 
