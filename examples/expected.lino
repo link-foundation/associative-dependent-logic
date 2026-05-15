@@ -31,6 +31,10 @@
 
 (flipped-axioms.lino: 0.5 1)
 
+(foundation-boolean-kleene.lino: 0.5 0.6 0.4 0.6 0.4 0.6 0.5 0.6)
+
+(foundation-with-min.lino: 0.5 0.4 0.5)
+
 (fuzzy-logic.lino: 0.8 0.3 0.3 0.8 0.19999999999999996 0.6)
 
 (isabelle-typed-fragment.lino: 1)

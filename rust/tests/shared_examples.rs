@@ -176,6 +176,10 @@ fn every_example_runs_and_matches_expected_outputs() {
                     "{}[{}]: expected numeric {}, got type {:?}",
                     file, i, en, s
                 )),
+                (RunResult::Foundation(report), _) => failures.push(format!(
+                    "{}[{}]: unexpected foundation report for {}",
+                    file, i, report.active_foundation
+                )),
             }
         }
     }

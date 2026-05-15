@@ -175,6 +175,10 @@ fn every_corpus_file_runs_and_matches_expected_outputs() {
                     "{}[{}]: expected numeric {}, got structured {:?}",
                     file, i, en, s
                 )),
+                (RunResult::Foundation(report), _) => failures.push(format!(
+                    "{}[{}]: unexpected foundation report for {}",
+                    file, i, report.active_foundation
+                )),
             }
         }
     }

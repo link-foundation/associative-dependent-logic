@@ -1,0 +1,367 @@
+# RML root-construct registry & foundation declarations, encoded as links
+# for the self-bootstrap layer.
+#
+# Every entry is data. Evaluating this file with the host evaluator
+# populates `Env.rootConstructs` and `Env.foundations` with the same
+# descriptors that the host seeds on construction, plus the named
+# alternative foundations (boolean-classical, kleene-three-valued).
+#
+# Foundations are scopes that swap operator semantics without altering
+# the kernel: `(with-foundation <name> ...)` evaluates a body under the
+# named foundation, and `(foundation-report)` prints a trust summary.
+
+(namespace self)
+
+(Foundation: (Type 0) Foundation)
+(Root-construct: (Type 0) Root-construct)
+(Trust-status: (Type 0) Trust-status)
+
+# ---------------------------------------------------------------------------
+# Trust statuses recognized by `(foundation-report)`. The host evaluator
+# rejects unknown values to keep reports consistent across implementations.
+# ---------------------------------------------------------------------------
+
+(trust-status host-primitive reads implemented-by-host-kernel)
+(trust-status host-derived reads defined-in-host-from-other-host-primitives)
+(trust-status external-trusted reads relies-on-external-binary-such-as-smt-or-atp)
+(trust-status user-configurable reads runtime-knobs-the-user-can-tune)
+(trust-status links-encoded reads description-lives-in-self-bootstrap-as-data)
+(trust-status links-defined reads behaviour-derived-by-evaluating-self-rules)
+(trust-status user-overridden reads replaced-by-user-foundation)
+(trust-status planned reads not-yet-implemented)
+
+# ---------------------------------------------------------------------------
+# Parsing / LiNo layer.
+# ---------------------------------------------------------------------------
+
+(root-construct lino-parser
+  (kind parser)
+  (status external-trusted)
+  (encoded-as links-notation)
+  (pure-links-ready no))
+
+(root-construct canonical-printer
+  (kind printer)
+  (status host-primitive)
+  (encoded-as key-of))
+
+(root-construct structural-equality
+  (kind equality-layer)
+  (status host-primitive)
+  (encoded-as is-structurally-same))
+
+# ---------------------------------------------------------------------------
+# Numeric layer. Arithmetic and ordered comparison are host primitives that
+# all foundations currently delegate to. Alternative foundations may pin
+# the numeric domain to a finite set (e.g. {0,1} for boolean-classical).
+# ---------------------------------------------------------------------------
+
+(root-construct decimal-12-arithmetic
+  (kind numeric-domain)
+  (status host-primitive)
+  (encoded-as dec-round)
+  (pure-links-ready no))
+
+(root-construct +
+  (kind arithmetic-operator)
+  (status host-primitive)
+  (depends-on decimal-12-arithmetic))
+
+(root-construct -
+  (kind arithmetic-operator)
+  (status host-primitive)
+  (depends-on decimal-12-arithmetic))
+
+(root-construct *
+  (kind arithmetic-operator)
+  (status host-primitive)
+  (depends-on decimal-12-arithmetic))
+
+(root-construct /
+  (kind arithmetic-operator)
+  (status host-primitive)
+  (depends-on decimal-12-arithmetic))
+
+(root-construct <
+  (kind comparison-operator)
+  (status host-primitive)
+  (depends-on decimal-12-arithmetic))
+
+(root-construct <=
+  (kind comparison-operator)
+  (status host-primitive)
+  (depends-on decimal-12-arithmetic))
+
+# ---------------------------------------------------------------------------
+# Truth / aggregator layer. Aggregators are host-primitive but operators
+# that compose them (and / or / both / neither) are user-configurable: a
+# foundation can rebind them by declaring `(defines and avg)` etc.
+# ---------------------------------------------------------------------------
+
+(root-construct truth-range
+  (kind truth-domain)
+  (status user-configurable)
+  (encoded-as Env.lo Env.hi))
+
+(root-construct valence
+  (kind truth-domain)
+  (status user-configurable)
+  (encoded-as Env.valence))
+
+(root-construct clamp
+  (kind truth-normalization)
+  (status host-primitive)
+  (encoded-as Env.clamp))
+
+(root-construct quantize
+  (kind truth-normalization)
+  (status host-primitive)
+  (encoded-as quantize))
+
+(root-construct true  (kind truth-constant) (status user-configurable))
+(root-construct false (kind truth-constant) (status user-configurable))
+(root-construct unknown   (kind truth-constant) (status user-configurable))
+(root-construct undefined (kind truth-constant) (status user-configurable))
+
+(root-construct avg     (kind aggregator) (status host-primitive))
+(root-construct min     (kind aggregator) (status host-primitive))
+(root-construct max     (kind aggregator) (status host-primitive))
+(root-construct product (kind aggregator) (status host-primitive))
+(root-construct probabilistic_sum (kind aggregator) (status host-primitive))
+
+# Logical operators are bound to aggregators via `(<op>: <aggregator>)`
+# top-level declarations, so a foundation can pick e.g. Łukasiewicz vs.
+# Gödel semantics for `and` without touching the kernel.
+
+(root-construct not
+  (kind truth-operator)
+  (status user-configurable)
+  (depends-on truth-range))
+
+(root-construct and
+  (kind truth-operator)
+  (status user-configurable)
+  (depends-on avg))
+
+(root-construct or
+  (kind truth-operator)
+  (status user-configurable)
+  (depends-on max))
+
+(root-construct both
+  (kind truth-operator)
+  (status user-configurable)
+  (depends-on avg))
+
+(root-construct neither
+  (kind truth-operator)
+  (status user-configurable)
+  (depends-on product))
+
+# ---------------------------------------------------------------------------
+# Equality layer. Four distinct host primitives cooperate so that user
+# foundations can override one without disturbing the others.
+# ---------------------------------------------------------------------------
+
+(root-construct =
+  (kind equality-layer)
+  (status host-primitive)
+  (depends-on structural-equality decimal-12-arithmetic))
+
+(root-construct !=
+  (kind equality-layer)
+  (status host-derived)
+  (depends-on = not))
+
+(root-construct assigned-equality
+  (kind equality-layer)
+  (status host-primitive))
+
+(root-construct numeric-equality
+  (kind equality-layer)
+  (status host-primitive)
+  (depends-on decimal-12-arithmetic))
+
+(root-construct definitional-equality
+  (kind equality-layer)
+  (status host-primitive)
+  (depends-on beta-reduction structural-equality))
+
+# ---------------------------------------------------------------------------
+# Typed kernel layer.
+# ---------------------------------------------------------------------------
+
+(root-construct Type
+  (kind universe-form)
+  (status host-primitive)
+  (pure-links-ready no)
+  (planned-as links-defined))
+
+(root-construct Prop
+  (kind universe-form)
+  (status host-primitive)
+  (depends-on Type))
+
+(root-construct Pi
+  (kind binder)
+  (status host-primitive)
+  (depends-on Type substitution freshness))
+
+(root-construct lambda
+  (kind binder)
+  (status host-primitive)
+  (depends-on Pi substitution))
+
+(root-construct apply
+  (kind eliminator)
+  (status host-primitive)
+  (depends-on lambda beta-reduction))
+
+(root-construct beta-reduction
+  (kind reduction-rule)
+  (status host-primitive)
+  (depends-on substitution freshness alpha-renaming))
+
+(root-construct substitution
+  (kind meta-operation)
+  (status host-primitive)
+  (encoded-as substitute))
+
+(root-construct freshness
+  (kind meta-operation)
+  (status host-primitive)
+  (encoded-as eval-fresh))
+
+(root-construct alpha-renaming
+  (kind meta-operation)
+  (status host-primitive))
+
+(root-construct normalization
+  (kind reduction-rule)
+  (status host-primitive)
+  (encoded-as normalize-term)
+  (depends-on beta-reduction))
+
+(root-construct whnf
+  (kind reduction-rule)
+  (status host-primitive)
+  (encoded-as whnf-term)
+  (depends-on beta-reduction))
+
+# ---------------------------------------------------------------------------
+# Inductive / coinductive.
+# ---------------------------------------------------------------------------
+
+(root-construct inductive   (kind declaration) (status host-primitive) (depends-on Type Pi))
+(root-construct coinductive (kind declaration) (status host-primitive) (depends-on Type Pi))
+
+# ---------------------------------------------------------------------------
+# Proof / tactics layer.
+# ---------------------------------------------------------------------------
+
+(root-construct proof-replay
+  (kind replay-checker)
+  (status host-primitive)
+  (encoded-as check.mjs))
+
+(root-construct by (kind proof-rule) (status host-primitive))
+(root-construct smt-trusted (kind external-decision) (status external-trusted))
+(root-construct atp-trusted (kind external-decision) (status external-trusted))
+
+# ---------------------------------------------------------------------------
+# Metatheorem layer.
+# ---------------------------------------------------------------------------
+
+(root-construct mode              (kind mode-declaration) (status host-primitive))
+(root-construct totality-check    (kind metatheorem)      (status host-primitive))
+(root-construct coverage-check    (kind metatheorem)      (status host-primitive))
+(root-construct termination-check (kind metatheorem)      (status host-primitive))
+
+# ---------------------------------------------------------------------------
+# Self-bootstrap layer. Each entry points at one of the data files in
+# `lib/self/` that describes the corresponding kernel surface as links.
+# ---------------------------------------------------------------------------
+
+(root-construct self.evaluator
+  (kind self-bootstrap)
+  (status links-encoded)
+  (encoded-as lib/self/evaluator.lino))
+
+(root-construct self.grammar
+  (kind self-bootstrap)
+  (status links-encoded)
+  (encoded-as lib/self/grammar.lino))
+
+(root-construct self.types
+  (kind self-bootstrap)
+  (status links-encoded)
+  (encoded-as lib/self/types.lino))
+
+(root-construct self.operators
+  (kind self-bootstrap)
+  (status links-encoded)
+  (encoded-as lib/self/operators.lino))
+
+(root-construct self.metatheorem
+  (kind self-bootstrap)
+  (status links-encoded)
+  (encoded-as lib/self/metatheorem.lino))
+
+(root-construct self.foundations
+  (kind self-bootstrap)
+  (status links-encoded)
+  (encoded-as lib/self/foundations.lino))
+
+# ---------------------------------------------------------------------------
+# Default foundation. Activated automatically when an Env is created; the
+# host evaluator pre-registers it so backward-compatible programs that never
+# mention `(foundation ...)` keep their current semantics.
+# ---------------------------------------------------------------------------
+
+# NB: the host seeds `default-rml` automatically. We list it here so the
+# self-bootstrap layer documents the same configuration as data, but we
+# omit the `(description ...)` clause so the host-set description is
+# preserved verbatim (which keeps JS/Rust report output byte-identical).
+(foundation default-rml
+  (numeric-domain decimal-12)
+  (truth-domain default-truth)
+  (defines + host-primitive)
+  (defines - host-primitive)
+  (defines * host-primitive)
+  (defines / host-primitive)
+  (defines and avg)
+  (defines or max)
+  (defines both avg)
+  (defines neither product))
+
+# ---------------------------------------------------------------------------
+# Two-valued classical Boolean logic. Numeric domain is {0,1}; operators
+# coincide with `min` / `max` / mirror-around-midpoint, recovering the
+# Łukasiewicz/Boolean strong connectives.
+# ---------------------------------------------------------------------------
+
+(foundation boolean-classical
+  (description two-valued-classical-boolean-logic)
+  (numeric-domain boolean-zero-one)
+  (truth-domain two-valued)
+  (extends default-rml)
+  (defines and min)
+  (defines or max)
+  (defines both min)
+  (defines neither product))
+
+# ---------------------------------------------------------------------------
+# Kleene's strong three-valued logic. Numeric domain is the real unit
+# interval with the explicit constant 1/2 representing `unknown`; `and`
+# uses `min`, `or` uses `max`, and negation mirrors around 1/2.
+# ---------------------------------------------------------------------------
+
+(foundation kleene-three-valued
+  (description strong-kleene-three-valued-logic)
+  (numeric-domain real-unit-interval)
+  (truth-domain three-valued)
+  (extends default-rml)
+  (defines and min)
+  (defines or max)
+  (defines both min)
+  (defines neither product))

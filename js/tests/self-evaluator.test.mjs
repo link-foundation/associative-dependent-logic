@@ -138,6 +138,9 @@ class EncodedEvaluator {
     this.types = new Map();
     this.lambdas = new Map();
     this.ops = new Map();
+    this.foundations = new Map();
+    this.foundationStack = [];
+    this.activeFoundation = 'default-rml';
     this.reinitOps();
   }
 
@@ -206,12 +209,95 @@ class EncodedEvaluator {
     this.reset();
     const results = [];
     for (const form of parseForms(source)) {
-      const value = this.evalNode(form);
-      if (value && typeof value === 'object' && value.query) {
-        results.push(value.value);
-      }
+      this.evalTopForm(form, results);
     }
     return results;
+  }
+
+  evalTopForm(form, results) {
+    if (Array.isArray(form) && form[0] === 'with-foundation') {
+      this.requireRule('(eval (with-foundation name body))');
+      const name = form[1];
+      const entered = this.enterFoundation(name);
+      try {
+        for (let i = 2; i < form.length; i++) {
+          let body = form[i];
+          while (Array.isArray(body) && body.length === 1 && Array.isArray(body[0])) {
+            body = body[0];
+          }
+          this.evalTopForm(body, results);
+        }
+      } finally {
+        if (entered) this.exitFoundation();
+      }
+      return;
+    }
+    if (Array.isArray(form) && form[0] === 'foundation') {
+      this.requireRule('(eval (foundation name details))');
+      this.registerFoundation(form);
+      return;
+    }
+    if (Array.isArray(form) && form[0] === 'root-construct') {
+      this.requireRule('(eval (root-construct name details))');
+      return;
+    }
+    const value = this.evalNode(form);
+    if (value && typeof value === 'object' && value.query) {
+      results.push(value.value);
+    }
+  }
+
+  registerFoundation(form) {
+    if (!Array.isArray(form) || form.length < 2 || typeof form[1] !== 'string') return;
+    const name = form[1];
+    const entry = { name, defines: new Map() };
+    for (let i = 2; i < form.length; i++) {
+      const part = form[i];
+      if (!Array.isArray(part) || part.length === 0) continue;
+      if (part[0] === 'defines' && typeof part[1] === 'string' && typeof part[2] === 'string') {
+        entry.defines.set(part[1], part[2]);
+      } else if (part[0] === 'description' && typeof part[1] === 'string') {
+        entry.description = part[1];
+      } else if (part[0] === 'numeric-domain' && typeof part[1] === 'string') {
+        entry.numericDomain = part[1];
+      }
+    }
+    this.foundations.set(name, entry);
+  }
+
+  enterFoundation(name) {
+    const foundation = this.foundations.get(name);
+    if (!foundation) return false;
+    const snapshot = [];
+    for (const [opName, implName] of foundation.defines) {
+      const prev = this.ops.has(opName) ? this.ops.get(opName) : null;
+      snapshot.push([opName, prev]);
+      let impl;
+      try {
+        impl = this.aggregator(implName);
+      } catch {
+        if (this.ops.has(implName)) {
+          impl = this.ops.get(implName);
+        } else {
+          continue;
+        }
+      }
+      this.ops.set(opName, impl);
+    }
+    this.foundationStack.push({ previous: this.activeFoundation, snapshot });
+    this.activeFoundation = name;
+    return true;
+  }
+
+  exitFoundation() {
+    const frame = this.foundationStack.pop();
+    if (!frame) return;
+    for (let i = frame.snapshot.length - 1; i >= 0; i--) {
+      const [opName, prev] = frame.snapshot[i];
+      if (prev === null) this.ops.delete(opName);
+      else this.ops.set(opName, prev);
+    }
+    this.activeFoundation = frame.previous;
   }
 
   defineForm(head, rhs) {

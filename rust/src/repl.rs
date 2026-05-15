@@ -20,7 +20,7 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
-use crate::{evaluate_with_env, format_diagnostic, Env, EnvOptions, RunResult};
+use crate::{evaluate_with_env, format_diagnostic, format_foundation_report, Env, EnvOptions, RunResult};
 
 /// Outcome of feeding a single line into the REPL.  Output and error are
 /// stringified for the driver to emit; `exit` requests termination.
@@ -54,6 +54,7 @@ fn format_run_result(r: &RunResult) -> String {
     match r {
         RunResult::Num(n) => format_number(*n),
         RunResult::Type(s) => s.clone(),
+        RunResult::Foundation(report) => format_foundation_report(report),
     }
 }
 
