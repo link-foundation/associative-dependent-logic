@@ -5531,6 +5531,81 @@ function evaluate(code, options) {
     return out;
   }
 
+  // Evaluate a single `(with-foundation <name> <body>...)` form. Body forms
+  // are dispatched recursively so nested `(with-foundation ...)`,
+  // `(foundation-report)`, and `(foundation ...)` declarations work the
+  // same way they do at the top level. Anything else falls through to the
+  // regular `evalNode` query path.
+  const runWithFoundation = (form, span) => {
+    if (form.length < 2 || typeof form[1] !== 'string') {
+      diagnostics.push(new Diagnostic({
+        code: 'E062',
+        message: 'with-foundation form must be `(with-foundation <name> <body>...)`',
+        span,
+      }));
+      return;
+    }
+    const fname = form[1];
+    let entered = false;
+    try {
+      env.enterFoundation(fname);
+      entered = true;
+      if (traceEnabled && trace) {
+        trace.push(new TraceEvent({ kind: 'with-foundation/enter', detail: fname, span }));
+      }
+      for (let bi = 2; bi < form.length; bi++) {
+        let body = form[bi];
+        while (Array.isArray(body) && body.length === 1 && Array.isArray(body[0])) {
+          body = body[0];
+        }
+        try {
+          if (Array.isArray(body) && body[0] === 'with-foundation') {
+            runWithFoundation(body, span);
+          } else if (Array.isArray(body)
+              && (body[0] === 'foundation-report' || body[0] === 'foundation-report?')) {
+            const report = env.foundationReport();
+            results.push(report);
+            if (proofs !== null) proofs.push(null);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: 'foundation-report', detail: report.activeFoundation, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === 'foundation') {
+            const foundation = parseFoundationForm(body);
+            env.registerFoundation(foundation);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: 'foundation', detail: foundation.name, span }));
+            }
+          } else {
+            const expanded = expandTemplates(body, env);
+            const res = evalNode(expanded, env);
+            if (res && res.query) {
+              results.push(res.value);
+              if (proofs !== null) proofs.push(null);
+            }
+          }
+        } catch (innerErr) {
+          const diagSpan = (innerErr && innerErr.span) || span;
+          const code = (innerErr && innerErr.code) || 'E000';
+          const message = innerErr && innerErr.message ? innerErr.message : String(innerErr);
+          diagnostics.push(new Diagnostic({ code, message, span: diagSpan }));
+        }
+      }
+    } catch (err) {
+      diagnostics.push(new Diagnostic({
+        code: (err && err.code) || 'E062',
+        message: err && err.message ? err.message : String(err),
+        span: (err && err.span) || span,
+      }));
+    } finally {
+      if (entered) {
+        env.exitFoundation();
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: 'with-foundation/exit', detail: fname, span }));
+        }
+      }
+    }
+  };
+
   for (let idx = 0; idx < forms.length; idx++) {
     let form = forms[idx];
     while (Array.isArray(form) && form.length === 1 && Array.isArray(form[0])) {
@@ -5634,55 +5709,7 @@ function evaluate(code, options) {
       continue;
     }
     if (Array.isArray(form) && form[0] === 'with-foundation') {
-      if (form.length < 2 || typeof form[1] !== 'string') {
-        diagnostics.push(new Diagnostic({
-          code: 'E062',
-          message: 'with-foundation form must be `(with-foundation <name> <body>...)`',
-          span,
-        }));
-        continue;
-      }
-      const fname = form[1];
-      let entered = false;
-      try {
-        env.enterFoundation(fname);
-        entered = true;
-        if (traceEnabled && trace) {
-          trace.push(new TraceEvent({ kind: 'with-foundation/enter', detail: fname, span }));
-        }
-        for (let bi = 2; bi < form.length; bi++) {
-          let body = form[bi];
-          while (Array.isArray(body) && body.length === 1 && Array.isArray(body[0])) {
-            body = body[0];
-          }
-          try {
-            const expanded = expandTemplates(body, env);
-            const res = evalNode(expanded, env);
-            if (res && res.query) {
-              results.push(res.value);
-              if (proofs !== null) proofs.push(null);
-            }
-          } catch (innerErr) {
-            const diagSpan = (innerErr && innerErr.span) || span;
-            const code = (innerErr && innerErr.code) || 'E000';
-            const message = innerErr && innerErr.message ? innerErr.message : String(innerErr);
-            diagnostics.push(new Diagnostic({ code, message, span: diagSpan }));
-          }
-        }
-      } catch (err) {
-        diagnostics.push(new Diagnostic({
-          code: (err && err.code) || 'E062',
-          message: err && err.message ? err.message : String(err),
-          span: (err && err.span) || span,
-        }));
-      } finally {
-        if (entered) {
-          env.exitFoundation();
-          if (traceEnabled && trace) {
-            trace.push(new TraceEvent({ kind: 'with-foundation/exit', detail: fname, span }));
-          }
-        }
-      }
+      runWithFoundation(form, span);
       continue;
     }
     if (Array.isArray(form) && (form[0] === 'foundation-report' || form[0] === 'foundation-report?')) {

@@ -9849,6 +9849,159 @@ fn handle_import(
     None
 }
 
+// Evaluate a single form inside a `(with-foundation ...)` body. Nested
+// `(with-foundation ...)`, `(foundation ...)`, and `(foundation-report)`
+// forms recurse through here so they behave the same way they would at
+// the top level. Everything else is treated as a query expression.
+fn eval_foundation_body_form(
+    form: Node,
+    span: &Span,
+    env: &mut Env,
+    diagnostics: &mut Vec<Diagnostic>,
+    results: &mut Vec<RunResult>,
+    proofs: &mut Option<Vec<Option<Node>>>,
+    options: &EvaluateOptions,
+) {
+    let mut form = form;
+    loop {
+        match form {
+            Node::List(ref children) if children.len() == 1 => {
+                if let Node::List(_) = &children[0] {
+                    form = children[0].clone();
+                } else {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+
+    if let Node::List(children) = &form {
+        if let Some(Node::Leaf(head)) = children.first() {
+            if head == "with-foundation" {
+                if children.len() < 2 {
+                    diagnostics.push(Diagnostic::new(
+                        "E062",
+                        "with-foundation form must be `(with-foundation <name> <body>...)`",
+                        span.clone(),
+                    ));
+                    return;
+                }
+                let fname = match &children[1] {
+                    Node::Leaf(s) if !s.is_empty() => s.clone(),
+                    _ => {
+                        diagnostics.push(Diagnostic::new(
+                            "E062",
+                            "with-foundation requires a foundation name",
+                            span.clone(),
+                        ));
+                        return;
+                    }
+                };
+                if let Err(message) = env.enter_foundation(&fname) {
+                    diagnostics.push(Diagnostic::new("E062", message, span.clone()));
+                    return;
+                }
+                if options.trace {
+                    env.trace_events.push(TraceEvent::new(
+                        "with-foundation/enter",
+                        fname.clone(),
+                        span.clone(),
+                    ));
+                }
+                let bodies: Vec<Node> = children[2..].to_vec();
+                for body in bodies {
+                    eval_foundation_body_form(
+                        body, span, env, diagnostics, results, proofs, options,
+                    );
+                }
+                env.exit_foundation();
+                if options.trace {
+                    env.trace_events.push(TraceEvent::new(
+                        "with-foundation/exit",
+                        fname,
+                        span.clone(),
+                    ));
+                }
+                return;
+            }
+            if head == "foundation" {
+                match parse_foundation_form(&form) {
+                    Ok(foundation) => {
+                        let name = foundation.name.clone();
+                        if let Err(message) = env.register_foundation(foundation) {
+                            diagnostics.push(Diagnostic::new("E061", message, span.clone()));
+                        } else if options.trace {
+                            env.trace_events.push(TraceEvent::new(
+                                "foundation",
+                                name,
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E061", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "root-construct" {
+                match parse_root_construct_form(&form) {
+                    Ok(descriptor) => {
+                        let name = descriptor.name.clone();
+                        if let Err(message) = env.register_root_construct(descriptor) {
+                            diagnostics.push(Diagnostic::new("E060", message, span.clone()));
+                        } else if options.trace {
+                            env.trace_events.push(TraceEvent::new(
+                                "root-construct",
+                                name,
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E060", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "foundation-report" || head == "foundation-report?" {
+                let report = env.foundation_report();
+                if options.trace {
+                    env.trace_events.push(TraceEvent::new(
+                        "foundation-report",
+                        report.active_foundation.clone(),
+                        span.clone(),
+                    ));
+                }
+                results.push(RunResult::Foundation(report));
+                if let Some(p) = proofs.as_mut() {
+                    p.push(None);
+                }
+                return;
+            }
+        }
+    }
+
+    let inner_result = catch_unwind(AssertUnwindSafe(|| {
+        let mut stack = Vec::new();
+        let expanded = expand_templates(&form, env, &mut stack);
+        let eval_res = eval_node(&expanded, env);
+        (expanded, eval_res)
+    }));
+    match inner_result {
+        Ok((_, eval_res)) => match eval_res {
+            EvalResult::Query(v) => results.push(RunResult::Num(v)),
+            EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
+            _ => {}
+        },
+        Err(payload) => {
+            let (code, message) = decode_panic_payload(&payload);
+            diagnostics.push(Diagnostic::new(&code, message, span.clone()));
+        }
+    }
+}
+
 fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &EvaluateOptions, ctx: &mut ImportContext) -> EvaluateResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let extracted_literate = if is_literate_lino_path(file) {
@@ -10132,41 +10285,17 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                             span.clone(),
                         ));
                     }
-                    for body in &children[2..] {
-                        let mut inner = body.clone();
-                        loop {
-                            match inner {
-                                Node::List(ref nested) if nested.len() == 1 => {
-                                    if let Node::List(_) = &nested[0] {
-                                        inner = nested[0].clone();
-                                    } else {
-                                        break;
-                                    }
-                                }
-                                _ => break,
-                            }
-                        }
-                        let inner_result = catch_unwind(AssertUnwindSafe(|| {
-                            let mut stack = Vec::new();
-                            let expanded = expand_templates(&inner, env, &mut stack);
-                            let eval_res = eval_node(&expanded, env);
-                            (expanded, eval_res)
-                        }));
-                        match inner_result {
-                            Ok((_, eval_res)) => match eval_res {
-                                EvalResult::Query(v) => results.push(RunResult::Num(v)),
-                                EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
-                                _ => {}
-                            },
-                            Err(payload) => {
-                                let (code, message) = decode_panic_payload(&payload);
-                                diagnostics.push(Diagnostic::new(
-                                    &code,
-                                    message,
-                                    span.clone(),
-                                ));
-                            }
-                        }
+                    let bodies: Vec<Node> = children[2..].to_vec();
+                    for body in bodies {
+                        eval_foundation_body_form(
+                            body,
+                            &span,
+                            env,
+                            &mut diagnostics,
+                            &mut results,
+                            &mut proofs,
+                            options,
+                        );
                     }
                     env.exit_foundation();
                     if options.trace {

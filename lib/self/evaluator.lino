@@ -244,6 +244,24 @@
 (rule (eval (expression of type))
   (type-membership expression type))
 
+# Foundation and root-construct forms. `(root-construct ...)` and
+# `(foundation ...)` declarations are data: they populate the registry
+# `(foundation-report)` consults. `(with-foundation ...)` swaps the
+# active operator implementations while evaluating the body, then
+# restores them on exit so legacy programs are unaffected.
+
+(rule (eval (root-construct name details))
+  (register-root-construct name details))
+
+(rule (eval (foundation name details))
+  (register-foundation name details))
+
+(rule (eval (with-foundation name body))
+  (evaluate-body-under-foundation name body))
+
+(rule (eval (foundation-report))
+  (query (foundation-report-snapshot)))
+
 # Meta-evaluator declarations used by tests and future self-hosted work.
 
 (rule (host-evaluator-presentation rml-evaluator)
