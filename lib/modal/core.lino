@@ -1,0 +1,117 @@
+# Modal logic standard library.
+#
+# This file configures Boolean connectives for normal modal logic and exports
+# modal operators, K/T/S4/S5 axiom schemas, and Kripke-frame interpretation
+# templates under the `modal` namespace. Import it with an alias such as:
+#
+#   (import "lib/modal/core.lino" as ml)
+#   (? (ml.axiom-k p q))
+#   (? (ml.necessarily-at current p))
+
+(namespace modal)
+
+(valence: 2)
+(and: min)
+(or: max)
+(not: not)
+(!=: not =)
+
+(template (implies antecedent consequent)
+  (modal.or (modal.not antecedent) consequent))
+
+(template (necessarily proposition)
+  (necessarily proposition))
+
+(template (possibly proposition)
+  (possibly proposition))
+
+(template (axiom-k antecedent consequent)
+  (modal.implies
+    (modal.necessarily (modal.implies antecedent consequent))
+    (modal.implies
+      (modal.necessarily antecedent)
+      (modal.necessarily consequent))))
+
+(template (axiom-t proposition)
+  (modal.implies (modal.necessarily proposition) proposition))
+
+(template (axiom-s4 proposition)
+  (modal.implies
+    (modal.necessarily proposition)
+    (modal.necessarily (modal.necessarily proposition))))
+
+(template (axiom-s5 proposition)
+  (modal.implies
+    (modal.possibly proposition)
+    (modal.necessarily (modal.possibly proposition))))
+
+(template (holds possible-world proposition)
+  (holds possible-world proposition))
+
+(template (accessible source target)
+  (accessible source target))
+
+(template (valid proposition)
+  (forall (World possible-world)
+    (modal.holds possible-world proposition)))
+
+(template (necessarily-at current-world proposition)
+  (forall (World accessible-world)
+    (modal.implies
+      (modal.accessible current-world accessible-world)
+      (modal.holds accessible-world proposition))))
+
+(template (possibly-at current-world proposition)
+  (exists (World accessible-world)
+    (modal.and
+      (modal.accessible current-world accessible-world)
+      (modal.holds accessible-world proposition))))
+
+(template (reflexive-frame accessibility)
+  (forall (World possible-world)
+    (accessibility possible-world possible-world)))
+
+(template (transitive-frame accessibility)
+  (forall (World source)
+    (forall (World middle)
+      (forall (World target)
+        (modal.implies
+          (modal.and
+            (accessibility source middle)
+            (accessibility middle target))
+          (accessibility source target))))))
+
+(template (symmetric-frame accessibility)
+  (forall (World source)
+    (forall (World target)
+      (modal.implies
+        (accessibility source target)
+        (accessibility target source)))))
+
+(template (euclidean-frame accessibility)
+  (forall (World source)
+    (forall (World left)
+      (forall (World right)
+        (modal.implies
+          (modal.and
+            (accessibility source left)
+            (accessibility source right))
+          (accessibility left right))))))
+
+(template (frame-k accessibility)
+  true)
+
+(template (frame-t accessibility)
+  (modal.reflexive-frame accessibility))
+
+(template (frame-s4 accessibility)
+  (modal.and
+    (modal.reflexive-frame accessibility)
+    (modal.transitive-frame accessibility)))
+
+(template (frame-s5 accessibility)
+  (modal.and
+    (modal.reflexive-frame accessibility)
+    (modal.and
+      (modal.symmetric-frame accessibility)
+      (modal.transitive-frame accessibility))))

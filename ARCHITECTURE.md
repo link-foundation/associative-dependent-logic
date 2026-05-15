@@ -9,30 +9,40 @@ This document describes the internal architecture of **Relative Meta-Logic (RML,
 ├── ARCHITECTURE.md          # This file
 ├── README.md                # Project overview, syntax, and examples
 ├── LICENSE                  # Unlicense (public domain)
+├── examples/                # Shared .lino knowledge bases (run by both langs)
+│   ├── README.md
+│   ├── expected.lino        # Canonical outputs both implementations must match (Links Notation)
+│   ├── classical-logic.lino
+│   ├── propositional-logic.lino
+│   ├── fuzzy-logic.lino
+│   ├── ternary-kleene.lino
+│   ├── belnap-four-valued.lino
+│   ├── liar-paradox.lino
+│   ├── liar-paradox-balanced.lino
+│   ├── bayesian-inference.lino
+│   ├── bayesian-network.lino
+│   ├── markov-chain.lino
+│   ├── markov-network.lino
+│   ├── self-reasoning.lino
+│   ├── dependent-types.lino
+│   ├── demo.lino
+│   └── flipped-axioms.lino
 ├── js/                      # JavaScript implementation
 │   ├── package.json
 │   ├── src/
-│   │   └── rml-links.mjs   # Core implementation (~370 lines)
-│   ├── test/
-│   │   └── adl-links.test.mjs  # 122 tests
-│   ├── demo.lino
-│   ├── flipped-axioms.lino
-│   └── examples/
-│       ├── liar-paradox.lino
-│       ├── liar-paradox-balanced.lino
-│       └── ternary-kleene.lino
+│   │   └── rml-links.mjs    # Core implementation
+│   └── tests/
+│       ├── rml-links.test.mjs
+│       └── shared-examples.test.mjs   # Runs every /examples/*.lino file
 └── rust/                    # Rust implementation
     ├── Cargo.toml
     ├── Cargo.lock
     ├── src/
-    │   ├── lib.rs           # Core implementation + 122 tests
-    │   └── main.rs          # CLI entry point (~25 lines)
-    ├── demo.lino
-    ├── flipped-axioms.lino
-    └── examples/
-        ├── liar-paradox.lino
-        ├── liar-paradox-balanced.lino
-        └── ternary-kleene.lino
+    │   ├── lib.rs           # Core implementation
+    │   └── main.rs          # CLI entry point
+    └── tests/
+        ├── rml_tests.rs
+        └── shared_examples.rs         # Runs every /examples/*.lino file
 ```
 
 Both implementations are equivalent: they pass the same 122 tests and produce identical results for all inputs.
@@ -86,10 +96,106 @@ Each AST node is evaluated recursively by `eval_node` / `evalNode`. The evaluati
 | `(A = B)`, `(A != B)` | Equality/inequality | `(a = b)` |
 | `(not X)` | Prefix negation | `(not 0.5)` |
 | `(op X Y ...)` | Prefix operator application | `(and X Y Z)` |
+| `(Pi (A x) B)` | Dependent product formation | `(Pi (Natural n) Natural)` |
+| `(lambda (A x) body)` | Lambda formation | `(lambda (Natural x) x)` |
+| `(apply f x)` | Lambda application by beta-reduction | `(apply identity zero)` |
+| `(subst term x replacement)` | Capture-avoiding substitution | `(subst (x + 0.1) x 0.2)` |
+| `(fresh x in body)` | Temporarily introduce a fresh scoped variable | `(fresh x in (x of Natural))` |
+| `(whnf expr)` | Weak-head normal form (spine reduction only) | `(whnf (apply identity zero))` |
+| `(nf expr)`, `(normal-form expr)` | Full beta-normal form | `(normal-form (apply (compose succ succ) zero))` |
+| `(domain name form...)` | Domain plugin decision block | `(domain automatic-sequences (theorem thue-morse-cube-free))` |
+| `(expr of Type)` | Type membership check | `(zero of Natural)` |
+| `(type of expr)` | Type query | `(type of zero)` |
+
+The typed-kernel rules are specified in [docs/KERNEL.md](./docs/KERNEL.md).
 
 ### Stage 4: Output
 
-Only query expressions `(? ...)` produce output. Their evaluated truth values are collected and returned as an array of numbers.
+Only query expressions `(? ...)` produce output. Their evaluated truth
+values are collected and returned as an array of numbers; `(type of ...)`
+queries return type strings in the typed runner APIs, and direct `(subst ...)`
+queries return the substituted link string.
+
+## Public Library API
+
+Both implementations expose the reusable parser, AST, evaluator, quantization, decimal rounding, binding, substitution, tactic engine, and runner helpers as library APIs. The JavaScript module exports camelCase names, while the Rust crate exposes snake_case equivalents where applicable.
+
+The tactic engine keeps proof steps as links:
+
+| JavaScript | Rust | Purpose |
+|------------|------|---------|
+| `runTactics(state, tactics, options)` | `run_tactics(state, tactics)` / `run_tactics_with_options(...)` | Apply link tactics to a proof state and return the updated state plus diagnostics. |
+| `rewrite(goal, eq)` / `simplify(goal, rules)` | `rewrite(...)` / `simplify(...)` | Apply a single equality rewrite or a guarded rewrite set directly. |
+| `goalToTptp(goal)` / `parseAtpStatus(output)` | `goal_to_tptp(goal)` / `parse_atp_status(output)` | Export first-order proof goals to TPTP FOF and classify ATP SZS statuses. |
+| Goal state | `ProofState` / `ProofGoal` | Open goals, local context, and successful tactic links. |
+| `Env.registerDomainPlugin(name, plugin)` | `Env::register_domain_plugin(name, plugin)` | Register a `(domain <name> ...)` decision procedure. |
+
+Built-in tactics are `reflexivity`, `symmetry`, `transitivity`, `induction`,
+`suppose`, `introduce`, `by`, `rewrite`, `simplify`, `smt`, `atp`, and `exact`.
+`(by smt)` invokes a configured SMT-LIB solver and records successful external
+decisions as `(by smt-trusted <solver>)`. `(by atp)` invokes a configured TPTP
+FOF ATP and records successful SZS proving statuses as `(by atp-trusted
+<solver>)`. A failed tactic emits `E039` and includes the current goal in the
+diagnostic message.
+
+The default environment also registers the `automatic-sequences` domain
+plugin. It currently ships the classic `thue-morse-cube-free` decision and
+records it as a truth-valued theorem when a program contains:
+
+```lino
+(domain automatic-sequences
+  (theorem thue-morse-cube-free))
+```
+
+For consumers that start from a selected natural-language interpretation rather than a complete `.lino` file, the library also exposes a meta-expression adapter:
+
+| JavaScript | Rust | Purpose |
+|------------|------|---------|
+| `formalizeSelectedInterpretation(request)` | `formalize_selected_interpretation(request)` | Convert a selected interpretation plus explicit dependencies into either an executable RML formalization or a partial result with unknowns. |
+| `evaluateFormalization(formalization)` | `evaluate_formalization(&formalization)` | Deterministically evaluate executable formalizations and preserve partial results for unsupported or underspecified claims. |
+
+The adapter currently supports explicit arithmetic equality and arithmetic value questions, plus direct LiNo/RML expressions. Real-world claims such as `moon orbits the Sun` remain non-computable until a caller provides selected entities, relations, evidence sources, and a formal shape.
+
+### Program Extraction
+
+Both implementations expose program extraction for the typed, non-probabilistic
+lambda fragment:
+
+| JavaScript | Rust | Purpose |
+|------------|------|---------|
+| `extractProgram(code, target)` | `extract_program(text, target)` | Compile named typed lambda definitions to JavaScript or Rust source. |
+
+The CLI entry point is `rml extract <js|rust> <file.lino>`. Extraction erases
+LiNo type annotations, emits named functions, lowers `apply` spines and prefix
+calls, and converts equality queries into generated target-language tests. It
+rejects probability assignments and logical/probabilistic operators because
+those forms require the RML evaluator rather than a direct function target.
+
+### Structured Diagnostics
+
+The `evaluate()` entry point in both implementations returns a structured
+result instead of throwing or panicking:
+
+| JavaScript | Rust |
+|------------|------|
+| `evaluate(code, options?)` → `{ results, diagnostics }` | `evaluate(text, file, options)` → `EvaluateResult { results, diagnostics }` |
+
+Each `Diagnostic` carries a stable error code (`E001`, `E002`, …), a
+human-readable message, and a 1-based source span (`{ file, line, col, length }`).
+Errors do not abort evaluation: independent forms continue to be processed
+after a failing one, so a single bad line does not silence valid queries
+elsewhere in the input.
+
+The Rust implementation bridges internal `panic!`s into diagnostics via
+`std::panic::catch_unwind`, with the default panic hook silenced for the
+duration of the call so stack traces never leak to stderr.
+
+The CLIs format diagnostics as `<file>:<line>:<col>: <CODE>: <message>`
+with the source line and a caret beneath the offending column, and exit
+non-zero whenever any diagnostic is emitted.
+
+See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md) for the complete code
+table and instructions for adding new codes.
 
 ## Environment (`Env`)
 
@@ -101,6 +207,12 @@ The environment holds all mutable state during evaluation:
 - **`lo`, `hi`**: Truth value range bounds. Default: `[0, 1]`.
 - **`valence`**: Number of discrete truth levels. Default: `0` (continuous).
 - **`ops`**: Map from operator names to operator implementations.
+- **`types`**: Map from expression keys to type-expression keys.
+- **`lambdas`**: Map from lambda names to their parameter, parameter type, and body.
+- **`domain_plugins` / `domainPlugins`**: Registry of domain-specific decision
+  procedures used by `(domain <name> ...)`.
+- **`automatic_sequence_decisions` / `automaticSequenceDecisions`**: Decisions
+  recorded by the built-in automatic-sequences plugin.
 
 ### Truth Constants
 

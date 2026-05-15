@@ -1,0 +1,161 @@
+# Arithmetic standard library.
+#
+# This file declares Peano naturals, validates total symbolic relations for
+# addition and order, and exports Peano and decimal arithmetic templates under
+# the `arithmetic` namespace. Import it with an alias such as:
+#
+#   (import "lib/arithmetic/core.lino" as ar)
+#   (? ((plus zero zero) = zero))
+#   (? (ar.less-than zero (succ zero)))
+#   (? (ar.decimal-sum-equals 0.1 0.2 0.3))
+
+(inductive Natural
+  (constructor zero)
+  (constructor (succ (Pi (Natural n) Natural))))
+
+(zero: 0)
+
+(mode plus-relation +input +input -output)
+(relation plus-relation
+  (plus-relation zero n n)
+  (plus-relation (succ m) n (succ (plus-relation m n))))
+(total plus-relation)
+(coverage plus-relation)
+
+(mode less-than-relation +input +input -output)
+(relation less-than-relation
+  (less-than-relation zero zero false)
+  (less-than-relation zero (succ n) true)
+  (less-than-relation (succ m) zero false)
+  (less-than-relation (succ m) (succ n) (less-than-relation m n)))
+(total less-than-relation)
+(coverage less-than-relation)
+
+(mode less-than-or-equal-relation +input +input -output)
+(relation less-than-or-equal-relation
+  (less-than-or-equal-relation zero n true)
+  (less-than-or-equal-relation (succ m) zero false)
+  (less-than-or-equal-relation (succ m) (succ n) (less-than-or-equal-relation m n)))
+(total less-than-or-equal-relation)
+(coverage less-than-or-equal-relation)
+
+(define plus-recursive
+  (case (zero n) n)
+  (case ((succ m) n) (succ (plus-recursive m n))))
+(terminating plus-recursive)
+
+(define less-than-recursive
+  (case (zero zero) false)
+  (case (zero (succ n)) true)
+  (case ((succ m) zero) false)
+  (case ((succ m) (succ n)) (less-than-recursive m n)))
+(terminating less-than-recursive)
+
+(define less-than-or-equal-recursive
+  (case (zero n) true)
+  (case ((succ m) zero) false)
+  (case ((succ m) (succ n)) (less-than-or-equal-recursive m n)))
+(terminating less-than-or-equal-recursive)
+
+(template (succ n)
+  (n + 1))
+
+(template (plus left right)
+  (left + right))
+
+(template (less-than left right)
+  (left < right))
+
+(template (less-than-or-equal left right)
+  (left <= right))
+
+(namespace arithmetic)
+
+(valence: 2)
+(and: min)
+(or: max)
+(not: not)
+(!=: not =)
+
+(Natural: (Type 0) Natural)
+(zero: Natural zero)
+(zero: 0)
+(succ: (Pi (Natural n) Natural))
+
+(template (succ n)
+  (n + 1))
+
+(template (successor n)
+  (succ n))
+
+(template (plus left right)
+  (left + right))
+
+(template (less-than left right)
+  (left < right))
+
+(template (less-than-or-equal left right)
+  (left <= right))
+
+(template (implies antecedent consequent)
+  (arithmetic.or (arithmetic.not antecedent) consequent))
+
+(template (iff left right)
+  (arithmetic.and
+    (arithmetic.implies left right)
+    (arithmetic.implies right left)))
+
+(template (peano-zero-is-natural witness)
+  (zero of Natural))
+
+(template (peano-successor-is-natural n)
+  (n of Natural))
+
+(template (plus-zero-left n)
+  (= (plus zero n) n))
+
+(template (plus-zero-right n)
+  (= (plus n zero) n))
+
+(template (plus-successor-left left right)
+  (= (plus (succ left) right)
+     (succ (plus left right))))
+
+(template (plus-successor-right left right)
+  (= (plus left (succ right))
+     (succ (plus left right))))
+
+(template (less-than-successor n)
+  (less-than n (succ n)))
+
+(template (less-than-or-equal-reflexive n)
+  (less-than-or-equal n n))
+
+(template (less-than-implies-less-than-or-equal left right)
+  (arithmetic.implies
+    (less-than left right)
+    (less-than-or-equal left right)))
+
+(template (decimal-sum left right)
+  (left + right))
+
+(template (decimal-difference left right)
+  (left - right))
+
+(template (decimal-product left right)
+  (left * right))
+
+(template (decimal-quotient left right)
+  (left / right))
+
+(template (decimal-sum-equals left right expected-sum)
+  (= (left + right) expected-sum))
+
+(template (decimal-difference-equals left right difference)
+  (= (left - right) difference))
+
+(template (decimal-product-equals left right product)
+  (= (left * right) product))
+
+(template (decimal-quotient-equals left right quotient)
+  (= (left / right) quotient))

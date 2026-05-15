@@ -14,11 +14,40 @@ This project provides two equivalent implementations:
 Both implementations pass the same comprehensive test suites and produce identical results.
 
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+For versioning, deprecations, and release expectations, see
+[Compatibility and release policy](./docs/COMPATIBILITY.md).
 
 ## Comparisons
 
-- [Core concept comparison](./docs/CONCEPTS-COMPARISION.md) - RML vs Twelf, LF, HELF, Isabelle, Coq/Rocq, Lean, Foundation, AFP, Abella, lambda Prolog, and Pecan by logical/metatheoretic concepts.
-- [Product feature comparison](./docs/FEATURE-COMPARISION.md) - RML vs the same systems by authoring workflow, automation, libraries, tooling, and distribution.
+- [Core concept comparison](./docs/CONCEPTS-COMPARISON.md) - RML vs Twelf, LF, HELF, Isabelle, Coq/Rocq, Lean, Foundation, AFP, Abella, lambda Prolog, and Pecan by logical/metatheoretic concepts.
+- [Product feature comparison](./docs/FEATURE-COMPARISON.md) - RML vs the same systems by authoring workflow, automation, libraries, tooling, and distribution.
+- [Configurability and operator redefinition](./docs/CONFIGURABILITY.md) - Why every operator, truth constant, range, and valence is redefinable at runtime, with the precedence rules and a comparison to Lean/Rocq fixed semantics.
+- [Foundations and root-construct registry](./docs/FOUNDATIONS.md) - The trust catalogue of every primitive the kernel depends on, the `(foundation …)` / `(with-foundation …)` / `(foundation-report)` surface, the bundled Boolean and Kleene foundations, and the backward-compatibility guarantee.
+- [Typed kernel rules](./docs/KERNEL.md) - The implemented D1 rules for `Pi`, `lambda`, `apply`, `(expr of Type)`, and `(type of expr)`.
+- [Soundness statement](./docs/SOUNDNESS.md) - The trusted-kernel guarantee, proof-replay checker, trusted operator base, and aggregator-relative scope of soundness.
+- [Metatheorem checker](./docs/METATHEOREMS.md) - The C3 Twelf-style guarantee that composes D12 totality, D14 coverage, D15 modes, and D13 termination, plus the `rml-meta` CLI.
+- [Lean 4 export](./docs/LEAN_EXPORT.md) - The `rml export lean` bridge for typed, non-probabilistic RML fragments.
+- [Rocq export](./docs/ROCQ-EXPORT.md) - The supported typed LiNo subset for `rml export rocq <file.lino> -o <file.v>`.
+- [Language Server](./docs/LANGUAGE_SERVER.md) - Stdio LSP setup for diagnostics, hover, go-to-definition, and completion in Neovim and Helix.
+
+## Tutorials
+
+- [Tutorial path](./docs/tutorials/) - Start here for the progressive
+  walkthrough sequence.
+- [Classical logic tutorial](./docs/tutorials/classical.md) - Boolean truth
+  values, declarations, assignments, queries, and the classical library.
+- [Fuzzy logic tutorial](./docs/tutorials/fuzzy.md) - Continuous truth values,
+  degree-based predicates, fuzzy connectives, and fuzzy-control helpers.
+- [Probabilistic reasoning tutorial](./docs/tutorials/probabilistic.md) -
+  Independent events, probabilistic sum, Bayesian-network helpers, and Bayes
+  calculations.
+- [Typed LiNo tutorial](./docs/tutorials/typed.md) - Type declarations,
+  universes, `Pi`, `lambda`, `apply`, and type queries.
+- [Metatheory tutorial](./docs/tutorials/metatheory.md) - Modes, coverage,
+  totality, termination, and the `rml-meta` CLI.
+- [RML in RML self-bootstrap tutorial](./docs/tutorials/self-bootstrap.md) -
+  The capstone walkthrough of the encoded grammar, evaluator, type layer,
+  operators, metatheorem checker, and bootstrap CI gate.
 
 ## Overview
 
@@ -36,6 +65,10 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 - Query the truth value of complex expressions
 - Define dependent types as links — universe hierarchy, Pi-types, lambdas, type queries
 - Combine types with probabilistic logic in a unified framework
+- Delegate domain-specific decision blocks through evaluator plugins, including
+  `(domain automatic-sequences (theorem thue-morse-cube-free))`
+- Reuse the evaluator as a library, including a meta-expression adapter that accepts selected interpretations and explicit dependencies while keeping underspecified claims partial
+- Export the simply typed LiNo fragment to Isabelle/HOL source for external certification experiments
 
 ## Supported Logic Types
 
@@ -58,15 +91,240 @@ RML (Relative Meta-Logic, formerly Associative-Dependent Logic / ADL) is a minim
 ```bash
 cd js
 npm install
-node src/rml-links.mjs demo.lino
+node src/rml-links.mjs ../examples/demo.lino
+node src/rml-links.mjs export lean ../examples/lean-export-basic.lino -o out.lean
 ```
+
+Editor integration is available through the stdio language server; see
+[`docs/LANGUAGE_SERVER.md`](./docs/LANGUAGE_SERVER.md) for Neovim and Helix
+setup, and [`vscode/`](./vscode/) for an installable VS Code extension with
+`.lino` syntax highlighting and LSP-backed diagnostics, hover,
+go-to-definition, and completion.
 
 ### Rust
 
 ```bash
 cd rust
-cargo run -- demo.lino
+cargo run -- ../examples/demo.lino
+cargo run -- export lean ../examples/lean-export-basic.lino -o out.lean
 ```
+
+### Docker
+
+Container images for both implementations live under
+[`docker/`](./docker/) and are built on every pull request by the
+`docker` GitHub Actions workflow. From the repository root:
+
+```bash
+# JavaScript implementation
+docker build -f docker/Dockerfile.js -t rml-js .
+docker run --rm rml-js                                     # runs examples/demo.lino
+
+# Rust implementation
+docker build -f docker/Dockerfile.rust -t rml-rust .
+docker run --rm rml-rust                                   # runs examples/demo.lino
+```
+
+Both services are also wired into [`docker/docker-compose.yml`](./docker/docker-compose.yml):
+
+```bash
+docker compose -f docker/docker-compose.yml run --rm rml-js
+docker compose -f docker/docker-compose.yml run --rm rml-rust
+```
+
+See [`docker/README.md`](./docker/README.md) for build cache layout,
+mounting local `.lino` files, and using the extra `rml-check` and
+`rml-meta` binaries from the Rust image.
+
+Examples are language-agnostic and live in [`/examples/`](./examples/). Both
+implementations execute the same files and are required to produce identical
+output (enforced by `examples/expected.lino` and the shared-examples tests).
+
+Shared regression inputs live in [`/test-corpus/`](./test-corpus/). Both
+implementations walk `test-corpus/*.lino` and compare query results against
+`test-corpus/expected.lino`.
+
+The `parity` GitHub Actions workflow also builds the Rust CLI and runs
+`node scripts/check-corpus-parity.mjs`, which executes every root
+`test-corpus/*.lino` file through both implementations and fails when their
+exit status, stdout, or stderr diverge. To run the same parity gate locally:
+
+```bash
+cd js && npm ci
+cd ..
+cargo build --manifest-path rust/Cargo.toml --bin rml
+node scripts/check-corpus-parity.mjs
+```
+
+The `bootstrap` GitHub Actions workflow runs the host-driven encoded evaluator
+from [`lib/self/evaluator.lino`](./lib/self/evaluator.lino) over every root
+`test-corpus/*.lino` file and fails if any encoded RML result diverges from the
+host JavaScript evaluator. To run the same bootstrap gate locally:
+
+```bash
+cd js
+npm ci
+npm run test:bootstrap
+```
+
+### Literate LiNo
+
+Evaluator entry points also accept literate `.lino.md` files. Prose is ignored
+and only fenced `lino` code blocks are evaluated, so mathematical exposition
+and runnable declarations can live in the same file:
+
+````markdown
+# Theorem
+
+```lino
+(a: a is a)
+((a = a) has probability 1)
+(? (a = a))
+```
+````
+
+The same extraction is used for files loaded through `(import "...")`.
+
+### Standard libraries
+
+Reusable LiNo libraries live under [`/lib/`](./lib/). The classical Boolean
+library configures two-valued truth values and exports connectives, laws, and
+natural-deduction rule schemas from the `classical` namespace:
+
+```lino
+(import "lib/classical/core.lino" as cl)
+(? (cl.or p (cl.not p)))
+(? (cl.excluded-middle p))
+```
+
+The first-order library exports aliasable quantifier templates from the
+`first-order` namespace:
+
+```lino
+(import "lib/first-order/core.lino" as fo)
+(? (fo.forall (Term x) (predicate x)))
+(? ((fo.exists (Term x) (predicate x)) = (exists (Term x) (predicate x))))
+```
+
+The higher-order library exports quantifier templates for predicate binders
+from the `higher-order` namespace:
+
+```lino
+(import "lib/higher-order/core.lino" as ho)
+(? (ho.forall ((Pi (Natural n) Boolean) P)
+     ((P zero) implies (ho.forall (Natural n) (P (succ n))))))
+```
+
+The modal library exports normal modal operators, K/T/S4/S5 axiom schemas,
+and Kripke-frame interpretation templates from the `modal` namespace:
+
+```lino
+(import "lib/modal/core.lino" as ml)
+(? (ml.axiom-k p q))
+(? (ml.necessarily-at current p))
+```
+
+The provability library exports GL axiom schemas and a basic interpretability
+fragment from the `provability` namespace:
+
+```lino
+(import "lib/provability/core.lino" as pr)
+(? (pr.provability-of p))
+(? (pr.axiom-gl p))
+(? (pr.interprets theory-a theory-b))
+```
+
+The set-theory library exports membership, basic set constructors, and
+ZF-style axiom schemas from the `set-theory` namespace:
+
+```lino
+(import "lib/set-theory/core.lino" as st)
+(? (st.member-of x (set-of-naturals)))
+(? (st.axiom-extensionality a b))
+```
+
+The [arithmetic library](./lib/arithmetic/core.lino) exports Peano naturals,
+addition/order templates, and decimal-precision lemmas from the `arithmetic`
+namespace:
+
+```lino
+(import "lib/arithmetic/core.lino" as ar)
+(? ((plus zero zero) = zero))
+(? (ar.less-than zero (succ zero)))
+(? (ar.decimal-sum-equals 0.1 0.2 0.3))
+```
+
+The [algebra library](./lib/algebra/core.lino) exports operation laws and
+magma, semigroup, monoid, group, abelian-group, and unital-ring schemas from
+the `algebra` namespace:
+
+```lino
+(import "lib/algebra/core.lino" as al)
+(? (al.group (carrier G) (op times) (identity e) (inverse inv)))
+(? (al.ring R plus zero neg times one))
+```
+
+The [programming-language theory library](./lib/programming-language/core.lino)
+exports untyped lambda-calculus constructors, simply typed lambda calculus
+typing and small-step schemas, and type-safety theorem forms from the
+`programming-language` namespace:
+
+```lino
+(import "lib/programming-language/core.lino" as pl)
+(? (pl.theorem progress (pl.progress term T)))
+(? (pl.theorem preservation (pl.preservation term next T)))
+```
+
+The [probabilistic library](./lib/probabilistic/) packages Bayesian-network,
+fuzzy-control, Belnap-bilattice, and paradox-catalogue helpers as standard
+LiNo imports:
+
+```lino
+(import "lib/probabilistic/bayesian.lino" as bn)
+(import "lib/probabilistic/fuzzy.lino" as fz)
+(import "lib/probabilistic/belnap.lino" as bl)
+(import "lib/probabilistic/paradoxes.lino" as px)
+(bn.network sprinkler-network (nodes cloudy rain) (edges (bn.edge cloudy rain)))
+(bn.prior rain 0.5)
+(fz.membership temperature hot 0.8)
+(fz.membership humidity wet 0.6)
+(s: s is s)
+(px.midpoint (px.liar s))
+(? (bn.joint (rain = true) (rain = true)))
+(? (fz.rule (fz.degree temperature hot) (fz.degree humidity wet)))
+(? (bl.contradiction true false))
+(? (px.fixed-point (px.liar s)))
+```
+
+The [self grammar library](./lib/self/grammar.lino) encodes the LiNo grammar as
+links so self-hosted parsing work can consume grammar rules through ordinary
+LiNo data.
+
+The [self evaluator library](./lib/self/evaluator.lino) encodes the RML host
+evaluator as `(rule ...)` links, including the built-in arithmetic, comparison,
+logical, equality, normalization, and typed-kernel evaluation forms.
+Representative evaluator inputs are covered by the shared
+[`test-corpus/`](./test-corpus/) regression suite.
+
+### Isabelle export
+
+```bash
+node js/src/rml-links.mjs export isabelle examples/isabelle-typed-fragment.lino -o Isabelle_Typed_Fragment.thy
+```
+
+The exporter covers the simply typed fragment documented in
+[`docs/ISABELLE-EXPORT.md`](./docs/ISABELLE-EXPORT.md).
+
+### Rocq Export
+
+Both CLIs can translate the supported typed fragment to Rocq source:
+
+```bash
+node js/src/rml-links.mjs export rocq examples/dependent-types.lino -o dependent_types.v
+cargo run --manifest-path rust/Cargo.toml -- export rocq examples/dependent-types.lino -o dependent_types.v
+```
+
+See [docs/ROCQ-EXPORT.md](./docs/ROCQ-EXPORT.md) for the accepted subset.
 
 ### Example
 
@@ -116,6 +374,23 @@ Example: `(a: a is a)` declares `a` as a term.
 ```
 
 Example: `((a = a) has probability 1)` assigns probability 1 to the expression `a = a`.
+
+### Templates
+
+```lino
+(template (<name> <param>...)
+  <body>)
+```
+
+Templates name reusable link shapes. A later use `(<name> arg...)` is expanded before evaluation, and template placeholders are substituted hygienically so binders introduced by the template do not capture free variables from the arguments.
+
+```lino
+(template (known expr value)
+  (expr has probability value))
+
+(known (a = b) 1)
+(? (a = b))  # -> 1
+```
 
 ### Range Configuration
 
@@ -360,6 +635,98 @@ Both systems can coexist — use `(Type: Type Type)` for the self-referential ap
 (? (identity 0.7))               # -> 0.7
 ```
 
+#### Program Extraction
+
+Typed lambda programs that do not use probabilistic operators can be extracted
+to JavaScript or Rust:
+
+```bash
+rml extract js program.lino > program.mjs
+rml extract rust program.lino > program.rs
+```
+
+Extraction erases LiNo type annotations, turns named lambda definitions into
+plain functions, and converts equality queries into generated tests. Programs
+that contain probability assignments or logical/probabilistic operators are
+rejected instead of being silently compiled.
+
+#### Normalization
+
+Two surface-form drivers expose the typed-fragment normalizer. `whnf`
+reduces only the outer spine; `nf` (alias `normal-form`) reduces every
+redex, including those nested under binders.
+
+```lino
+(Term: (Type 0) Term)
+(zero: Term zero)
+(succ: (Pi (Term n) Term))
+(compose: lambda (Term f) (lambda (Term g) (lambda (Term x) (apply f (apply g x)))))
+
+(? (whnf (apply (apply (apply compose succ) succ) zero)))
+# -> (apply succ (apply succ zero))   # outer spine reduced, inner redex left
+
+(? (normal-form (apply (apply (apply compose succ) succ) zero)))
+# -> (succ (succ zero))               # full beta-normal form
+```
+
+Both are also available as library functions: `whnf(term, ctx)` and
+`nf(term, ctx)` in JavaScript, `whnf(&term, &mut env)` and
+`nf(&term, &mut env)` in Rust.
+
+#### Tactic Links
+
+The library exposes a tactic engine for composable proof-state steps while
+preserving the "everything is a link" invariant. Tactics are ordinary links,
+and successful tactic history is stored as links in the proof state:
+
+```lino
+(by reflexivity)
+(symmetry)
+(transitivity b)
+(suppose (p = q))
+(introduce n)
+(rewrite (a = b) in goal)
+(rewrite <- (a = b) in goal at 2)
+(simplify in goal)
+(by smt)
+(by atp)
+(exact (p = q))
+(induction n
+  (case zero (by reflexivity))
+  (case (succ m) (by reflexivity)))
+```
+
+Programmatic APIs:
+
+- JavaScript: `runTactics(state, tactics, options)` returns `{ state, diagnostics }`;
+  `rewrite(goal, eq)`, `simplify(goal, rules)`, `goalToTptp(...)`, and
+  `parseAtpStatus(...)` expose the rewrite and ATP bridge helpers.
+- Rust: `run_tactics(state, tactics)` and `run_tactics_with_options(...)`
+  return `TacticRunResult`; `rewrite(...)`, `simplify(...)`,
+  `goal_to_tptp(...)`, and `parse_atp_status(...)` expose the rewrite and ATP
+  bridge helpers.
+
+`(by smt)` serializes the current goal to an SMT-LIB check by asserting the
+negated goal and closes the goal only when the configured solver returns
+`unsat`. Successful runs record `(by smt-trusted <solver>)` in the proof
+state. JavaScript accepts `smtSolver`, `smtSolverArgs`, and `smtTimeoutMs`
+options; Rust accepts the corresponding `TacticOptions` fields
+`smt_solver`, `smt_solver_args`, and `smt_timeout_ms`. The environment
+variables `RML_SMT_SOLVER`, `RML_SMT_ARGS`, and `RML_SMT_TIMEOUT_MS` provide
+defaults in both runtimes.
+
+`(by atp)` exports the current first-order goal and local context as TPTP FOF,
+invokes a configured ATP path, accepts proving SZS statuses, and records
+`(by atp-trusted <solver>)` in the proof state. JavaScript accepts `atpPath`,
+`atpArgs`, `atpName`, and `atpTimeoutMs` options or an `atp` object with
+`path`, `args`, `name`, and `timeoutMs`; Rust accepts the corresponding
+`TacticOptions.atp` fields.
+
+The built-in tactic set is `reflexivity`, `symmetry`, `transitivity`,
+`induction`, `suppose`, `introduce`, `by`, `rewrite`, `simplify`, `smt`,
+`atp`, and `exact`. Failed tactics emit `E039` diagnostics that include the
+current goal.
+
 #### Type Queries
 
 ```lino
@@ -400,7 +767,7 @@ This means ADL can serve as a **meta-theory** for both classical and non-classic
 
 ## Examples
 
-Example `.lino` files are available in both `js/examples/` and `rust/examples/` directories. Examples progress from standard, familiar logic systems to more advanced and non-standard constructions.
+Example `.lino` files are available in the shared root [`examples/`](./examples/) directory. They are executed by both the JavaScript and the Rust implementations, and the canonical outputs every implementation must reproduce live in [`examples/expected.lino`](./examples/expected.lino) — itself written in Links Notation, so the contract between the two implementations is expressed in the same language as the examples. Examples progress from standard, familiar logic systems to more advanced and non-standard constructions.
 
 ### Classical Logic (Boolean, 2-valued)
 
@@ -419,6 +786,10 @@ See `examples/classical-logic.lino` — the most familiar logic system where eve
 (? ((p = true) or (not (p = true))))    # -> 1 (law of excluded middle)
 (? ((p = true) and (not (p = true))))   # -> 0 (law of non-contradiction)
 ```
+
+For reusable imports, see `lib/classical/core.lino`, which packages these
+Boolean connectives plus excluded middle, double negation, De Morgan laws, and
+natural-deduction rule schemas under the `classical` namespace.
 
 ### Propositional Logic (Probabilistic)
 
@@ -516,7 +887,7 @@ See `examples/liar-paradox-balanced.lino` — resolution in `[-1, 1]` range:
 
 ### Custom Operators (avg semantics)
 
-See `demo.lino` — demonstrates the configurable nature of operators with avg-based AND:
+See `examples/demo.lino` — demonstrates the configurable nature of operators with avg-based AND:
 
 ```lino
 (a: a is a)
@@ -531,7 +902,7 @@ See `demo.lino` — demonstrates the configurable nature of operators with avg-b
 (? ((a = a) or  (a != a)))   # -> 1
 ```
 
-See `flipped-axioms.lino` — demonstrates that the system handles arbitrary probability assignments:
+See `examples/flipped-axioms.lino` — demonstrates that the system handles arbitrary probability assignments:
 
 ```lino
 (a: a is a)
@@ -652,20 +1023,77 @@ The test suites cover:
 - Belnap operators (`both...and`, `neither...nor`): default aggregators, redefinition, composite/prefix/infix forms, fuzzy values, range changes
 - Liar paradox resolution across logic types
 - Decimal-precision arithmetic (`+`, `-`, `*`, `/`) and numeric equality
-- Dependent type system: universes, Pi-types, lambdas, application, type queries, prefix type notation
+- Dependent type system: universes, Pi-types, lambdas, application, definitional equality, type queries, prefix type notation
+- Link-based tactic engine: reflexivity, symmetry, transitivity, induction, suppose, introduce, by, rewrite, simplify, exact
 - Self-referential types: `(Type: Type Type)`, paradox resolution alongside types, coexistence with universe hierarchy
 - Bayesian inference: Bayes' theorem, law of total probability, conditional probability, complement rule
 - Bayesian networks: joint probability (product), probabilistic sum (probabilistic_sum), multi-node networks, chain rule decomposition
 - Self-reasoning: meta-logic properties, comparing logic systems, paradox resolution in meta context
 - Markov chains: one-step and multi-step transitions, joint probability, stationary distribution, conditional transitions with links
 - Markov networks: cyclic graphs, pairwise joints, three-way cliques, clique potentials, normalization
+- Automatic sequences: a Pecan-style domain plugin that decides
+  `thue-morse-cube-free`
 - Comprehensive valence coverage: 0 (continuous), 1 (unary), 2–10, 100, 1000, with both ranges
+- English-readability lint: identifier shape, operator-only links, allow-list (see [English-readability lint](#english-readability-lint))
 
 ## API
 
 See language-specific documentation:
+- [Online playground](https://link-foundation.github.io/relative-meta-logic/playground/) - browser evaluator with examples and shareable URLs
+- [API reference](https://link-foundation.github.io/relative-meta-logic/) - generated from JSDoc and rustdoc on release
 - [JavaScript API](./js/README.md#api)
 - [Rust API](./rust/README.md#api)
+
+## Diagnostics
+
+Both implementations expose an `evaluate()` entry point that returns a list
+of results plus structured diagnostics — every parser, evaluator, and type
+checker error carries a stable code (`E001`, …), a message, and a 1-based
+source span. The CLIs print them as `file:line:col: Exxx: message` with a
+caret under the offending token. See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md)
+for the full code list and usage examples.
+
+## English-readability lint
+
+Every link in `examples/` (and, when introduced, `lib/`) is expected to read
+as an English sentence. A small lint script enforces the conventions:
+
+```bash
+node scripts/lint-english.mjs --allowlist scripts/lint-english.allowlist.json examples/*.lino
+# or, from the JS package:
+(cd js && npm run lint:english)
+```
+
+The lint reports two classes of violation in `file:line:col: code: message`
+form (the same shape used by structured diagnostics):
+
+- `identifiers-without-hyphens` — identifiers that combine multiple words
+  with `_` or `camelCase` instead of `kebab-case`. The lint suggests the
+  hyphenated form (e.g. `wet_grass` → `wet-grass`).
+- `operator-only-link` — an operator definition such as `(@: + -)` whose
+  body contains no English word. The lint suggests adding a word-form
+  alternative (e.g. `(equals: =)`, `(plus: +)`).
+
+Reserved RML/LiNo vocabulary (`and`, `or`, `not`, `is`, `has`, `probability`,
+`true`, `false`, `unknown`, `Type`, `lambda`, …) is never flagged, and
+single-word identifiers (`alice`, `cloudy`, `Natural`) are accepted as-is.
+
+### Allow-list
+
+For deliberate exceptions, `scripts/lint-english.allowlist.json` accepts
+two arrays:
+
+```json
+{
+  "identifiers": ["legacy_name"],
+  "links": ["demo.lino:5"]
+}
+```
+
+Identifiers in `identifiers` are silenced wherever they appear; entries in
+`links` are keyed by `<basename>:<line>` and silence the
+`operator-only-link` rule for that specific definition. CI runs the lint
+with this file so any new violation fails the build.
 
 ## References
 

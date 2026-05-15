@@ -1,0 +1,46 @@
+# Foundation showcase — `(with-foundation ...)` swaps the `and`/`or`
+# aggregator within a scope, leaving the surrounding (default-RML)
+# semantics untouched. The default foundation continues to use the
+# averaging-based connectives, so legacy programs are unaffected.
+#
+# See: https://en.wikipedia.org/wiki/Three-valued_logic
+#      https://en.wikipedia.org/wiki/Boolean_algebra
+
+# Two foundations: Boolean classical (both `and` and `or` collapse to
+# `min`/`max` over {0,1}-style values) and strong Kleene (same `min`/
+# `max` shape but over the unit interval).
+(foundation boolean-classical
+  (description two-valued-classical-boolean-logic)
+  (defines and min)
+  (defines or max))
+
+(foundation kleene-three-valued
+  (description strong-kleene-three-valued-logic)
+  (defines and min)
+  (defines or max))
+
+(a: a is a)
+(b: b is b)
+((a = true) has probability 0.6)
+((b = true) has probability 0.4)
+
+# Default foundation: `and` is average → 0.5
+(? ((a = true) and (b = true)))
+# Default foundation: `or` is max → 0.6
+(? ((a = true) or (b = true)))
+
+# Boolean foundation: `and` is min → 0.4, `or` is max → 0.6
+(with-foundation boolean-classical
+  (? ((a = true) and (b = true))))
+(with-foundation boolean-classical
+  (? ((a = true) or (b = true))))
+
+# Kleene foundation: same min/max shape over the unit interval
+(with-foundation kleene-three-valued
+  (? ((a = true) and (b = true))))
+(with-foundation kleene-three-valued
+  (? ((a = true) or (b = true))))
+
+# Default foundation is restored on exit → still 0.5/0.6
+(? ((a = true) and (b = true)))
+(? ((a = true) or (b = true)))

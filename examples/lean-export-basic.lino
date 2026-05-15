@@ -1,0 +1,11 @@
+# Lean export subset: typed declarations, Pi, lambda, apply, and inductives.
+(Natural: (Type 0) Natural)
+(zero: Natural zero)
+(succ: (Pi (Natural n) Natural))
+(identity: lambda (Natural x) x)
+(twice: lambda (Natural x) (apply succ (apply succ x)))
+(? (zero of Natural))
+
+(inductive Truth
+  (constructor truth-false)
+  (constructor truth-true))

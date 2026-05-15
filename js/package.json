@@ -1,12 +1,26 @@
 {
   "name": "relative-meta-logic",
-  "version": "0.9.0",
+  "version": "0.19.0",
   "description": "A prototype for logic framework that can reason about anything relative to given probability of input statements",
   "type": "module",
   "main": "src/rml-links.mjs",
+  "bin": {
+    "rml": "src/rml-links.mjs",
+    "rml-check": "src/rml-check.mjs",
+    "rml-meta": "src/rml-meta.mjs",
+    "rml-lsp": "src/rml-lsp.mjs"
+  },
   "scripts": {
-    "test": "node --test",
-    "demo": "node src/rml-links.mjs demo.lino"
+    "test": "node --test tests/ ../scripts/",
+    "test:bootstrap": "node --test --test-name-pattern \"replays self corpus\" tests/self-evaluator.test.mjs",
+    "docs": "jsdoc -c ../docs/api/jsdoc.json",
+    "build:playground": "node ../scripts/build-playground.mjs",
+    "test:playground": "node --test ../scripts/playground.test.mjs",
+    "demo": "node src/rml-links.mjs ../examples/demo.lino",
+    "check": "node src/rml-check.mjs",
+    "meta": "node src/rml-meta.mjs",
+    "lsp": "node src/rml-lsp.mjs",
+    "lint:english": "node ../scripts/lint-english.mjs --allowlist ../scripts/lint-english.allowlist.json ../examples/*.lino ../lib/*/*.lino"
   },
   "keywords": [
     "logic",
@@ -21,7 +35,10 @@
   "dependencies": {
     "links-notation": "^0.13.0"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "jsdoc": "^4.0.5"
+  },
   "engines": {
     "node": ">=18.0.0"
   }

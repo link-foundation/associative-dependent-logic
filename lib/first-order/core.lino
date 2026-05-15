@@ -1,0 +1,16 @@
+# First-order logic standard library.
+#
+# This file exports English-readable quantifier templates under the
+# `first-order` namespace. Import it with an alias such as:
+#
+#   (import "lib/first-order/core.lino" as fo)
+#   (? (fo.forall (Term x) (predicate x)))
+#   (? (fo.exists (Term x) (predicate x)))
+
+(namespace first-order)
+
+(template (forall binder body)
+  (forall binder body))
+
+(template (exists binder body)
+  (exists binder body))

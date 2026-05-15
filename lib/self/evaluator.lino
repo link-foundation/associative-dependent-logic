@@ -1,0 +1,271 @@
+# RML evaluator encoded as links for the self-bootstrap layer.
+#
+# The rules below are data. They mirror the host evaluator surface so a future
+# self-hosted evaluator can consume `(rule ...)` links directly.
+
+(namespace self)
+
+(Evaluator: (Type 0) Evaluator)
+(Evaluation-rule: (Type 0) Evaluation-rule)
+(Operator: (Type 0) Operator)
+(Aggregator: (Type 0) Aggregator)
+
+(rml-evaluator: Evaluator rml-evaluator)
+(evaluator rml-evaluator matches relative-meta-logic version-0-19-0)
+(evaluator rml-evaluator has host-evaluator-presentation rule-links)
+
+# Built-in truth-value environment.
+
+(truth-range default 0 1)
+(truth-constant true high)
+(truth-constant false low)
+(truth-constant unknown midpoint)
+(truth-constant undefined midpoint)
+
+(built-in-operator not unary truth)
+(built-in-operator and variadic truth)
+(built-in-operator or variadic truth)
+(built-in-operator both variadic truth)
+(built-in-operator neither variadic truth)
+(built-in-operator = binary equality)
+(built-in-operator != binary equality)
+(built-in-operator + binary arithmetic)
+(built-in-operator - binary arithmetic)
+(built-in-operator * binary arithmetic)
+(built-in-operator / binary arithmetic)
+(built-in-operator < binary comparison)
+(built-in-operator <= binary comparison)
+
+(built-in-aggregator avg)
+(built-in-aggregator min)
+(built-in-aggregator max)
+(built-in-aggregator product)
+(built-in-aggregator probabilistic_sum)
+
+# Leaf evaluation and configuration forms.
+
+(rule (eval numeric-literal)
+  (clamp numeric-literal))
+
+(rule (eval symbol)
+  (lookup-symbol-probability symbol default midpoint))
+
+(rule (eval (range low high))
+  (set-range low high))
+
+(rule (eval (range: low high))
+  (set-range low high))
+
+(rule (eval (valence levels))
+  (set-valence levels))
+
+(rule (eval (valence: levels))
+  (set-valence levels))
+
+(rule (eval (namespace name))
+  (set-namespace name))
+
+(rule (eval (import path))
+  (evaluate-file path))
+
+(rule (eval (import path as alias))
+  (evaluate-file path with-alias alias))
+
+# Definitions, assignments, queries, and domain hooks.
+
+(rule (eval (name: name is name))
+  (declare-term name))
+
+(rule (eval (name: type-name name))
+  (declare-typed-term name type-name))
+
+(rule (eval (name: type-expression name))
+  (declare-typed-term name type-expression))
+
+(rule (eval (name: type-expression))
+  (declare-typed-term name type-expression))
+
+(rule (eval (name: number))
+  (set-symbol-probability name number))
+
+(rule (eval (operator: aggregator))
+  (set-operator-aggregator operator aggregator))
+
+(rule (eval (operator: outer inner))
+  (compose-operator operator outer inner))
+
+(rule (eval (name: lambda binding body))
+  (declare-lambda name binding body))
+
+(rule (eval ((expression) has probability number))
+  (assign-probability expression number))
+
+(rule (eval (? expression))
+  (query (clamp (eval expression))))
+
+(rule (eval (domain name request))
+  (dispatch-domain-plugin name request))
+
+# Arithmetic and comparison operators. Arithmetic operands are evaluated in an
+# arithmetic context, so numeric literals are not clamped before the operator.
+
+(rule (eval (left + right))
+  (decimal-round (+ (arith left) (arith right))))
+
+(rule (eval (left - right))
+  (decimal-round (- (arith left) (arith right))))
+
+(rule (eval (left * right))
+  (decimal-round (* (arith left) (arith right))))
+
+(rule (eval (left / right))
+  (if (equals (arith right) 0)
+      0
+      (decimal-round (/ (arith left) (arith right)))))
+
+(rule (eval (left < right))
+  (if (< (arith left) (arith right)) high low))
+
+(rule (eval (left <= right))
+  (if (<= (arith left) (arith right)) high low))
+
+# Logical operators and aggregators.
+
+(rule (eval (not value))
+  (clamp (mirror-around-midpoint (eval value))))
+
+(rule (eval (and a b))
+  (clamp (current-and (eval a) (eval b))))
+
+(rule (eval (or a b))
+  (clamp (current-or (eval a) (eval b))))
+
+(rule (eval (both a b))
+  (clamp (current-both (eval a) (eval b))))
+
+(rule (eval (neither a b))
+  (clamp (current-neither (eval a) (eval b))))
+
+(rule (eval (a and b))
+  (clamp (current-and (eval a) (eval b))))
+
+(rule (eval (a or b))
+  (clamp (current-or (eval a) (eval b))))
+
+(rule (eval (a both b))
+  (clamp (current-both (eval a) (eval b))))
+
+(rule (eval (a neither b))
+  (clamp (current-neither (eval a) (eval b))))
+
+(rule (eval (both a and b))
+  (clamp (current-both (eval a) (eval b))))
+
+(rule (eval (neither a nor b))
+  (clamp (current-neither (eval a) (eval b))))
+
+(rule (aggregate avg values)
+  (/ (sum values) (count values)))
+
+(rule (aggregate min values)
+  (minimum values))
+
+(rule (aggregate max values)
+  (maximum values))
+
+(rule (aggregate product values)
+  (product values))
+
+(rule (aggregate probabilistic_sum values)
+  (- 1 (product (map values (lambda (Number x) (- 1 x))))))
+
+# Equality consults explicit assignments first, then normalized assignments,
+# then structural equality, then numeric equality.
+
+(rule (eval (= left right))
+  (equality-truth-value left right))
+
+(rule (eval (!= left right))
+  (clamp (not (equality-truth-value left right))))
+
+(rule (eval (left = right))
+  (equality-truth-value left right))
+
+(rule (eval (left != right))
+  (clamp (not (equality-truth-value left right))))
+
+(rule (equality-truth-value left right)
+  (first-defined
+    (lookup-assignment (left = right))
+    (lookup-assignment (= left right))
+    (lookup-assignment ((normalize left) = (normalize right)))
+    (structural-equality (normalize left) (normalize right))
+    (numeric-equality (numeric left) (numeric right))
+    low))
+
+# Typed kernel and term-normalization forms.
+
+(rule (eval (Type level))
+  (declare-universe level))
+
+(rule (eval (Prop))
+  (declare-prop))
+
+(rule (eval (Pi binding body))
+  (declare-pi binding body))
+
+(rule (eval (lambda binding body))
+  (lambda-value binding body))
+
+(rule (eval (apply function argument))
+  (beta-apply function argument))
+
+(rule (eval (function argument))
+  (prefix-apply function argument))
+
+(rule (eval (subst term variable replacement))
+  (substitute term variable replacement))
+
+(rule (eval (fresh variable in body))
+  (evaluate-with-fresh-variable variable body))
+
+(rule (eval (whnf expression))
+  (weak-head-normal-form expression))
+
+(rule (eval (nf expression))
+  (normal-form expression))
+
+(rule (eval (normal-form expression))
+  (normal-form expression))
+
+(rule (eval (type of expression))
+  (type-query expression))
+
+(rule (eval (expression of type))
+  (type-membership expression type))
+
+# Foundation and root-construct forms. `(root-construct ...)` and
+# `(foundation ...)` declarations are data: they populate the registry
+# `(foundation-report)` consults. `(with-foundation ...)` swaps the
+# active operator implementations while evaluating the body, then
+# restores them on exit so legacy programs are unaffected.
+
+(rule (eval (root-construct name details))
+  (register-root-construct name details))
+
+(rule (eval (foundation name details))
+  (register-foundation name details))
+
+(rule (eval (with-foundation name body))
+  (evaluate-body-under-foundation name body))
+
+(rule (eval (foundation-report))
+  (query (foundation-report-snapshot)))
+
+# Meta-evaluator declarations used by tests and future self-hosted work.
+
+(rule (host-evaluator-presentation rml-evaluator)
+  (rule-links with eval-patterns))
+
+(rule (eval-top-level forms)
+  (fold forms environment collect-query-results))

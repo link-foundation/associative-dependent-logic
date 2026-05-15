@@ -1,0 +1,78 @@
+# Provability logic standard library.
+#
+# This file configures Boolean connectives for provability logic and exports
+# provability, consistency, GL axiom schemas, and a basic interpretability
+# fragment under the `provability` namespace. Import it with an alias such as:
+#
+#   (import "lib/provability/core.lino" as pr)
+#   (? (pr.provability-of p))
+#   (? (pr.axiom-gl p))
+#   (? (pr.interprets theory-a theory-b))
+
+(namespace provability)
+
+(valence: 2)
+(and: min)
+(or: max)
+(not: not)
+(!=: not =)
+
+(template (implies antecedent consequent)
+  (provability.or (provability.not antecedent) consequent))
+
+(template (provability-of proposition)
+  (provability-of proposition))
+
+(template (consistency-of proposition)
+  (provability.not (provability.provability-of (provability.not proposition))))
+
+(template (axiom-k antecedent consequent)
+  (provability.implies
+    (provability.provability-of (provability.implies antecedent consequent))
+    (provability.implies
+      (provability.provability-of antecedent)
+      (provability.provability-of consequent))))
+
+(template (axiom-lob proposition)
+  (provability.implies
+    (provability.provability-of
+      (provability.implies (provability.provability-of proposition) proposition))
+    (provability.provability-of proposition)))
+
+(template (axiom-gl proposition)
+  (provability.axiom-lob proposition))
+
+(template (necessitation-rule theorem)
+  (provability.implies theorem (provability.provability-of theorem)))
+
+(template (interprets source target)
+  (interprets source target))
+
+(template (axiom-j1 source target)
+  (provability.implies
+    (provability.provability-of (provability.implies source target))
+    (provability.interprets source target)))
+
+(template (axiom-j2 source middle target)
+  (provability.implies
+    (provability.and
+      (provability.interprets source middle)
+      (provability.interprets middle target))
+    (provability.interprets source target)))
+
+(template (axiom-j3 left right target)
+  (provability.implies
+    (provability.and
+      (provability.interprets left target)
+      (provability.interprets right target))
+    (provability.interprets (provability.or left right) target)))
+
+(template (axiom-j4 source target)
+  (provability.implies
+    (provability.interprets source target)
+    (provability.implies
+      (provability.consistency-of source)
+      (provability.consistency-of target))))
+
+(template (axiom-j5 source)
+  (provability.interprets (provability.consistency-of source) source))

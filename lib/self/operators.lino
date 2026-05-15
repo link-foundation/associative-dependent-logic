@@ -1,0 +1,84 @@
+# RML operators encoded as links for the self-bootstrap layer.
+#
+# The relations are data: each `(relation name (name inputs...) output)`
+# records a host operator or aggregator output expression. The templates below
+# make the same encoded surface executable for conformance tests.
+
+(namespace self)
+
+# Private operator slots used by the executable templates. They are qualified
+# by the `self` namespace, so importing this file does not reconfigure the
+# caller's unqualified logical operators.
+
+(not: not)
+(and: avg)
+(or: max)
+(both: product)
+(neither: probabilistic_sum)
+
+# Aggregator operators.
+
+(relation avg
+  (avg a b)
+  ((a + b) / 2))
+
+(relation min
+  (min a b)
+  (self.not (self.or (self.not a) (self.not b))))
+
+(relation max
+  (max a b)
+  (self.or a b))
+
+(relation product
+  (product a b)
+  (a * b))
+
+(relation probabilistic_sum
+  (probabilistic_sum a b)
+  (1 - ((1 - a) * (1 - b))))
+
+(template (avg a b)
+  (self.and a b))
+
+(template (min a b)
+  (self.not (self.or (self.not a) (self.not b))))
+
+(template (max a b)
+  (self.or a b))
+
+(template (product a b)
+  (self.both a b))
+
+(template (probabilistic_sum a b)
+  (self.neither a b))
+
+# Decimal arithmetic operators.
+
+(relation decimal-sum
+  (decimal-sum left right)
+  (left + right))
+
+(relation decimal-difference
+  (decimal-difference left right)
+  (left - right))
+
+(relation decimal-product
+  (decimal-product left right)
+  (left * right))
+
+(relation decimal-quotient
+  (decimal-quotient left right)
+  (left / right))
+
+(template (decimal-sum left right)
+  (left + right))
+
+(template (decimal-difference left right)
+  (left - right))
+
+(template (decimal-product left right)
+  (left * right))
+
+(template (decimal-quotient left right)
+  (left / right))

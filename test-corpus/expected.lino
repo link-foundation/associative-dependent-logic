@@ -1,0 +1,10 @@
+# Canonical expected outputs for every shared test-corpus `.lino` file.
+#
+# Format (Links Notation):
+#   (<filename>.lino: <result> <result> ...)
+#
+# A numeric result is a bare number. A structured result is stored as
+# (type <value>) so both implementations compare the same printed form.
+
+
+(evaluator-operators.lino: 0.25 0.2 0.2 0.85 0.75 1 1 1 1 1 (type Term) 0.42 (type zero) (type zero) 1 -1 0 0 0)

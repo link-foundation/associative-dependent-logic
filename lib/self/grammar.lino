@@ -1,0 +1,295 @@
+# LiNo grammar encoded as links for the self-bootstrap layer.
+#
+# The rules below describe the links-notation parser used by the host
+# implementations. They are data: future self-hosted parsers can read the
+# `(rule ...)` links directly, while today's evaluator can import this file
+# without requiring a parser interpreter.
+
+(namespace self)
+
+(Grammar: (Type 0) Grammar)
+(Rule: (Type 0) Rule)
+(Terminal: (Type 0) Terminal)
+(Ast-node: (Type 0) Ast-node)
+
+(lino-grammar: Grammar lino-grammar)
+(grammar lino-grammar matches links-notation version-0-13-0)
+(grammar lino-grammar has start document)
+(grammar lino-grammar has host-ast-presentation host-parser-presentation)
+
+# RML evaluates `.lino` examples after removing comments. The LiNo grammar
+# starts at `document`; `source-for-evaluation` records the host wrapper that
+# turns source files with comments into parser input.
+
+(rule source-for-evaluation
+  (sequence (zero-or-more source-line) end-of-input)
+  (normalizes-to document))
+
+(rule source-line
+  (choice full-line-comment inline-comment-after-link lino-code-line blank-line))
+
+(rule full-line-comment
+  (sequence indentation hash-sign (zero-or-more any-character) end-of-line)
+  (emits blank-line))
+
+(rule inline-comment-after-link
+  (sequence parenthesized-link trailing-horizontal-whitespace hash-sign (zero-or-more any-character) end-of-line)
+  (emits parenthesized-link))
+
+(rule lino-code-line
+  (sequence (optional indentation) any-link))
+
+(rule blank-line
+  (sequence (zero-or-more horizontal-whitespace) end-of-line))
+
+# Official LiNo document grammar.
+
+(rule document
+  (sequence skip-empty-lines links whitespace end-of-input)
+  (produces flattened-link-list))
+
+(rule skip-empty-lines
+  (zero-or-more blank-line))
+
+(rule links
+  (sequence first-line (zero-or-more line)))
+
+(rule first-line
+  (sequence set-base-indentation element))
+
+(rule line
+  (sequence check-indentation element))
+
+(rule element
+  (sequence any-link (optional indented-children)))
+
+(rule indented-children
+  (sequence push-indentation links pop-indentation))
+
+(rule any-link
+  (choice
+    (sequence multi-line-any-link end-of-line)
+    indented-id-link
+    single-line-any-link))
+
+(rule parenthesized-link
+  (choice multi-line-id-link multi-line-value-link))
+
+(rule multi-line-any-link
+  (choice multi-line-value-link multi-line-id-link))
+
+(rule single-line-any-link
+  (choice single-line-id-link single-line-value-link))
+
+(rule id-link
+  (choice single-line-id-link multi-line-id-link indented-id-link))
+
+(rule value-link
+  (choice single-line-value-link multi-line-value-link))
+
+(rule single-line-id-link
+  (sequence horizontal-whitespace reference horizontal-whitespace colon single-line-values)
+  (produces (ast id-link reference single-line-values)))
+
+(rule multi-line-id-link
+  (sequence left-parenthesis whitespace reference whitespace colon multi-line-values whitespace right-parenthesis)
+  (produces (ast id-link reference multi-line-values)))
+
+(rule indented-id-link
+  (sequence reference horizontal-whitespace colon end-of-line)
+  (produces pending-indented-id-link))
+
+(rule single-line-value-link
+  (sequence single-line-values)
+  (produces (ast value-link single-line-values)))
+
+(rule multi-line-value-link
+  (sequence left-parenthesis multi-line-values whitespace right-parenthesis)
+  (produces (ast value-link multi-line-values)))
+
+(rule single-line-values
+  (one-or-more single-line-value-and-whitespace))
+
+(rule multi-line-values
+  (sequence whitespace (zero-or-more multi-line-value-and-whitespace)))
+
+(rule single-line-value-and-whitespace
+  (sequence horizontal-whitespace reference-or-link))
+
+(rule multi-line-value-and-whitespace
+  (sequence reference-or-link whitespace))
+
+(rule reference-or-link
+  (choice multi-line-any-link reference))
+
+# References and quoted references.
+
+(rule reference
+  (choice quoted-reference simple-reference))
+
+(rule simple-reference
+  (sequence reference-character (zero-or-more reference-character))
+  (produces reference-text))
+
+(rule reference-character
+  (character-that-is-not whitespace-character left-parenthesis colon right-parenthesis))
+
+(rule quoted-reference
+  (choice double-quoted-reference single-quoted-reference backtick-quoted-reference))
+
+(rule double-quoted-reference
+  (sequence double-quote-run quoted-double-content matching-double-quote-run)
+  (produces reference-text))
+
+(rule single-quoted-reference
+  (sequence single-quote-run quoted-single-content matching-single-quote-run)
+  (produces reference-text))
+
+(rule backtick-quoted-reference
+  (sequence backtick-quote-run quoted-backtick-content matching-backtick-quote-run)
+  (produces reference-text))
+
+(rule double-quote-run
+  (one-or-more double-quote))
+
+(rule single-quote-run
+  (one-or-more single-quote))
+
+(rule backtick-quote-run
+  (one-or-more backtick-quote))
+
+(rule quoted-double-content
+  (zero-or-more (choice escaped-double-quote-run non-closing-double-character)))
+
+(rule quoted-single-content
+  (zero-or-more (choice escaped-single-quote-run non-closing-single-character)))
+
+(rule quoted-backtick-content
+  (zero-or-more (choice escaped-backtick-quote-run non-closing-backtick-character)))
+
+(rule escaped-double-quote-run
+  (sequence double-quote-run double-quote-run)
+  (emits double-quote-run))
+
+(rule escaped-single-quote-run
+  (sequence single-quote-run single-quote-run)
+  (emits single-quote-run))
+
+(rule escaped-backtick-quote-run
+  (sequence backtick-quote-run backtick-quote-run)
+  (emits backtick-quote-run))
+
+(rule non-closing-double-character
+  (character-that-does-not-complete matching-double-quote-run))
+
+(rule non-closing-single-character
+  (character-that-does-not-complete matching-single-quote-run))
+
+(rule non-closing-backtick-character
+  (character-that-does-not-complete matching-backtick-quote-run))
+
+# Whitespace, indentation, and terminals.
+
+(rule whitespace
+  (zero-or-more whitespace-character))
+
+(rule horizontal-whitespace
+  (zero-or-more horizontal-whitespace-character))
+
+(rule trailing-horizontal-whitespace
+  (one-or-more horizontal-whitespace-character))
+
+(rule indentation
+  (zero-or-more space))
+
+(rule set-base-indentation
+  (records indentation of first-line))
+
+(rule check-indentation
+  (requires indentation greater-than-or-equal current-indentation))
+
+(rule push-indentation
+  (requires indentation greater-than current-indentation))
+
+(rule pop-indentation
+  (restores previous-indentation))
+
+(rule whitespace-character
+  (choice space tab newline carriage-return))
+
+(rule horizontal-whitespace-character
+  (choice space tab))
+
+(rule end-of-line
+  (choice newline end-of-input))
+
+(rule end-of-input
+  (terminal input-end))
+
+(terminal left-parenthesis)
+(terminal right-parenthesis)
+(terminal colon)
+(terminal hash-sign)
+(terminal space)
+(terminal tab)
+(terminal newline)
+(terminal carriage-return)
+(terminal double-quote)
+(terminal single-quote)
+(terminal backtick-quote)
+(terminal input-end)
+
+# AST and host presentation. The official parser stores id links as
+# `(ast id-link id values)`, while the RML host presentation prints them as
+# parenthesized links whose head token is `id:`. The acceptance tests compare
+# this presentation against the host parser modulo that print form.
+
+(rule ast-reference
+  (sequence reference)
+  (produces (ast reference reference-text)))
+
+(rule ast-empty-link
+  (sequence left-parenthesis whitespace right-parenthesis)
+  (produces (ast link none (values))))
+
+(rule ast-id-link
+  (sequence id-link)
+  (produces (ast link reference values)))
+
+(rule ast-value-link
+  (sequence value-link)
+  (produces (ast link none values)))
+
+(rule ast-singlet-link
+  (sequence value-link with one reference value)
+  (produces (ast reference reference-text)))
+
+(rule ast-indented-id-link
+  (sequence indented-id-link indented-children)
+  (produces (ast link reference child-values)))
+
+(rule ast-parent-child-link
+  (sequence parent-link child-link)
+  (produces (ast link none (values parent-link child-link))))
+
+(rule ast-flattened-document
+  (sequence links)
+  (produces (list-of Ast-node)))
+
+(rule host-parser-presentation
+  (sequence (zero-or-more host-parser-link) end-of-input)
+  (produces host-parser-link-list))
+
+(rule host-parser-link
+  (choice host-parser-list host-parser-reference))
+
+(rule host-parser-list
+  (sequence left-parenthesis (zero-or-more host-parser-link) right-parenthesis)
+  (produces nested-list))
+
+(rule host-parser-reference
+  (sequence host-parser-reference-character (zero-or-more host-parser-reference-character))
+  (produces atom))
+
+(rule host-parser-reference-character
+  (character-that-is-not whitespace-character left-parenthesis right-parenthesis))

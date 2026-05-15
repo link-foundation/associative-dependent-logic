@@ -61,11 +61,10 @@ fn parse_simple_link() {
 
 #[test]
 fn parse_nested_link() {
-    let tokens: Vec<String> =
-        vec!["(", "(", "a", "=", "a", ")", "has", "probability", "1", ")"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+    let tokens: Vec<String> = vec!["(", "(", "a", "=", "a", ")", "has", "probability", "1", ")"]
+        .into_iter()
+        .map(String::from)
+        .collect();
     let ast = parse_one(&tokens).unwrap();
     assert_eq!(
         ast,
@@ -150,10 +149,7 @@ fn env_store_expression_probabilities() {
 fn eval_numeric_literals() {
     let mut env = Env::new(None);
     assert_eq!(eval_node(&Node::Leaf("1".into()), &mut env).as_f64(), 1.0);
-    assert_eq!(
-        eval_node(&Node::Leaf("0.5".into()), &mut env).as_f64(),
-        0.5
-    );
+    assert_eq!(eval_node(&Node::Leaf("0.5".into()), &mut env).as_f64(), 0.5);
     assert_eq!(eval_node(&Node::Leaf("0".into()), &mut env).as_f64(), 0.0);
 }
 
@@ -190,10 +186,7 @@ fn eval_operator_redefinitions() {
 fn eval_aggregator_selection() {
     let mut env = Env::new(None);
     eval_node(
-        &Node::List(vec![
-            Node::Leaf("and:".into()),
-            Node::Leaf("min".into()),
-        ]),
+        &Node::List(vec![Node::Leaf("and:".into()), Node::Leaf("min".into())]),
         &mut env,
     );
     assert_eq!(env.apply_op("and", &[0.3, 0.7]), 0.3);
@@ -415,6 +408,87 @@ fn run_handle_inline_comments() {
     let results = run(text, None);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0], 1.0);
+}
+
+#[test]
+fn run_inline_comment_containing_colon() {
+    // Regression: a `:` inside an inline comment used to be passed through
+    // to the LiNo parser and parsed as a binding, silently dropping every
+    // statement in the file. See docs/case-studies/issue-68.
+    let text = r#"
+(? true)                  # comment with: colon
+(? false)                 # another: comment
+"#;
+    let results = run(text, None);
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0], 1.0);
+    assert_eq!(results[1], 0.0);
+}
+
+// ===== meta-expression adapter API =====
+
+#[test]
+fn meta_expression_adapter_arithmetic_equality() {
+    let formalization = formalize_selected_interpretation(FormalizationRequest {
+        text: "0.1 + 0.2 = 0.3".to_string(),
+        interpretation: Interpretation::arithmetic_equality("0.1 + 0.2 = 0.3"),
+        formal_system: "rml-arithmetic".to_string(),
+        dependencies: vec![],
+    });
+
+    assert!(formalization.computable);
+    assert_eq!(formalization.formalization_level, 3);
+    assert!(formalization.unknowns.is_empty());
+
+    let result = evaluate_formalization(&formalization);
+    assert!(result.computable);
+    assert!(result.unknowns.is_empty());
+    assert_eq!(result.result, FormalizationResultValue::TruthValue(1.0));
+}
+
+#[test]
+fn meta_expression_adapter_arithmetic_question_is_not_query_clamped() {
+    let formalization = formalize_selected_interpretation(FormalizationRequest {
+        text: "What is 0.1 + 0.2?".to_string(),
+        interpretation: Interpretation::arithmetic_question("0.1 + 0.2"),
+        formal_system: "rml-arithmetic".to_string(),
+        dependencies: vec![],
+    });
+
+    let result = evaluate_formalization(&formalization);
+    assert!(result.computable);
+    assert_eq!(result.result, FormalizationResultValue::Number(0.3));
+}
+
+#[test]
+fn meta_expression_adapter_real_world_claim_stays_partial() {
+    let formalization = formalize_selected_interpretation(FormalizationRequest {
+        text: "moon orbits the Sun".to_string(),
+        interpretation: Interpretation::real_world_claim(
+            "Treat \"moon orbits the Sun\" as a factual claim that needs evidence.",
+        ),
+        formal_system: "rml".to_string(),
+        dependencies: vec![Dependency::missing(
+            "wikidata",
+            "No selected entity and relation ids were provided.",
+        )],
+    });
+
+    assert!(!formalization.computable);
+    assert_eq!(formalization.formalization_level, 2);
+    assert!(formalization
+        .unknowns
+        .contains(&"selected-subject".to_string()));
+    assert!(formalization
+        .unknowns
+        .contains(&"selected-relation".to_string()));
+
+    let result = evaluate_formalization(&formalization);
+    assert!(!result.computable);
+    assert_eq!(
+        result.result,
+        FormalizationResultValue::Partial("unknown".to_string())
+    );
 }
 
 // ===== quantize =====
@@ -1918,18 +1992,18 @@ fn example_belnap_four_valued() {
         None,
     );
     assert_eq!(results.len(), 12);
-    assert_eq!(results[0], 1.0);    // true
-    assert_eq!(results[1], 0.0);    // false
-    assert_eq!(results[2], 0.0);    // not true
-    assert_eq!(results[3], 1.0);    // not false
-    assert_eq!(results[4], 0.5);    // liar paradox
-    assert_eq!(results[5], 0.5);    // not liar paradox
-    assert_eq!(results[6], 0.5);    // true both false = 0.5 (contradiction)
-    assert_eq!(results[7], 0.0);    // true neither false = 0 (gap)
-    assert_eq!(results[8], 1.0);    // true both true = 1
-    assert_eq!(results[9], 0.0);    // false both false = 0
-    assert_eq!(results[10], 1.0);   // true neither true = 1
-    assert_eq!(results[11], 0.0);   // false neither false = 0
+    assert_eq!(results[0], 1.0); // true
+    assert_eq!(results[1], 0.0); // false
+    assert_eq!(results[2], 0.0); // not true
+    assert_eq!(results[3], 1.0); // not false
+    assert_eq!(results[4], 0.5); // liar paradox
+    assert_eq!(results[5], 0.5); // not liar paradox
+    assert_eq!(results[6], 0.5); // true both false = 0.5 (contradiction)
+    assert_eq!(results[7], 0.0); // true neither false = 0 (gap)
+    assert_eq!(results[8], 1.0); // true both true = 1
+    assert_eq!(results[9], 0.0); // false both false = 0
+    assert_eq!(results[10], 1.0); // true neither true = 1
+    assert_eq!(results[11], 0.0); // false neither false = 0
 }
 
 // ===== Type System: "everything is a link" =====
@@ -1939,22 +2013,20 @@ fn example_belnap_four_valued() {
 // --- substitute (beta-reduction helper) ---
 
 #[test]
+fn subst_alias_matches_kernel_substitution_primitive() {
+    let result = subst(&Node::Leaf("x".into()), "x", &Node::Leaf("y".into()));
+    assert_eq!(result, Node::Leaf("y".into()));
+}
+
+#[test]
 fn subst_variable_in_leaf() {
-    let result = substitute(
-        &Node::Leaf("x".into()),
-        "x",
-        &Node::Leaf("y".into()),
-    );
+    let result = substitute(&Node::Leaf("x".into()), "x", &Node::Leaf("y".into()));
     assert_eq!(result, Node::Leaf("y".into()));
 }
 
 #[test]
 fn subst_different_variable() {
-    let result = substitute(
-        &Node::Leaf("y".into()),
-        "x",
-        &Node::Leaf("z".into()),
-    );
+    let result = substitute(&Node::Leaf("y".into()), "x", &Node::Leaf("z".into()));
     assert_eq!(result, Node::Leaf("y".into()));
 }
 
@@ -2012,10 +2084,7 @@ fn subst_recursive_nested() {
 fn subst_shadow_lambda_colon() {
     let expr = Node::List(vec![
         Node::Leaf("lambda".into()),
-        Node::List(vec![
-            Node::Leaf("x:".into()),
-            Node::Leaf("Natural".into()),
-        ]),
+        Node::List(vec![Node::Leaf("x:".into()), Node::Leaf("Natural".into())]),
         Node::Leaf("x".into()),
     ]);
     let result = substitute(&expr, "x", &Node::Leaf("5".into()));
@@ -2026,10 +2095,7 @@ fn subst_shadow_lambda_colon() {
 fn subst_shadow_lambda_prefix() {
     let expr = Node::List(vec![
         Node::Leaf("lambda".into()),
-        Node::List(vec![
-            Node::Leaf("Natural".into()),
-            Node::Leaf("x".into()),
-        ]),
+        Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("x".into())]),
         Node::Leaf("x".into()),
     ]);
     let result = substitute(&expr, "x", &Node::Leaf("5".into()));
@@ -2040,10 +2106,7 @@ fn subst_shadow_lambda_prefix() {
 fn subst_shadow_pi() {
     let expr = Node::List(vec![
         Node::Leaf("Pi".into()),
-        Node::List(vec![
-            Node::Leaf("x:".into()),
-            Node::Leaf("Natural".into()),
-        ]),
+        Node::List(vec![Node::Leaf("x:".into()), Node::Leaf("Natural".into())]),
         Node::Leaf("x".into()),
     ]);
     let result = substitute(&expr, "x", &Node::Leaf("Boolean".into()));
@@ -2054,10 +2117,7 @@ fn subst_shadow_pi() {
 fn subst_free_var_in_lambda() {
     let expr = Node::List(vec![
         Node::Leaf("lambda".into()),
-        Node::List(vec![
-            Node::Leaf("Natural".into()),
-            Node::Leaf("y".into()),
-        ]),
+        Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("y".into())]),
         Node::Leaf("x".into()),
     ]);
     let result = substitute(&expr, "x", &Node::Leaf("5".into()));
@@ -2065,11 +2125,88 @@ fn subst_free_var_in_lambda() {
         result,
         Node::List(vec![
             Node::Leaf("lambda".into()),
-            Node::List(vec![
-                Node::Leaf("Natural".into()),
-                Node::Leaf("y".into()),
-            ]),
+            Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("y".into()),]),
             Node::Leaf("5".into()),
+        ])
+    );
+}
+
+#[test]
+fn subst_alpha_renames_lambda_binder_to_avoid_capture() {
+    let expr = Node::List(vec![
+        Node::Leaf("lambda".into()),
+        Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("y".into())]),
+        Node::List(vec![
+            Node::Leaf("x".into()),
+            Node::Leaf("+".into()),
+            Node::Leaf("y".into()),
+        ]),
+    ]);
+    let result = subst(&expr, "x", &Node::Leaf("y".into()));
+    assert_eq!(
+        result,
+        Node::List(vec![
+            Node::Leaf("lambda".into()),
+            Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("y_1".into())]),
+            Node::List(vec![
+                Node::Leaf("y".into()),
+                Node::Leaf("+".into()),
+                Node::Leaf("y_1".into()),
+            ]),
+        ])
+    );
+}
+
+#[test]
+fn subst_alpha_renames_pi_binder_to_avoid_capture() {
+    let expr = Node::List(vec![
+        Node::Leaf("Pi".into()),
+        Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("y".into())]),
+        Node::List(vec![
+            Node::Leaf("Vec".into()),
+            Node::Leaf("x".into()),
+            Node::Leaf("y".into()),
+        ]),
+    ]);
+    let result = subst(&expr, "x", &Node::Leaf("y".into()));
+    assert_eq!(
+        result,
+        Node::List(vec![
+            Node::Leaf("Pi".into()),
+            Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("y_1".into())]),
+            Node::List(vec![
+                Node::Leaf("Vec".into()),
+                Node::Leaf("y".into()),
+                Node::Leaf("y_1".into()),
+            ]),
+        ])
+    );
+}
+
+#[test]
+fn subst_alpha_renames_fresh_binder_to_avoid_capture() {
+    let expr = Node::List(vec![
+        Node::Leaf("fresh".into()),
+        Node::Leaf("y".into()),
+        Node::Leaf("in".into()),
+        Node::List(vec![
+            Node::Leaf("x".into()),
+            Node::Leaf("+".into()),
+            Node::Leaf("y".into()),
+        ]),
+    ]);
+    let result = subst(&expr, "x", &Node::Leaf("y".into()));
+    assert_eq!(
+        result,
+        Node::List(vec![
+            Node::Leaf("fresh".into()),
+            Node::Leaf("y_1".into()),
+            Node::Leaf("in".into()),
+            Node::List(vec![
+                Node::Leaf("y".into()),
+                Node::Leaf("+".into()),
+                Node::Leaf("y_1".into()),
+            ]),
         ])
     );
 }
@@ -2177,10 +2314,7 @@ fn pi_type_registers_in_env() {
     eval_node(
         &Node::List(vec![
             Node::Leaf("Pi".into()),
-            Node::List(vec![
-                Node::Leaf("Natural".into()),
-                Node::Leaf("x".into()),
-            ]),
+            Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("x".into())]),
             Node::Leaf("Natural".into()),
         ]),
         &mut env,
@@ -2194,10 +2328,7 @@ fn pi_type_registers_param() {
     eval_node(
         &Node::List(vec![
             Node::Leaf("Pi".into()),
-            Node::List(vec![
-                Node::Leaf("Natural".into()),
-                Node::Leaf("n".into()),
-            ]),
+            Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("n".into())]),
             Node::List(vec![
                 Node::Leaf("Vec".into()),
                 Node::Leaf("n".into()),
@@ -2230,10 +2361,7 @@ fn lambda_stores_pi_type() {
     eval_node(
         &Node::List(vec![
             Node::Leaf("lambda".into()),
-            Node::List(vec![
-                Node::Leaf("Natural".into()),
-                Node::Leaf("x".into()),
-            ]),
+            Node::List(vec![Node::Leaf("Natural".into()), Node::Leaf("x".into())]),
             Node::Leaf("x".into()),
         ]),
         &mut env,
@@ -3023,8 +3151,8 @@ fn valence_10_ten_valued() {
 "#,
         None,
     );
-    assert!((results[0] - 1.0/3.0).abs() < 1e-6);
-    assert!((results[1] - 7.0/9.0).abs() < 1e-6);
+    assert!((results[0] - 1.0 / 3.0).abs() < 1e-6);
+    assert!((results[1] - 7.0 / 9.0).abs() < 1e-6);
 }
 
 #[test]
@@ -3038,7 +3166,7 @@ fn valence_100_hundred_valued() {
 "#,
         None,
     );
-    assert!((results[0] - 50.0/99.0).abs() < 1e-4);
+    assert!((results[0] - 50.0 / 99.0).abs() < 1e-4);
 }
 
 #[test]
@@ -3052,7 +3180,7 @@ fn valence_1000_thousand_valued() {
 "#,
         None,
     );
-    assert!((results[0] - 333.0/999.0).abs() < 1e-3);
+    assert!((results[0] - 333.0 / 999.0).abs() < 1e-3);
 }
 
 #[test]

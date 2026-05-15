@@ -1,0 +1,16 @@
+(foundation classical-min (defines and min))
+
+(a: a is a)
+(b: b is b)
+((a = true) has probability 0.6)
+((b = true) has probability 0.4)
+
+# Default `and` is avg → 0.5
+(? ((a = true) and (b = true)))
+
+# Inside classical-min, `and` is min → 0.4
+(with-foundation classical-min
+  (? ((a = true) and (b = true))))
+
+# Back to default → 0.5
+(? ((a = true) and (b = true)))

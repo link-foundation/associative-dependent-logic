@@ -1,0 +1,233 @@
+# RML metatheorem checker encoded as links for the self-bootstrap layer.
+#
+# The rules below are data. They mirror the host C3 metatheorem checker
+# surface so a future self-hosted checker can consume `(rule ...)` links
+# directly, while today's evaluator can import this file without requiring
+# a metatheorem interpreter.
+#
+# The checker composes four existing kernel facilities:
+#   D15 modes       — `(mode name flag ...)` declarations
+#   D14 coverage    — every constructor of an input type is handled
+#   D12 totality    — every recursive call structurally decreases on a +input slot
+#   D13 termination — `(define ...)` forms are structurally decreasing
+
+(namespace self)
+
+(Metatheorem-checker: (Type 0) Metatheorem-checker)
+(Check-result: (Type 0) Check-result)
+(Check-kind: (Type 0) Check-kind)
+(Meta-diagnostic: (Type 0) Meta-diagnostic)
+(Mode-declaration: (Type 0) Mode-declaration)
+(Relation-definition: (Type 0) Relation-definition)
+(Inductive-type: (Type 0) Inductive-type)
+(Definition-form: (Type 0) Definition-form)
+
+(rml-metatheorem-checker: Metatheorem-checker rml-metatheorem-checker)
+(metatheorem-checker rml-metatheorem-checker matches relative-meta-logic version-0-19-0)
+(metatheorem-checker rml-metatheorem-checker has host-metatheorem-checker-presentation rule-links)
+
+# Check kinds emitted per candidate (D12 totality, D14 coverage, D13 termination).
+
+(check-kind totality reads relation-structurally-decreases-on-input)
+(check-kind coverage reads every-input-constructor-is-handled)
+(check-kind termination reads define-form-structurally-decreases)
+
+# Mode declaration forms (D15). A mode associates each argument slot of a
+# relation with +input (a ground value provided by the caller) or -output
+# (a value the relation produces). The checker uses these flags to decide
+# which slots must be covered and which recursive call arguments must
+# structurally decrease.
+
+(rule (mode name flags)
+  (when (valid-mode-declaration name flags))
+  (stores (modes name) flags))
+
+(rule (valid-mode-declaration name flags)
+  (requires (nonempty flags))
+  (requires (all-flags-are-mode-flags flags)))
+
+(rule (mode-flag +input)
+  (marks slot as input))
+
+(rule (mode-flag -output)
+  (marks slot as output))
+
+# Inductive type declarations (used by coverage check D14).
+
+(rule (inductive type-name constructors)
+  (when (valid-inductive-declaration type-name constructors))
+  (stores (inductives type-name) constructors))
+
+(rule (constructor name)
+  (records nullary-constructor name))
+
+(rule (constructor (name (Pi (type variable) result)))
+  (records unary-constructor name with-argument-type type))
+
+# Relation clause declarations (used by D12 and D14).
+
+(rule (relation name clauses)
+  (when (valid-relation-declaration name clauses))
+  (stores (relations name) clauses))
+
+# Definition declarations (used by D13 termination check).
+
+(rule (define name cases)
+  (when (valid-definition-declaration name cases))
+  (stores (definitions name) cases))
+
+(rule (case pattern body)
+  (records case-clause pattern body))
+
+# Totality check (D12): every +input slot of every recursive call inside a
+# relation clause must be a strict structural subterm of the corresponding
+# head +input. The checker walks clause bodies and collects any recursive
+# call whose matching slot is not a strict subterm of the head.
+
+(rule (totality-check name env)
+  (let clauses (lookup (relations name) env))
+  (let mode (lookup (modes name) env))
+  (let input-slots (filter-input-slots mode))
+  (fold-clauses clauses (check-clause-totality name input-slots)))
+
+(rule (check-clause-totality name input-slots clause)
+  (let head-inputs (extract-head-inputs clause input-slots))
+  (let recursive-calls (find-recursive-calls name clause))
+  (all-calls-decrease recursive-calls head-inputs input-slots))
+
+(rule (all-calls-decrease calls head-inputs input-slots)
+  (forall call calls
+    (exists slot input-slots
+      (structurally-decreases (slot-arg call slot) (slot-arg head-inputs slot)))))
+
+(rule (structurally-decreases sub whole)
+  (proper-subterm sub whole))
+
+# Coverage check (D14): for every +input slot that has an inductive type,
+# the clause heads must cover every constructor of that type.
+
+(rule (coverage-check name env)
+  (let clauses (lookup (relations name) env))
+  (let mode (lookup (modes name) env))
+  (let input-slots (filter-input-slots mode))
+  (check-slot-coverage name clauses input-slots env))
+
+(rule (check-slot-coverage name clauses input-slots env)
+  (forall slot input-slots
+    (let type (infer-slot-type name slot env))
+    (when (inductive-type-known type env)
+      (let constructors (lookup (inductives type) env))
+      (let covered (covered-constructors clauses slot))
+      (constructors-all-covered constructors covered name slot))))
+
+(rule (constructors-all-covered constructors covered name slot)
+  (forall ctor constructors
+    (when (not (member ctor covered))
+      (emit (E037 name slot ctor)))))
+
+# Termination check (D13): for every `(define ...)` form, each recursive
+# call must apply the function to a strictly smaller argument tuple under
+# the lexicographic measure induced by the pattern order.
+
+(rule (termination-check name env)
+  (let cases (lookup (definitions name) env))
+  (fold-cases cases (check-case-termination name)))
+
+(rule (check-case-termination name the-case)
+  (let pattern (case-pattern the-case))
+  (let body (case-body the-case))
+  (let recursive-calls (find-recursive-calls name body))
+  (all-calls-decrease-definition recursive-calls pattern))
+
+(rule (all-calls-decrease-definition calls pattern)
+  (forall call calls
+    (call-args-structurally-decrease (call-args call) pattern)))
+
+(rule (call-args-structurally-decrease call-args head-pattern)
+  (exists i (indices call-args)
+    (and
+      (structurally-decreases (nth call-args i) (nth head-pattern i))
+      (forall j (indices-before i call-args)
+        (structurally-equal (nth call-args j) (nth head-pattern j))))))
+
+# Metatheorem report assembly. The checker enumerates every relation that
+# has a `(mode ...)` declaration (relation candidates) and every
+# `(define ...)` form (definition candidates). It runs the appropriate
+# sub-checks on each and collects results into a structured report.
+
+(rule (check-metatheorems program)
+  (let env (evaluate program))
+  (let relation-names (sorted (keys (modes env))))
+  (let definition-names (sorted (keys (definitions env))))
+  (let relation-results (map relation-names (check-relation env)))
+  (let definition-results (map definition-names (check-definition env)))
+  (report relation-results definition-results))
+
+(rule (check-relation env name)
+  (when (nonempty (lookup (relations name) env))
+    (let totality (totality-check name env))
+    (let coverage (coverage-check name env))
+    (metatheorem-result name (list totality coverage))))
+
+(rule (check-definition env name)
+  (let termination (termination-check name env))
+  (metatheorem-result name (list termination)))
+
+(rule (metatheorem-result name checks)
+  (result name checks (all-ok checks)))
+
+(rule (all-ok checks)
+  (forall check checks (check-ok check)))
+
+# Diagnostics emitted by the sub-checkers.
+
+(rule (diagnostic totality-failure name clause call)
+  (emits E032))
+
+(rule (diagnostic coverage-failure name slot ctor)
+  (emits E037))
+
+(rule (diagnostic termination-failure name the-case call)
+  (emits E035))
+
+# Mode-related diagnostics (E030 and E031 emitted during mode parsing).
+
+(rule (diagnostic mode-missing-flags name)
+  (emits E030))
+
+(rule (diagnostic mode-invalid-flag name flag)
+  (emits E031))
+
+# CLI formatting: the report is rendered with one line per candidate plus
+# per-check lines showing pass or fail and counter-witnesses.
+
+(rule (format-report report)
+  (when (empty (report-relations report))
+    (when (empty (report-definitions report))
+      (return no-metatheorem-candidates-message)))
+  (format-relation-section (report-relations report))
+  (format-definition-section (report-definitions report))
+  (format-summary (report-ok report)))
+
+(rule (format-relation-section relations)
+  (prefix relations-heading)
+  (map relations format-relation-entry))
+
+(rule (format-relation-entry result)
+  (status (if (result-ok result) ok fail))
+  (name (result-name result))
+  (map (result-checks result) format-check-line))
+
+(rule (format-check-line check)
+  (kind (check-kind check))
+  (status (if (check-ok check) pass fail))
+  (when (not (check-ok check))
+    (map (check-diagnostics check) format-diagnostic-line)))
+
+(rule (format-summary ok)
+  (if ok
+    (return all-metatheorems-hold-message)
+    (return one-or-more-metatheorems-failed-message)))
+
+(rule (host-metatheorem-checker-presentation rml-metatheorem-checker)
+  (rule-links with check-metatheorems-pattern))

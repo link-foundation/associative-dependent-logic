@@ -1,0 +1,47 @@
+# Lambda calculus encoded with Higher-Order Abstract Syntax (HOAS).
+#
+# HOAS represents object-language binders with the host language's binders.
+# Here the kernel's `lambda`, `Pi`, and `fresh` are reused, so capture-avoiding
+# substitution and freshness fall out of the kernel without a separate
+# implementation. The surface keyword `forall` desugars to `Pi`.
+#
+# See docs/KERNEL.md (Higher-Order Abstract Syntax (HOAS)) for the full
+# pattern. Acceptance for issue #51: the round-trip below uses HOAS and the
+# results match `expected.lino`.
+
+# === Object-language sort ===
+(Term: (Type 0) Term)
+
+# === Object-language identity ===
+# Object-level `\x.x` is encoded as the host `lambda`.
+# Object-level `forall x:Term, Term` desugars to `(Pi (Term x) Term)`.
+(identity: lambda (Term x) x)
+
+# === `forall` and `Pi` are interchangeable classifiers ===
+# Same `identity` is recognised under both spellings of its type.
+(? (identity of (Pi     (Term x) Term)))
+(? (identity of (forall (Term x) Term)))
+
+# === Round-trip beta reduction ===
+# Applying the host `lambda` runs the kernel's beta rule, which is the
+# capture-avoiding substitution promised by the HOAS encoding.
+(? ((apply identity 0.42) = 0.42))
+
+# Inline lambda — same kernel reduction path as the named one.
+(? (apply (lambda (Term x) x) 0.7))
+
+# === Capture avoidance under a nested binder ===
+# The kernel alpha-renames so the free variable in the argument is not
+# captured by the inner binder. Substitution-then-application yields the
+# argument back, demonstrating the rename happened correctly.
+(? (apply (apply (lambda (Term x) (lambda (Term y) x)) 0.31) 0.99))
+
+# === Normalization for the typed fragment (issue #50, D4) ===
+# `whnf` reduces only the spine — outer redex peels, inner argument is left
+# as a redex. `nf` (alias `normal-form`) reduces every redex. Both APIs
+# also exist as library functions: `whnf(term, ctx)` and `nf(term, ctx)`.
+(zero: Term zero)
+(succ: (Pi (Term n) Term))
+(compose: lambda (Term f) (lambda (Term g) (lambda (Term x) (apply f (apply g x)))))
+(? (whnf (apply identity (apply identity zero))))
+(? (normal-form (apply (apply (apply compose succ) succ) zero)))
