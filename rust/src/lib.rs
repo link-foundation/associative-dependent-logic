@@ -890,7 +890,18 @@ pub struct Env {
     /// Backward compatibility is preserved by defaulting to `default-rml`.
     pub foundations: HashMap<String, FoundationDescriptor>,
     pub active_foundation: String,
-    pub foundation_stack: Vec<String>,
+    pub foundation_stack: Vec<FoundationFrame>,
+}
+
+/// Stack frame pushed when entering a foundation scope. Stores the previous
+/// active foundation name plus a snapshot of any operators the foundation
+/// rebinds, so `exit_foundation` can restore the prior semantics exactly.
+/// `snapshot` maps operator name -> previous Op (None if the op did not
+/// exist before).
+#[derive(Debug, Clone)]
+pub struct FoundationFrame {
+    pub previous_active: String,
+    pub snapshot: Vec<(String, Option<Op>)>,
 }
 
 /// A root-construct descriptor. Stored on the `Env` for the foundation
@@ -1207,18 +1218,44 @@ impl Env {
     }
 
     pub fn enter_foundation(&mut self, name: &str) -> Result<(), String> {
-        if !self.foundations.contains_key(name) {
-            return Err(format!("Unknown foundation: {}", name));
+        let foundation = match self.foundations.get(name) {
+            Some(f) => f.clone(),
+            None => return Err(format!("Unknown foundation: {}", name)),
+        };
+        // Snapshot the operators that this foundation rebinds so
+        // `exit_foundation` can restore them. Only `(defines <op> <agg>)`
+        // entries that name a known truth aggregator are applied (avg, min,
+        // max, product, probabilistic_sum); other entries are data-only.
+        let mut snapshot: Vec<(String, Option<Op>)> = Vec::new();
+        for (op_name, impl_name) in &foundation.defines {
+            if let Some(agg) = Aggregator::from_name(impl_name) {
+                let prev = self.ops.get(op_name).cloned();
+                snapshot.push((op_name.clone(), prev));
+                self.ops.insert(op_name.clone(), Op::Agg(agg));
+            }
         }
-        self.foundation_stack
-            .push(std::mem::take(&mut self.active_foundation));
+        let frame = FoundationFrame {
+            previous_active: std::mem::take(&mut self.active_foundation),
+            snapshot,
+        };
+        self.foundation_stack.push(frame);
         self.active_foundation = name.to_string();
         Ok(())
     }
 
     pub fn exit_foundation(&mut self) {
-        if let Some(prev) = self.foundation_stack.pop() {
-            self.active_foundation = prev;
+        if let Some(frame) = self.foundation_stack.pop() {
+            for (op_name, prev) in frame.snapshot.into_iter().rev() {
+                match prev {
+                    Some(op) => {
+                        self.ops.insert(op_name, op);
+                    }
+                    None => {
+                        self.ops.remove(&op_name);
+                    }
+                }
+            }
+            self.active_foundation = frame.previous_active;
         } else {
             self.active_foundation = "default-rml".to_string();
         }

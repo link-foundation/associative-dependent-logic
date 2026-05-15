@@ -548,10 +548,24 @@ class Env {
   }
 
   enterFoundation(name) {
-    if (!this.foundations.has(name)) {
+    const foundation = this.foundations.get(name);
+    if (!foundation) {
       throw new RmlError('E062', `Unknown foundation: ${name}`);
     }
-    this._foundationStack.push(this.activeFoundation);
+    // Snapshot the operators that this foundation rebinds so `exitFoundation`
+    // can restore them. Only `(defines <op> <aggregator>)` entries that name
+    // a known truth aggregator are applied (avg, min, max, product,
+    // probabilistic_sum); other entries are data-only.
+    const snapshot = new Map();
+    if (foundation.defines && foundation.defines.size > 0) {
+      for (const [opName, implName] of foundation.defines.entries()) {
+        const fn = aggregatorOpFromName(this, implName);
+        if (fn === null) continue;
+        snapshot.set(opName, this.ops.has(opName) ? this.ops.get(opName) : null);
+        this.ops.set(opName, fn);
+      }
+    }
+    this._foundationStack.push({ name: this.activeFoundation, snapshot });
     this.activeFoundation = name;
   }
 
@@ -560,7 +574,17 @@ class Env {
       this.activeFoundation = 'default-rml';
       return;
     }
-    this.activeFoundation = this._foundationStack.pop();
+    const frame = this._foundationStack.pop();
+    if (frame && frame.snapshot) {
+      for (const [opName, op] of frame.snapshot.entries()) {
+        if (op === null) {
+          this.ops.delete(opName);
+        } else {
+          this.ops.set(opName, op);
+        }
+      }
+    }
+    this.activeFoundation = frame && typeof frame.name === 'string' ? frame.name : 'default-rml';
   }
 
   // Build a structured trust / foundation report. The shape is intentionally
@@ -682,6 +706,26 @@ function mergeFoundationDescriptors(previous, next) {
   if (next.numericDomain) base.numericDomain = next.numericDomain;
   if (next.truthDomain) base.truthDomain = next.truthDomain;
   return base;
+}
+
+// Build a truth-aggregator operator function from its canonical name
+// (`avg`, `min`, `max`, `product`/`prod`, `probabilistic_sum`/`ps`). Returns
+// `null` for unrecognized names so callers can skip data-only `(defines ...)`
+// entries silently. Mirrors the `(<op>: <aggregator>)` resolution path so
+// foundation-driven rebindings produce the same semantics as explicit
+// operator assignments.
+function aggregatorOpFromName(env, sel) {
+  if (typeof sel !== 'string') return null;
+  const lo = env.lo;
+  const agg =
+    sel === 'avg' ? xs => xs.reduce((a, b) => a + b, 0) / xs.length :
+    sel === 'min' ? xs => xs.length ? Math.min(...xs) : lo :
+    sel === 'max' ? xs => xs.length ? Math.max(...xs) : lo :
+    sel === 'product' || sel === 'prod' ? xs => xs.reduce((a, b) => a * b, 1) :
+    sel === 'probabilistic_sum' || sel === 'ps' ? xs => 1 - xs.reduce((a, b) => a * (1 - b), 1) :
+    null;
+  if (!agg) return null;
+  return (...xs) => xs.length ? agg(xs) : lo;
 }
 
 // Seed the registry with the built-in descriptors that describe what the
