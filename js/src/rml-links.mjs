@@ -311,6 +311,14 @@ class Env {
     this._strictCarrier = false;
     this._carrier = null;
     this._carrierLabel = null;
+    // Pure-links strict mode (issue #97, Phase 6 of netkeep80's punch-list).
+    // When enabled, every queried expression is scanned and any operator leaf
+    // resolving to a root construct whose status is `host-primitive` or
+    // `host-derived` triggers an E065 diagnostic — unless the construct name
+    // is in the explicit allow list. Off by default so legacy programs run
+    // unchanged.
+    this.strictPureLinks = false;
+    this.allowedHostPrimitives = new Set();
     this._registerDefaultFoundation();
     // Optional tracer: when set, key evaluation events (operator resolutions,
     // assignment lookups, top-level reductions) are pushed via `trace(kind, detail)`.
@@ -733,6 +741,8 @@ class Env {
           conclusion: keyOf(po.conclusion),
         }))
         .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      strictPureLinks: this.strictPureLinks === true,
+      allowedHostPrimitives: [...this.allowedHostPrimitives].sort(),
     };
   }
 
@@ -1282,6 +1292,13 @@ function formatFoundationReport(report) {
       lines.push(`  - ${po.name} : applies ${po.rule} (${po.premises.length} premises → ${po.conclusion})`);
     }
   }
+  if (report.strictPureLinks === true) {
+    lines.push('');
+    lines.push('pure-links strict mode: on');
+    if (Array.isArray(report.allowedHostPrimitives) && report.allowedHostPrimitives.length > 0) {
+      lines.push(`  allowed host primitives: ${report.allowedHostPrimitives.join(', ')}`);
+    }
+  }
   return lines.join('\n');
 }
 
@@ -1424,6 +1441,116 @@ function checkProofObject(env, name) {
     return { ok: false, error: `proof-object ${name}: conclusion does not match rule ${po.rule}` };
   }
   return { ok: true, substitution: subs };
+}
+
+// ---------- Pure-links strict mode (issue #97, Phase 6) ----------
+//
+// `(strict-foundation pure-links)` turns the strict mode on; everything inside
+// a queried form is then audited against the root-construct registry. Any
+// operator leaf whose status is `host-primitive` or `host-derived` produces
+// an E065 diagnostic — unless the construct name has been explicitly allow-
+// listed with `(allow-host-primitive <name>...)`. The mode is sticky for the
+// remainder of the file, which mirrors the way `(strict-carrier)` works
+// inside `(with-foundation ...)`.
+
+function parseStrictFoundationForm(node) {
+  if (!Array.isArray(node) || node[0] !== 'strict-foundation') {
+    throw new RmlError('E065', '(strict-foundation <profile>) is required');
+  }
+  if (node.length !== 2 || typeof node[1] !== 'string' || !node[1]) {
+    throw new RmlError('E065', '(strict-foundation <profile>) requires a single profile name');
+  }
+  if (node[1] !== 'pure-links') {
+    throw new RmlError('E065', `unknown strict-foundation profile: ${node[1]} (expected pure-links)`);
+  }
+  return { profile: node[1] };
+}
+
+function parseAllowHostPrimitiveForm(node) {
+  if (!Array.isArray(node) || node[0] !== 'allow-host-primitive') {
+    throw new RmlError('E065', '(allow-host-primitive <name>...) is required');
+  }
+  if (node.length < 2) {
+    throw new RmlError('E065', '(allow-host-primitive <name>...) requires at least one construct name');
+  }
+  const names = [];
+  for (const tok of node.slice(1)) {
+    if (typeof tok !== 'string' || !tok) {
+      throw new RmlError('E065', '(allow-host-primitive ...) names must be non-empty identifiers');
+    }
+    names.push(tok);
+  }
+  return { names };
+}
+
+// Operator leaves that the strict scanner is *not* meant to audit. These are
+// either internal proof markers (`by`, `because`, ...) or surface keywords
+// that have nothing to do with the host-primitive substrate (`with`, `proof`,
+// query head `?`). Adding them here keeps the scanner from emitting false
+// positives for forms that are not really "operators" in the registry sense.
+const PURE_LINKS_SCANNER_IGNORED = new Set([
+  '?', 'with', 'proof',
+  'by', 'because',
+  'let', 'in', 'where',
+  ':', '::',
+  'has', 'probability',
+  'is', 'a', 'an',
+  'sequence', 'normalizes-to',
+  'applies', 'premise', 'conclusion', 'rule', 'proof-object', 'check-proof',
+  'foundation', 'with-foundation', 'foundation-report', 'foundation-report?',
+  'root-construct', 'strict-carrier', 'truth-table',
+  'strict-foundation', 'allow-host-primitive',
+]);
+
+function _isStrictlyOffendingStatus(status) {
+  return status === 'host-primitive' || status === 'host-derived';
+}
+
+// Walk the queried AST, look up every operator-head leaf in the root-construct
+// registry, and collect the names of any constructs with an offending status
+// that are not in the allow list. Returns a sorted, deduplicated array.
+function scanPureLinksOffenders(node, env) {
+  if (env.strictPureLinks !== true) return [];
+  const offenders = new Set();
+  const allow = env.allowedHostPrimitives instanceof Set ? env.allowedHostPrimitives : new Set();
+  const visit = (n) => {
+    if (Array.isArray(n)) {
+      const head = n[0];
+      if (typeof head === 'string') {
+        if (!PURE_LINKS_SCANNER_IGNORED.has(head) && !allow.has(head)) {
+          const rc = env.getRootConstruct(head);
+          if (rc && _isStrictlyOffendingStatus(rc.status)) {
+            offenders.add(head);
+          }
+        }
+      }
+      // Inspect every list child too — the head may live deeper inside a
+      // sublist (e.g. an infix `(L op R)` shape).
+      for (let i = 0; i < n.length; i++) visit(n[i]);
+      // For infix `(L op R)` the operator is the middle element; check it
+      // explicitly so we don't miss it.
+      if (n.length === 3 && typeof n[1] === 'string') {
+        const op = n[1];
+        if (!PURE_LINKS_SCANNER_IGNORED.has(op) && !allow.has(op)) {
+          const rc = env.getRootConstruct(op);
+          if (rc && _isStrictlyOffendingStatus(rc.status)) {
+            offenders.add(op);
+          }
+        }
+      }
+      return;
+    }
+    if (typeof n === 'string') {
+      if (!PURE_LINKS_SCANNER_IGNORED.has(n) && !allow.has(n)) {
+        const rc = env.getRootConstruct(n);
+        if (rc && _isStrictlyOffendingStatus(rc.status)) {
+          offenders.add(n);
+        }
+      }
+    }
+  };
+  visit(node);
+  return [...offenders].sort();
 }
 
 // ---------- HOAS desugarer ----------
@@ -6110,6 +6237,18 @@ function evaluate(code, options) {
                   span,
                 }));
               }
+              if (env.strictPureLinks === true) {
+                const innerExp = _stripWithProof(expanded.slice(1));
+                const targetExp = innerExp.length === 1 ? innerExp[0] : innerExp;
+                const offenders = scanPureLinksOffenders(targetExp, env);
+                if (offenders.length > 0) {
+                  diagnostics.push(new Diagnostic({
+                    code: 'E065',
+                    message: `Query depends on host-primitive construct(s) under pure-links strict mode: ${offenders.join(', ')}`,
+                    span,
+                  }));
+                }
+              }
             }
           }
         } catch (innerErr) {
@@ -6301,6 +6440,42 @@ function evaluate(code, options) {
       }
       continue;
     }
+    // Pure-links strict mode (issue #97, Phase 6). The `(strict-foundation
+    // pure-links)` form flips the audit on for every subsequent query; the
+    // `(allow-host-primitive ...)` form whitelists specific host primitives
+    // so a program can opt in gradually instead of all at once.
+    if (Array.isArray(form) && form[0] === 'strict-foundation') {
+      try {
+        const decl = parseStrictFoundationForm(form);
+        env.strictPureLinks = true;
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: 'strict-foundation', detail: decl.profile, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: (err && err.code) || 'E065',
+          message: err && err.message ? err.message : String(err),
+          span: (err && err.span) || span,
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === 'allow-host-primitive') {
+      try {
+        const decl = parseAllowHostPrimitiveForm(form);
+        for (const n of decl.names) env.allowedHostPrimitives.add(n);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: 'allow-host-primitive', detail: decl.names.join(','), span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: (err && err.code) || 'E065',
+          message: err && err.message ? err.message : String(err),
+          span: (err && err.span) || span,
+        }));
+      }
+      continue;
+    }
     if (Array.isArray(form) && form[0] === 'check-proof') {
       if (form.length !== 2 || typeof form[1] !== 'string') {
         diagnostics.push(new Diagnostic({
@@ -6377,6 +6552,18 @@ function evaluate(code, options) {
             message: `Query result ${formatTraceValue(res.value)} violates active foundation carrier: ${carrierErr}`,
             span,
           }));
+        }
+        if (env.strictPureLinks === true) {
+          const inner = _stripWithProof(expandedForm.slice(1));
+          const target = inner.length === 1 ? inner[0] : inner;
+          const offenders = scanPureLinksOffenders(target, env);
+          if (offenders.length > 0) {
+            diagnostics.push(new Diagnostic({
+              code: 'E065',
+              message: `Query depends on host-primitive construct(s) under pure-links strict mode: ${offenders.join(', ')}`,
+              span,
+            }));
+          }
         }
       }
     } catch (err) {
@@ -7685,4 +7872,7 @@ export {
   parseProofObjectForm,
   matchProofPattern,
   checkProofObject,
+  parseStrictFoundationForm,
+  parseAllowHostPrimitiveForm,
+  scanPureLinksOffenders,
 };

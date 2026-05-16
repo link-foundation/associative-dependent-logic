@@ -946,6 +946,14 @@ pub struct Env {
     /// alters evaluator behaviour. The CLI's foundation report surfaces them.
     pub proof_rules: HashMap<String, ProofRule>,
     pub proof_objects: HashMap<String, ProofObject>,
+    /// Pure-links strict mode (issue #97, Phase 6 of netkeep80's punch-list).
+    /// When `strict_pure_links` is true, every queried form is audited
+    /// against the root-construct registry; any operator whose status is
+    /// `host-primitive` or `host-derived` triggers an E065 diagnostic unless
+    /// the construct is in `allowed_host_primitives`. Off by default so
+    /// legacy programs run unchanged.
+    pub strict_pure_links: bool,
+    pub allowed_host_primitives: HashSet<String>,
 }
 
 /// Stack frame pushed when entering a foundation scope. Stores the previous
@@ -1042,6 +1050,11 @@ pub struct FoundationReport {
     /// Names are kept sorted for stable output across runs.
     pub proof_rules: Vec<ProofRuleSnapshot>,
     pub proof_objects: Vec<ProofObjectSnapshot>,
+    /// Pure-links strict mode state (issue #97, Phase 6). Surfaced so the
+    /// trust audit can prove the engine is running in strict mode and list
+    /// every host primitive that was explicitly allow-listed.
+    pub strict_pure_links: bool,
+    pub allowed_host_primitives: Vec<String>,
 }
 
 /// A declared rule of inference. Premises and the conclusion are stored as
@@ -1240,6 +1253,8 @@ impl Env {
             carrier_label: None,
             proof_rules: HashMap::new(),
             proof_objects: HashMap::new(),
+            strict_pure_links: false,
+            allowed_host_primitives: HashSet::new(),
         };
 
         // Initialize truth constants: true, false, unknown, undefined
@@ -1553,6 +1568,8 @@ impl Env {
             })
             .collect();
         proof_objects.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut allowed: Vec<String> = self.allowed_host_primitives.iter().cloned().collect();
+        allowed.sort();
         FoundationReport {
             active_foundation: active,
             description: foundation.as_ref().and_then(|f| f.description.clone()),
@@ -1563,6 +1580,8 @@ impl Env {
             foundations,
             proof_rules,
             proof_objects,
+            strict_pure_links: self.strict_pure_links,
+            allowed_host_primitives: allowed,
         }
     }
 
@@ -3337,6 +3356,184 @@ pub fn check_proof_object(env: &Env, name: &str) -> CheckProofVerdict {
     CheckProofVerdict::Ok(subs)
 }
 
+// ---------- Pure-links strict mode (issue #97, Phase 6) ----------
+//
+// Mirrors the JS implementation in `js/src/rml-links.mjs`. The forms
+// `(strict-foundation pure-links)` and `(allow-host-primitive <name>...)`
+// flip the audit on and whitelist specific constructs respectively. Every
+// query is then scanned: any operator leaf whose registered root-construct
+// status is `host-primitive` or `host-derived` raises an E065 diagnostic
+// unless the construct name is in `env.allowed_host_primitives`.
+
+/// Parsed `(strict-foundation <profile>)` directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrictFoundationDecl {
+    pub profile: String,
+}
+
+/// Parsed `(allow-host-primitive <name>...)` directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowHostPrimitiveDecl {
+    pub names: Vec<String>,
+}
+
+pub fn parse_strict_foundation_form(node: &Node) -> Result<StrictFoundationDecl, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => return Err("(strict-foundation <profile>) is required".to_string()),
+    };
+    if children.is_empty() || !matches!(children.first(), Some(Node::Leaf(h)) if h == "strict-foundation") {
+        return Err("(strict-foundation <profile>) is required".to_string());
+    }
+    if children.len() != 2 {
+        return Err("(strict-foundation <profile>) requires a single profile name".to_string());
+    }
+    let profile = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err("(strict-foundation <profile>) requires a single profile name".to_string()),
+    };
+    if profile != "pure-links" {
+        return Err(format!(
+            "unknown strict-foundation profile: {} (expected pure-links)",
+            profile
+        ));
+    }
+    Ok(StrictFoundationDecl { profile })
+}
+
+pub fn parse_allow_host_primitive_form(node: &Node) -> Result<AllowHostPrimitiveDecl, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => return Err("(allow-host-primitive <name>...) is required".to_string()),
+    };
+    if children.is_empty() || !matches!(children.first(), Some(Node::Leaf(h)) if h == "allow-host-primitive") {
+        return Err("(allow-host-primitive <name>...) is required".to_string());
+    }
+    if children.len() < 2 {
+        return Err(
+            "(allow-host-primitive <name>...) requires at least one construct name".to_string(),
+        );
+    }
+    let mut names = Vec::new();
+    for child in &children[1..] {
+        match child {
+            Node::Leaf(s) if !s.is_empty() => names.push(s.clone()),
+            _ => {
+                return Err(
+                    "(allow-host-primitive ...) names must be non-empty identifiers".to_string()
+                );
+            }
+        }
+    }
+    Ok(AllowHostPrimitiveDecl { names })
+}
+
+/// Operator leaves the strict scanner explicitly ignores — surface keywords
+/// (`with`, `proof`, `?`) and registry meta-forms that have nothing to do
+/// with the host-primitive substrate.
+fn pure_links_scanner_ignored(name: &str) -> bool {
+    matches!(
+        name,
+        "?" | "with"
+            | "proof"
+            | "by"
+            | "because"
+            | "let"
+            | "in"
+            | "where"
+            | ":"
+            | "::"
+            | "has"
+            | "probability"
+            | "is"
+            | "a"
+            | "an"
+            | "sequence"
+            | "normalizes-to"
+            | "applies"
+            | "premise"
+            | "conclusion"
+            | "rule"
+            | "proof-object"
+            | "check-proof"
+            | "foundation"
+            | "with-foundation"
+            | "foundation-report"
+            | "foundation-report?"
+            | "root-construct"
+            | "strict-carrier"
+            | "truth-table"
+            | "strict-foundation"
+            | "allow-host-primitive"
+    )
+}
+
+fn is_strictly_offending_status(status: Option<&String>) -> bool {
+    match status {
+        Some(s) => s == "host-primitive" || s == "host-derived",
+        None => false,
+    }
+}
+
+/// Walk a queried node and return the sorted, deduplicated names of every
+/// operator that maps to a `host-primitive` or `host-derived` root-construct
+/// and is not in `env.allowed_host_primitives`.
+pub fn scan_pure_links_offenders(node: &Node, env: &Env) -> Vec<String> {
+    if !env.strict_pure_links {
+        return Vec::new();
+    }
+    let mut offenders: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    fn visit(
+        node: &Node,
+        env: &Env,
+        offenders: &mut std::collections::BTreeSet<String>,
+    ) {
+        match node {
+            Node::List(children) => {
+                if let Some(Node::Leaf(head)) = children.first() {
+                    if !pure_links_scanner_ignored(head)
+                        && !env.allowed_host_primitives.contains(head)
+                    {
+                        if let Some(rc) = env.root_constructs.get(head) {
+                            if is_strictly_offending_status(rc.status.as_ref()) {
+                                offenders.insert(head.clone());
+                            }
+                        }
+                    }
+                }
+                // Infix (L op R) — operator is the middle element.
+                if children.len() == 3 {
+                    if let Node::Leaf(op) = &children[1] {
+                        if !pure_links_scanner_ignored(op)
+                            && !env.allowed_host_primitives.contains(op)
+                        {
+                            if let Some(rc) = env.root_constructs.get(op) {
+                                if is_strictly_offending_status(rc.status.as_ref()) {
+                                    offenders.insert(op.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                for c in children {
+                    visit(c, env, offenders);
+                }
+            }
+            Node::Leaf(s) => {
+                if !pure_links_scanner_ignored(s) && !env.allowed_host_primitives.contains(s) {
+                    if let Some(rc) = env.root_constructs.get(s) {
+                        if is_strictly_offending_status(rc.status.as_ref()) {
+                            offenders.insert(s.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    visit(node, env, &mut offenders);
+    offenders.into_iter().collect()
+}
+
 /// Render the foundation report as a human-readable text block. Mirrors
 /// the JS `formatFoundationReport` helper.
 pub fn format_foundation_report(report: &FoundationReport) -> String {
@@ -3446,6 +3643,16 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
                     .collect();
                 lines.push(format!("      truth tables: {}", parts.join(", ")));
             }
+        }
+    }
+    if report.strict_pure_links {
+        lines.push(String::new());
+        lines.push("pure-links strict mode: on".to_string());
+        if !report.allowed_host_primitives.is_empty() {
+            lines.push(format!(
+                "  allowed host primitives: {}",
+                report.allowed_host_primitives.join(", ")
+            ));
         }
     }
     lines.join("\n")
@@ -11029,6 +11236,31 @@ fn eval_foundation_body_form(
                         ));
                     }
                 }
+                // Pure-links strict mode audit inside with-foundation bodies.
+                if env.strict_pure_links {
+                    if let Node::List(form_children) = &expanded {
+                        if matches!(form_children.first(), Some(Node::Leaf(s)) if s == "?") {
+                            let parts = &form_children[1..];
+                            let inner = strip_with_proof(parts);
+                            let target: Node = if inner.len() == 1 {
+                                inner[0].clone()
+                            } else {
+                                Node::List(inner.to_vec())
+                            };
+                            let offenders = scan_pure_links_offenders(&target, env);
+                            if !offenders.is_empty() {
+                                diagnostics.push(Diagnostic::new(
+                                    "E065",
+                                    format!(
+                                        "Query depends on host-primitive construct(s) under pure-links strict mode: {}",
+                                        offenders.join(", ")
+                                    ),
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                    }
+                }
             }
         }
         Err(payload) => {
@@ -11494,6 +11726,45 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                     }
                     continue;
                 }
+                // Pure-links strict mode (issue #97, Phase 6).
+                if head == "strict-foundation" {
+                    match parse_strict_foundation_form(&form) {
+                        Ok(decl) => {
+                            env.strict_pure_links = true;
+                            if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "strict-foundation",
+                                    decl.profile,
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E065", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "allow-host-primitive" {
+                    match parse_allow_host_primitive_form(&form) {
+                        Ok(decl) => {
+                            for name in &decl.names {
+                                env.allowed_host_primitives.insert(name.clone());
+                            }
+                            if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "allow-host-primitive",
+                                    decl.names.join(" "),
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E065", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
             }
         }
 
@@ -11597,6 +11868,36 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                                 ),
                                 span.clone(),
                             ));
+                        }
+                    }
+                    // Pure-links strict mode audit (issue #97 Phase 6). When
+                    // `(strict-foundation pure-links)` is active, scan the
+                    // queried form for operators registered as
+                    // `host-primitive`/`host-derived` that have not been
+                    // explicitly allow-listed via `(allow-host-primitive ...)`,
+                    // and emit a single E065 listing them.
+                    if env.strict_pure_links {
+                        if let Node::List(form_children) = &expanded_form {
+                            if matches!(form_children.first(), Some(Node::Leaf(s)) if s == "?") {
+                                let parts = &form_children[1..];
+                                let inner = strip_with_proof(parts);
+                                let target: Node = if inner.len() == 1 {
+                                    inner[0].clone()
+                                } else {
+                                    Node::List(inner.to_vec())
+                                };
+                                let offenders = scan_pure_links_offenders(&target, env);
+                                if !offenders.is_empty() {
+                                    diagnostics.push(Diagnostic::new(
+                                        "E065",
+                                        format!(
+                                            "Query depends on host-primitive construct(s) under pure-links strict mode: {}",
+                                            offenders.join(", ")
+                                        ),
+                                        span.clone(),
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
