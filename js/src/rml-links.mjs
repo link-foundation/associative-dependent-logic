@@ -571,6 +571,20 @@ class Env {
         this.ops.set(opName, fn);
       }
     }
+    // Truth tables apply on top of `(defines ...)` bindings so a foundation
+    // can pin a finite slice of an operator and leave the rest to the
+    // aggregator-based default that was just installed.
+    if (foundation.truthTables instanceof Map && foundation.truthTables.size > 0) {
+      for (const [opName, rows] of foundation.truthTables.entries()) {
+        if (!snapshot.has(opName)) {
+          snapshot.set(opName, this.ops.has(opName) ? this.ops.get(opName) : null);
+        }
+        const previous = this.ops.has(opName) ? this.ops.get(opName) : null;
+        const fn = truthTableOpFromRows(this, opName, rows, previous);
+        if (fn === null) continue;
+        this.ops.set(opName, fn);
+      }
+    }
     // Carrier snapshot for opt-in enforcement (issue #97, Section 2 of
     // netkeep80's punch-list). `_strictCarrier` is what the evaluator hot
     // path checks; `_carrier` is the resolved numeric set.
@@ -685,6 +699,14 @@ class Env {
         truthDomain: f.truthDomain || null,
         carrier: Array.isArray(f.carrier) ? f.carrier.slice() : null,
         strictCarrier: f.strictCarrier === true,
+        truthTables: f.truthTables instanceof Map && f.truthTables.size > 0
+          ? [...f.truthTables.entries()]
+              .map(([op, rows]) => ({
+                op,
+                rows: rows.map(r => ({ inputs: r.inputs.slice(), output: r.output })),
+              }))
+              .sort((a, b) => a.op < b.op ? -1 : a.op > b.op ? 1 : 0)
+          : null,
       })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
     };
   }
@@ -742,6 +764,9 @@ function mergeFoundationDescriptors(previous, next) {
     truthDomain: previous.truthDomain || null,
     carrier: Array.isArray(previous.carrier) ? previous.carrier.slice() : null,
     strictCarrier: previous.strictCarrier === true,
+    truthTables: previous.truthTables instanceof Map
+      ? new Map([...previous.truthTables.entries()].map(([k, rows]) => [k, rows.map(r => ({ inputs: r.inputs.slice(), output: r.output }))]))
+      : null,
   } : {
     name: next.name,
     description: null,
@@ -752,6 +777,7 @@ function mergeFoundationDescriptors(previous, next) {
     truthDomain: null,
     carrier: null,
     strictCarrier: false,
+    truthTables: null,
   };
   base.name = next.name;
   if (next.description) base.description = next.description;
@@ -775,6 +801,15 @@ function mergeFoundationDescriptors(previous, next) {
     base.carrier = next.carrier.slice();
   }
   if (next.strictCarrier === true) base.strictCarrier = true;
+  // Truth tables (issue #97, Section 3 of netkeep80's punch-list). A later
+  // registration adds/overwrites table entries operator-by-operator so the
+  // user can extend a previously declared foundation with more tables.
+  if (next.truthTables instanceof Map && next.truthTables.size > 0) {
+    if (!(base.truthTables instanceof Map)) base.truthTables = new Map();
+    for (const [k, rows] of next.truthTables.entries()) {
+      base.truthTables.set(k, rows.map(r => ({ inputs: r.inputs.slice(), output: r.output })));
+    }
+  }
   return base;
 }
 
@@ -796,6 +831,55 @@ function aggregatorOpFromName(env, sel) {
     null;
   if (!agg) return null;
   return (...xs) => xs.length ? agg(xs) : lo;
+}
+
+// Resolve a token from a truth-table row (input or output) to a numeric value.
+// Numeric literals stay numeric; symbolic constants flow through
+// `env.symbolProb` so user-declared truth constants like `(true: 1)` or
+// `(unknown: 0.5)` are honoured. Returns `null` when the token cannot be
+// resolved so the caller can skip the row gracefully.
+function resolveTruthTableValue(env, tok) {
+  if (typeof tok !== 'string') return null;
+  const num = Number(tok);
+  if (Number.isFinite(num)) return num;
+  if (env.symbolProb.has(tok)) return env.symbolProb.get(tok);
+  return null;
+}
+
+// Build a host `Op` function from a finite truth table. When invoked with
+// argument vector `xs`, the function looks up the first row whose inputs
+// match (within ±1e-12 float tolerance). If no row matches, the function
+// delegates to the `previous` op (the snapshot captured at activation),
+// which keeps partial tables backward-compatible: a foundation that only
+// pins down a few rows still falls through to the host default for the rest.
+function truthTableOpFromRows(env, opName, rows, previous) {
+  const resolved = [];
+  for (const row of rows) {
+    const inputs = row.inputs.map(t => resolveTruthTableValue(env, t));
+    const output = resolveTruthTableValue(env, row.output);
+    if (inputs.some(v => v === null) || output === null) {
+      // Skip rows that reference unknown symbols. The user can always
+      // re-declare the row once the symbol is bound.
+      continue;
+    }
+    resolved.push({ inputs, output });
+  }
+  if (resolved.length === 0) return null;
+  const fallback = typeof previous === 'function' ? previous : null;
+  return (...xs) => {
+    for (const row of resolved) {
+      if (row.inputs.length !== xs.length) continue;
+      let match = true;
+      for (let i = 0; i < xs.length; i++) {
+        if (typeof xs[i] !== 'number' || !Number.isFinite(xs[i])) { match = false; break; }
+        if (Math.abs(xs[i] - row.inputs[i]) > 1e-12) { match = false; break; }
+      }
+      if (match) return row.output;
+    }
+    if (fallback) return fallback(...xs);
+    // No table row matched and no host fallback exists. Treat as bottom.
+    return env.lo;
+  };
 }
 
 // Seed the registry with the built-in descriptors that describe what the
@@ -1011,6 +1095,45 @@ function parseFoundationForm(node) {
         // evaluator stays backward-compatible.
         foundation.strictCarrier = true;
         break;
+      case 'truth-table': {
+        // `(truth-table <op> (in1 in2 ... -> out) ...)` — links-defined finite
+        // truth table that rebinds `<op>` for the duration of the foundation.
+        // Each row's inputs and output may be numeric literals or symbolic
+        // truth constants (`true`, `false`, `unknown`); the latter are
+        // resolved through `env.symbolProb` when the foundation is entered.
+        if (rest.length < 1 || typeof rest[0] !== 'string') {
+          throw new RmlError('E061', '(truth-table <op> ...) requires an operator name');
+        }
+        const tableOp = rest[0];
+        const rows = [];
+        for (const raw of rest.slice(1)) {
+          if (!Array.isArray(raw)) {
+            throw new RmlError(
+              'E061',
+              `(truth-table ${tableOp} ...) rows must be lists like (in1 in2 -> out)`,
+            );
+          }
+          const arrowAt = raw.findIndex(t => t === '->');
+          if (arrowAt < 1 || arrowAt !== raw.length - 2) {
+            throw new RmlError(
+              'E061',
+              `(truth-table ${tableOp} ...) row must be (input ... -> output)`,
+            );
+          }
+          const inputs = raw.slice(0, arrowAt).map(t => Array.isArray(t) ? keyOf(t) : String(t));
+          const output = Array.isArray(raw[arrowAt + 1]) ? keyOf(raw[arrowAt + 1]) : String(raw[arrowAt + 1]);
+          rows.push({ inputs, output });
+        }
+        if (rows.length === 0) {
+          throw new RmlError(
+            'E061',
+            `(truth-table ${tableOp} ...) requires at least one row`,
+          );
+        }
+        if (!(foundation.truthTables instanceof Map)) foundation.truthTables = new Map();
+        foundation.truthTables.set(tableOp, rows);
+        break;
+      }
       case 'description':
         foundation.description = rest.map(t => Array.isArray(t) ? keyOf(t) : String(t)).join(' ');
         break;
@@ -1075,6 +1198,10 @@ function formatFoundationReport(report) {
       if (f.defines && f.defines.length) {
         const defStrs = f.defines.map(d => `${d.construct}=${d.implementation}`);
         lines.push(`      defines: ${defStrs.join(', ')}`);
+      }
+      if (Array.isArray(f.truthTables) && f.truthTables.length > 0) {
+        const tt = f.truthTables.map(t => `${t.op}(${t.rows.length} rows)`);
+        lines.push(`      truth tables: ${tt.join(', ')}`);
       }
     }
   }

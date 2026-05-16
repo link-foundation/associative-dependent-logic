@@ -396,4 +396,147 @@ describe('foundation carrier enforcement', () => {
     assert.deepStrictEqual(out.diagnostics, []);
     assert.deepStrictEqual(out.results, [0.5]);
   });
+
+  // ===== Links-defined finite truth tables (issue #97, punch-list #3) =====
+  //
+  // A foundation can declare a finite truth table for any operator using
+  // `(truth-table <op> (in1 in2 ... -> out) ...)`. When the foundation is
+  // active, calls to that operator look up the matching row first, then
+  // fall back to the host default for rows that aren't pinned.
+
+  it('parses (truth-table ...) clauses onto the foundation descriptor', () => {
+    const env = new Env();
+    evaluate(`
+(foundation boolean-classical
+  (truth-table and (1 1 -> 1) (1 0 -> 0) (0 1 -> 0) (0 0 -> 0))
+  (truth-table or  (0 0 -> 0) (0 1 -> 1) (1 0 -> 1) (1 1 -> 1)))
+`, { env });
+    const f = env.foundations.get('boolean-classical');
+    assert.ok(f, 'boolean-classical should be registered');
+    assert.ok(f.truthTables instanceof Map, 'truthTables should be a Map');
+    assert.strictEqual(f.truthTables.size, 2);
+    const andRows = f.truthTables.get('and');
+    assert.strictEqual(andRows.length, 4);
+    assert.deepStrictEqual(andRows[0], { inputs: ['1', '1'], output: '1' });
+    assert.deepStrictEqual(andRows[3], { inputs: ['0', '0'], output: '0' });
+  });
+
+  it('rejects malformed truth-table rows with E061', () => {
+    const out = evaluate(`(foundation bad (truth-table and (1 1 1)))`);
+    const code = out.diagnostics.find(d => d.code === 'E061');
+    assert.ok(code, 'malformed row should raise E061');
+  });
+
+  it('uses the truth table to override operator semantics inside with-foundation', () => {
+    const src = `
+(foundation boolean-and-table
+  (truth-table and (1 1 -> 1) (1 0 -> 0) (0 1 -> 0) (0 0 -> 0)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 1)
+((b = true) has probability 0)
+(with-foundation boolean-and-table
+  (? ((a = true) and (b = true)))
+  (? ((b = true) and (b = true))))
+`;
+    const results = run(src);
+    // Default `and` would average 1 and 0 → 0.5, but the truth table
+    // pins 1 AND 0 = 0, 0 AND 0 = 0.
+    assert.deepStrictEqual(results, [0, 0]);
+  });
+
+  it('restores operator bindings on exit so outer scopes are unaffected', () => {
+    const src = `
+(foundation boolean-and-table
+  (truth-table and (1 1 -> 1) (1 0 -> 0) (0 1 -> 0) (0 0 -> 0)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 1)
+((b = true) has probability 0)
+(? ((a = true) and (b = true)))
+(with-foundation boolean-and-table
+  (? ((a = true) and (b = true))))
+(? ((a = true) and (b = true)))
+`;
+    const results = run(src);
+    // Outer uses default avg (0.5), foundation pins to 0, outer recovers to 0.5.
+    assert.deepStrictEqual(results, [0.5, 0, 0.5]);
+  });
+
+  it('falls through to the host default for rows not pinned by the table', () => {
+    const src = `
+(foundation partial-and (truth-table and (1 1 -> 1)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 0.6)
+((b = true) has probability 0.4)
+(with-foundation partial-and
+  (? ((a = true) and (b = true))))
+`;
+    const results = run(src);
+    // 0.6 and 0.4 don't match the pinned (1,1) row, so the host default
+    // (avg → 0.5) takes over.
+    assert.deepStrictEqual(results, [0.5]);
+  });
+
+  it('honours symbolic truth constants inside truth-table rows', () => {
+    const src = `
+(true: 1)
+(false: 0)
+(foundation symbolic-and
+  (truth-table and (true true -> true) (true false -> false) (false true -> false) (false false -> false)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 1)
+((b = true) has probability 0)
+(with-foundation symbolic-and
+  (? ((a = true) and (b = true))))
+`;
+    const results = run(src);
+    assert.deepStrictEqual(results, [0]);
+  });
+
+  it('models Kleene three-valued conjunction with a truth table', () => {
+    const src = `
+(unknown: 0.5)
+(foundation kleene-and
+  (truth-table and
+    (1   1   -> 1)
+    (1   0.5 -> 0.5)
+    (0.5 1   -> 0.5)
+    (1   0   -> 0)
+    (0   1   -> 0)
+    (0.5 0.5 -> 0.5)
+    (0.5 0   -> 0)
+    (0   0.5 -> 0)
+    (0   0   -> 0)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 0.5)
+((b = true) has probability 1)
+(with-foundation kleene-and
+  (? ((a = true) and (b = true))))
+`;
+    const results = run(src);
+    assert.deepStrictEqual(results, [0.5]);
+  });
+
+  it('exposes truth tables on foundationReport()', () => {
+    const env = new Env();
+    evaluate(`
+(foundation boolean-classical
+  (truth-table and (1 1 -> 1) (1 0 -> 0) (0 1 -> 0) (0 0 -> 0))
+  (truth-table or  (0 0 -> 0) (0 1 -> 1) (1 0 -> 1) (1 1 -> 1)))
+`, { env });
+    const report = env.foundationReport();
+    const bc = report.foundations.find(f => f.name === 'boolean-classical');
+    assert.ok(bc, 'foundation should appear in report');
+    assert.ok(Array.isArray(bc.truthTables));
+    assert.strictEqual(bc.truthTables.length, 2);
+    const andTable = bc.truthTables.find(t => t.op === 'and');
+    assert.ok(andTable);
+    assert.strictEqual(andTable.rows.length, 4);
+    const printed = formatFoundationReport(report);
+    assert.ok(printed.includes('truth tables: and(4 rows), or(4 rows)'));
+  });
 });

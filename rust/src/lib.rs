@@ -720,6 +720,20 @@ impl Aggregator {
     }
 }
 
+/// Resolve a truth-table token (input or output) to its numeric value.
+/// Numeric literals stay numeric; symbolic constants flow through
+/// `env.symbol_prob` so user-declared truth constants like `(true: 1)` or
+/// `(unknown: 0.5)` are honoured. Returns `None` when the token cannot
+/// be resolved so the caller can skip the row.
+fn resolve_truth_table_value(env: &Env, tok: &str) -> Option<f64> {
+    if let Ok(num) = tok.parse::<f64>() {
+        if num.is_finite() {
+            return Some(num);
+        }
+    }
+    env.symbol_prob.get(tok).copied()
+}
+
 // ========== Operator ==========
 
 /// Operator types supported by the environment.
@@ -746,6 +760,25 @@ pub enum Op {
     /// Numeric comparisons: <, <=
     Less,
     LessOrEqual,
+    /// Links-defined finite truth table (issue #97, Section 3 of
+    /// netkeep80's punch-list). When invoked the evaluator looks up the
+    /// first row whose inputs match `xs` (±1e-12 tolerance) and returns
+    /// the row's output. If no row matches, the call delegates to
+    /// `fallback` so partial tables overlay cleanly onto the host
+    /// default. `rows` carries values pre-resolved against
+    /// `env.symbol_prob` at activation time.
+    TruthTable {
+        rows: Vec<TruthTableEntry>,
+        fallback: Option<Box<Op>>,
+    },
+}
+
+/// One resolved row inside an `Op::TruthTable`. Inputs and output are
+/// stored as `f64` after symbolic constants have been looked up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TruthTableEntry {
+    pub inputs: Vec<f64>,
+    pub output: f64,
 }
 
 // ========== Environment ==========
@@ -966,6 +999,24 @@ pub struct FoundationDescriptor {
     /// clamped. Defaults to `false` for backward compatibility — declaring
     /// `(carrier ...)` alone is informational.
     pub strict_carrier: bool,
+    /// Links-defined finite truth tables (issue #97, Section 3 of
+    /// netkeep80's punch-list). Each entry rebinds the named operator to
+    /// the listed row set for the duration of `(with-foundation ...)`.
+    /// Inputs and outputs are stored as strings so `enter_foundation` can
+    /// resolve symbolic truth constants (`true`, `false`, `unknown`)
+    /// through `env.symbol_prob` at activation time. Numeric literals stay
+    /// literal. A row whose inputs don't match falls through to the
+    /// previously installed op so partial tables remain backward-
+    /// compatible.
+    pub truth_tables: Vec<(String, Vec<TruthTableRow>)>,
+}
+
+/// One row of a `(truth-table <op> ...)` declaration: a sequence of input
+/// tokens and the output token. See `FoundationDescriptor::truth_tables`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TruthTableRow {
+    pub inputs: Vec<String>,
+    pub output: String,
 }
 
 /// Snapshot of the foundation/root-construct state for the trust report.
@@ -1207,6 +1258,7 @@ impl Env {
             truth_domain: Some("default-truth".to_string()),
             carrier: Vec::new(),
             strict_carrier: false,
+            truth_tables: Vec::new(),
         };
         self.foundations.insert(default.name.clone(), default);
         seed_builtin_root_constructs(self);
@@ -1269,6 +1321,49 @@ impl Env {
                 snapshot.push((op_name.clone(), prev));
                 self.ops.insert(op_name.clone(), Op::Agg(agg));
             }
+        }
+        // Truth tables (issue #97, Section 3 of netkeep80's punch-list).
+        // Layered on top of `(defines ...)` so a foundation can pin a
+        // finite slice of an operator and let the aggregator-based default
+        // handle the rest.
+        for (op_name, rows) in &foundation.truth_tables {
+            let mut resolved: Vec<TruthTableEntry> = Vec::new();
+            for row in rows {
+                let mut inputs: Vec<f64> = Vec::with_capacity(row.inputs.len());
+                let mut row_ok = true;
+                for tok in &row.inputs {
+                    match resolve_truth_table_value(self, tok) {
+                        Some(v) => inputs.push(v),
+                        None => {
+                            row_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if !row_ok {
+                    continue;
+                }
+                let output = match resolve_truth_table_value(self, &row.output) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                resolved.push(TruthTableEntry { inputs, output });
+            }
+            if resolved.is_empty() {
+                continue;
+            }
+            if !snapshot.iter().any(|(n, _)| n == op_name) {
+                let prev = self.ops.get(op_name).cloned();
+                snapshot.push((op_name.clone(), prev));
+            }
+            let fallback = self.ops.get(op_name).cloned().map(Box::new);
+            self.ops.insert(
+                op_name.clone(),
+                Op::TruthTable {
+                    rows: resolved,
+                    fallback,
+                },
+            );
         }
         // Carrier snapshot for opt-in enforcement (issue #97, Section 2).
         // `strict_carrier` is what the evaluator hot path checks; `carrier`
@@ -1596,6 +1691,111 @@ impl Env {
                     self.hi
                 } else {
                     self.lo
+                }
+            }
+            Op::TruthTable {
+                ref rows,
+                ref fallback,
+            } => {
+                for row in rows {
+                    if row.inputs.len() != vals.len() {
+                        continue;
+                    }
+                    if row
+                        .inputs
+                        .iter()
+                        .zip(vals.iter())
+                        .all(|(a, b)| (*a - *b).abs() < 1e-12)
+                    {
+                        return row.output;
+                    }
+                }
+                match fallback {
+                    Some(prev) => self.apply_op_inner(prev, vals),
+                    None => self.lo,
+                }
+            }
+        }
+    }
+
+    /// Internal helper used by `Op::TruthTable` fallback dispatch so a
+    /// table can delegate to a previously installed op without going
+    /// through the name lookup path again.
+    fn apply_op_inner(&self, op: &Op, vals: &[f64]) -> f64 {
+        let owned = op.clone();
+        match owned {
+            Op::Not => {
+                if vals.is_empty() {
+                    self.lo
+                } else {
+                    self.hi - (vals[0] - self.lo)
+                }
+            }
+            Op::Agg(agg) => dec_round(agg.apply(vals, self.lo)),
+            Op::Eq | Op::Neq => self.lo,
+            Op::Compose { outer, inner } => {
+                let inner_result = self.apply_op(&inner, vals);
+                self.apply_op(&outer, &[inner_result])
+            }
+            Op::Add => {
+                if vals.len() >= 2 {
+                    dec_round(vals[0] + vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Sub => {
+                if vals.len() >= 2 {
+                    dec_round(vals[0] - vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Mul => {
+                if vals.len() >= 2 {
+                    dec_round(vals[0] * vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Div => {
+                if vals.len() >= 2 && vals[1] != 0.0 {
+                    dec_round(vals[0] / vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Less => {
+                if vals.len() >= 2 && vals[0] < vals[1] {
+                    self.hi
+                } else {
+                    self.lo
+                }
+            }
+            Op::LessOrEqual => {
+                if vals.len() >= 2 && vals[0] <= vals[1] {
+                    self.hi
+                } else {
+                    self.lo
+                }
+            }
+            Op::TruthTable { rows, fallback } => {
+                for row in &rows {
+                    if row.inputs.len() != vals.len() {
+                        continue;
+                    }
+                    if row
+                        .inputs
+                        .iter()
+                        .zip(vals.iter())
+                        .all(|(a, b)| (*a - *b).abs() < 1e-12)
+                    {
+                        return row.output;
+                    }
+                }
+                match fallback {
+                    Some(prev) => self.apply_op_inner(&prev, vals),
+                    None => self.lo,
                 }
             }
         }
@@ -2274,6 +2474,20 @@ fn merge_foundation_descriptors(
     if next.strict_carrier {
         base.strict_carrier = true;
     }
+    // Truth tables (issue #97, Section 3 of netkeep80's punch-list). A later
+    // registration adds/overwrites table entries operator-by-operator so the
+    // user can extend a previously declared foundation with more tables.
+    for (op_name, rows) in next.truth_tables {
+        if let Some(existing) = base
+            .truth_tables
+            .iter_mut()
+            .find(|(name, _)| name == &op_name)
+        {
+            existing.1 = rows;
+        } else {
+            base.truth_tables.push((op_name, rows));
+        }
+    }
     base
 }
 
@@ -2621,6 +2835,65 @@ fn parse_foundation_form(node: &Node) -> Result<FoundationDescriptor, String> {
                 // backward-compatible.
                 foundation.strict_carrier = true;
             }
+            "truth-table" => {
+                // `(truth-table <op> (in1 in2 ... -> out) ...)` — links-defined
+                // finite truth table that rebinds `<op>` for the duration of
+                // the foundation. Inputs and outputs are kept as strings so
+                // `enter_foundation` can resolve symbolic constants through
+                // `env.symbol_prob` at activation time.
+                if rest.is_empty() {
+                    return Err(
+                        "(truth-table <op> ...) requires an operator name".to_string(),
+                    );
+                }
+                let op_name = match rest[0] {
+                    Node::Leaf(ref s) if !s.is_empty() => s.clone(),
+                    _ => {
+                        return Err(
+                            "(truth-table <op> ...) requires an operator name".to_string(),
+                        );
+                    }
+                };
+                let mut table_rows: Vec<TruthTableRow> = Vec::new();
+                for raw in rest.iter().skip(1) {
+                    let row_items = match raw {
+                        Node::List(items) => items,
+                        _ => {
+                            return Err(format!(
+                                "(truth-table {} ...) rows must be lists like (in1 in2 -> out)",
+                                op_name
+                            ));
+                        }
+                    };
+                    let arrow_at = row_items
+                        .iter()
+                        .position(|n| matches!(n, Node::Leaf(s) if s == "->"));
+                    let arrow_at = match arrow_at {
+                        Some(idx) if idx >= 1 && idx == row_items.len() - 2 => idx,
+                        _ => {
+                            return Err(format!(
+                                "(truth-table {} ...) row must be (input ... -> output)",
+                                op_name
+                            ));
+                        }
+                    };
+                    let inputs: Vec<String> = row_items[..arrow_at]
+                        .iter()
+                        .map(|n| key_of(n))
+                        .collect();
+                    let output = key_of(&row_items[arrow_at + 1]);
+                    table_rows.push(TruthTableRow { inputs, output });
+                }
+                if table_rows.is_empty() {
+                    return Err(format!(
+                        "(truth-table {} ...) requires at least one row",
+                        op_name
+                    ));
+                }
+                foundation
+                    .truth_tables
+                    .push((op_name, table_rows));
+            }
             "description" => {
                 foundation.description = Some(
                     rest.iter()
@@ -2711,6 +2984,15 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
                     .map(|(k, v)| format!("{}={}", k, v))
                     .collect();
                 lines.push(format!("      defines: {}", parts.join(", ")));
+            }
+            if !f.truth_tables.is_empty() {
+                let mut sorted: Vec<&(String, Vec<TruthTableRow>)> = f.truth_tables.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                let parts: Vec<String> = sorted
+                    .iter()
+                    .map(|(op, rows)| format!("{}({} rows)", op, rows.len()))
+                    .collect();
+                lines.push(format!("      truth tables: {}", parts.join(", ")));
             }
         }
     }

@@ -626,3 +626,190 @@ fn carrier_is_not_enforced_at_the_top_level() {
     );
     assert_eq!(nums(&out.results), vec![0.5]);
 }
+
+// ---------------------------------------------------------------------------
+// Links-defined finite truth tables (issue #97, punch-list #3). Parallel to
+// the JS suite: a foundation can declare a finite truth table for any
+// operator using `(truth-table <op> (in1 in2 ... -> out) ...)`. When the
+// foundation is active, calls to that operator match the row first and fall
+// back to the previously installed op for unmatched inputs.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn truth_table_parses_clauses_onto_the_foundation_descriptor() {
+    let mut env = Env::new(None);
+    let out = evaluate_with_env(
+        r#"
+(foundation boolean-classical
+  (truth-table and (1 1 -> 1) (1 0 -> 0) (0 1 -> 0) (0 0 -> 0))
+  (truth-table or  (0 0 -> 0) (0 1 -> 1) (1 0 -> 1) (1 1 -> 1)))
+"#,
+        None,
+        &mut env,
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+    let f = env
+        .get_foundation("boolean-classical")
+        .expect("boolean-classical should be registered");
+    assert_eq!(f.truth_tables.len(), 2);
+    let and_rows = f
+        .truth_tables
+        .iter()
+        .find(|(op, _)| op == "and")
+        .map(|(_, rows)| rows)
+        .expect("and truth table missing");
+    assert_eq!(and_rows.len(), 4);
+    assert_eq!(and_rows[0].inputs, vec!["1".to_string(), "1".to_string()]);
+    assert_eq!(and_rows[0].output, "1".to_string());
+    assert_eq!(and_rows[3].inputs, vec!["0".to_string(), "0".to_string()]);
+    assert_eq!(and_rows[3].output, "0".to_string());
+}
+
+#[test]
+fn truth_table_rejects_malformed_rows_with_e061() {
+    let out = evaluate("(foundation bad (truth-table and (1 1 1)))", None, None);
+    let code = out.diagnostics.iter().find(|d| d.code == "E061");
+    assert!(code.is_some(), "malformed row should raise E061");
+}
+
+#[test]
+fn truth_table_overrides_operator_semantics_inside_with_foundation() {
+    let results = run_clean(
+        r#"
+(foundation boolean-and-table
+  (truth-table and (1 1 -> 1) (1 0 -> 0) (0 1 -> 0) (0 0 -> 0)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 1)
+((b = true) has probability 0)
+(with-foundation boolean-and-table
+  (? ((a = true) and (b = true)))
+  (? ((b = true) and (b = true))))
+"#,
+    );
+    // Default `and` would avg 1 and 0 → 0.5, but the table pins both
+    // (1, 0) and (0, 0) rows to 0.
+    assert_eq!(results, vec![0.0, 0.0]);
+}
+
+#[test]
+fn truth_table_restores_operator_bindings_on_exit() {
+    let results = run_clean(
+        r#"
+(foundation boolean-and-table
+  (truth-table and (1 1 -> 1) (1 0 -> 0) (0 1 -> 0) (0 0 -> 0)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 1)
+((b = true) has probability 0)
+(? ((a = true) and (b = true)))
+(with-foundation boolean-and-table
+  (? ((a = true) and (b = true))))
+(? ((a = true) and (b = true)))
+"#,
+    );
+    // Outer uses default avg (0.5), foundation pins to 0, outer recovers.
+    assert_eq!(results, vec![0.5, 0.0, 0.5]);
+}
+
+#[test]
+fn truth_table_falls_through_to_host_default_for_unpinned_rows() {
+    let results = run_clean(
+        r#"
+(foundation partial-and (truth-table and (1 1 -> 1)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 0.6)
+((b = true) has probability 0.4)
+(with-foundation partial-and
+  (? ((a = true) and (b = true))))
+"#,
+    );
+    // 0.6 and 0.4 don't match the pinned (1,1) row, so the host default
+    // (avg → 0.5) takes over.
+    assert_eq!(results, vec![0.5]);
+}
+
+#[test]
+fn truth_table_honours_symbolic_truth_constants() {
+    let results = run_clean(
+        r#"
+(true: 1)
+(false: 0)
+(foundation symbolic-and
+  (truth-table and (true true -> true) (true false -> false) (false true -> false) (false false -> false)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 1)
+((b = true) has probability 0)
+(with-foundation symbolic-and
+  (? ((a = true) and (b = true))))
+"#,
+    );
+    assert_eq!(results, vec![0.0]);
+}
+
+#[test]
+fn truth_table_models_kleene_three_valued_conjunction() {
+    let results = run_clean(
+        r#"
+(unknown: 0.5)
+(foundation kleene-and
+  (truth-table and
+    (1   1   -> 1)
+    (1   0.5 -> 0.5)
+    (0.5 1   -> 0.5)
+    (1   0   -> 0)
+    (0   1   -> 0)
+    (0.5 0.5 -> 0.5)
+    (0.5 0   -> 0)
+    (0   0.5 -> 0)
+    (0   0   -> 0)))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 0.5)
+((b = true) has probability 1)
+(with-foundation kleene-and
+  (? ((a = true) and (b = true))))
+"#,
+    );
+    assert_eq!(results, vec![0.5]);
+}
+
+#[test]
+fn truth_table_exposes_truth_tables_on_foundation_report() {
+    let mut env = Env::new(None);
+    let out = evaluate_with_env(
+        r#"
+(foundation boolean-classical
+  (truth-table and (1 1 -> 1) (1 0 -> 0) (0 1 -> 0) (0 0 -> 0))
+  (truth-table or  (0 0 -> 0) (0 1 -> 1) (1 0 -> 1) (1 1 -> 1)))
+"#,
+        None,
+        &mut env,
+    );
+    assert!(out.diagnostics.is_empty());
+    let report = env.foundation_report();
+    let bc = report
+        .foundations
+        .iter()
+        .find(|f| f.name == "boolean-classical")
+        .expect("boolean-classical should appear in report");
+    assert_eq!(bc.truth_tables.len(), 2);
+    let and_table = bc
+        .truth_tables
+        .iter()
+        .find(|(op, _)| op == "and")
+        .expect("and truth table missing from report");
+    assert_eq!(and_table.1.len(), 4);
+    let printed = format_foundation_report(&report);
+    assert!(
+        printed.contains("truth tables: and(4 rows), or(4 rows)"),
+        "printed report missing truth tables line:\n{}",
+        printed
+    );
+}
