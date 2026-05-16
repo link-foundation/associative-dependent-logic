@@ -474,6 +474,12 @@ default foundation while `and` under the bundled `boolean-links`
 truth-table foundation is accepted as `links-defined`. The whitelist is
 additive across declarations.
 
+Strict mode accepts a truth-table implementation as fallback-free only
+when the row set is total over the active strict carrier. Partial tables
+remain supported for normal evaluation, but their active implementation
+records a `truth-table-fallback` dependency so pure-links mode still
+reports the host-backed path.
+
 ### 9.3 Phase 7 — dependency-graph traversal
 
 The trust audit (`formatFoundationReport`) renders the active

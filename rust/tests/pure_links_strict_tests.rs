@@ -146,6 +146,34 @@ fn accepts_truth_operators_when_active_foundation_provides_links_defined_truth_t
 }
 
 #[test]
+fn rejects_partial_truth_tables_because_unmatched_rows_retain_a_host_fallback() {
+    let src = r#"
+(foundation partial-boolean
+  (carrier 0 1)
+  (strict-carrier)
+  (truth-table and (1 1 -> 1)))
+(strict-foundation pure-links)
+(with-foundation partial-boolean
+  (? (1 and 1)))
+"#;
+    let out = evaluate(src, None, None);
+    assert_eq!(out.results.len(), 1);
+    assert_eq!(
+        out.diagnostics.len(),
+        1,
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(out.diagnostics[0].code, "E065");
+    assert!(out.diagnostics[0]
+        .message
+        .contains("and -> avg -> host-primitive"));
+    assert!(out.diagnostics[0]
+        .message
+        .contains("truth-table-fallback -> host-derived"));
+}
+
+#[test]
 fn honours_allow_host_primitive_for_specific_constructs() {
     let src = r#"
 (strict-foundation pure-links)

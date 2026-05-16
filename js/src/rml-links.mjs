@@ -286,12 +286,10 @@ class Env {
     // Foundation registry (issue #97): a foundation bundles a coherent set of
     // root-construct interpretations. `default-rml` is preregistered with the
     // current host-implemented semantics; user files can register alternative
-    // foundations (e.g. `finite-boolean-links`) and select them with
-    // `(with-foundation <name> ...)`. Selecting a foundation never silently
-    // changes operator behaviour; it changes only the active-foundation tag
-    // recorded in the trust report and the descriptor view exposed to the
-    // host. Backward compatibility is preserved by always defaulting to
-    // `default-rml`.
+    // foundations (e.g. `boolean-links`) and select them with
+    // `(with-foundation <name> ...)`. Foundations may rebind operators inside
+    // their scope; backward compatibility is preserved by always defaulting
+    // to `default-rml` and restoring the previous bindings on exit.
     this.foundations = new Map();
     this.activeFoundation = 'default-rml';
     this._foundationStack = [];                 // for nested (with-foundation ...)
@@ -702,16 +700,19 @@ class Env {
           snapshot.set(opName, this.ops.has(opName) ? this.ops.get(opName) : null);
         }
         const previous = this.ops.has(opName) ? this.ops.get(opName) : null;
+        const previousImpl = this.activeImplementations.get(opName) || null;
         const fn = truthTableOpFromRows(this, opName, rows, previous);
         if (fn === null) continue;
         snapshotImplementation(opName);
+        const isTotal = truthTableRowsCompleteForCarrier(this, rows, foundation);
+        const fallbackDeps = isTotal ? [] : truthTableFallbackDependencies(this, opName, previousImpl);
         this.ops.set(opName, fn);
         this.activeImplementations.set(opName, {
           construct: opName,
           foundation: name,
           implementation: `truth-table:${name}/${opName}`,
           status: 'links-defined',
-          dependsOn: [],
+          dependsOn: fallbackDeps,
         });
       }
     }
@@ -1306,6 +1307,69 @@ function truthTableOpFromRows(env, opName, rows, previous) {
   };
 }
 
+function _truthTableKey(values) {
+  return values.map(v => Number(v).toPrecision(15)).join('\u0001');
+}
+
+function _resolvedCarrierValues(env, foundation) {
+  if (!foundation || foundation.strictCarrier !== true || !Array.isArray(foundation.carrier) || foundation.carrier.length === 0) {
+    return null;
+  }
+  const values = [];
+  const seen = new Set();
+  for (const tok of foundation.carrier) {
+    const value = resolveTruthTableValue(env, tok);
+    if (value === null) return null;
+    const key = _truthTableKey([value]);
+    if (!seen.has(key)) {
+      seen.add(key);
+      values.push(value);
+    }
+  }
+  return values.length > 0 ? values : null;
+}
+
+function truthTableRowsCompleteForCarrier(env, rows, foundation) {
+  const carrier = _resolvedCarrierValues(env, foundation);
+  if (carrier === null) return false;
+  let arity = null;
+  const seenRows = new Set();
+  for (const row of rows) {
+    if (!row || !Array.isArray(row.inputs)) return false;
+    if (arity === null) arity = row.inputs.length;
+    if (row.inputs.length !== arity) return false;
+    const inputs = row.inputs.map(t => resolveTruthTableValue(env, t));
+    const output = resolveTruthTableValue(env, row.output);
+    if (inputs.some(v => v === null) || output === null) return false;
+    seenRows.add(_truthTableKey(inputs));
+  }
+  if (arity === null) return false;
+  const required = carrier.length ** arity;
+  if (seenRows.size < required) return false;
+  const visit = (prefix, depth) => {
+    if (depth === arity) return seenRows.has(_truthTableKey(prefix));
+    for (const value of carrier) {
+      if (!visit(prefix.concat([value]), depth + 1)) return false;
+    }
+    return true;
+  };
+  return visit([], 0);
+}
+
+function truthTableFallbackDependencies(env, opName, previousImpl) {
+  const deps = [];
+  if (previousImpl && Array.isArray(previousImpl.dependsOn) && previousImpl.dependsOn.length > 0) {
+    deps.push(...previousImpl.dependsOn);
+  } else {
+    const rc = env.getRootConstruct(opName);
+    if (rc && Array.isArray(rc.dependsOn) && rc.dependsOn.length > 0) {
+      deps.push(...rc.dependsOn);
+    }
+  }
+  deps.push('truth-table-fallback');
+  return [...new Set(deps)];
+}
+
 // Seed the registry with the built-in descriptors that describe what the
 // current host implementation actually trusts. Every field is data-only and
 // matches the existing implementation: changing this list does not change
@@ -1338,6 +1402,7 @@ function seedBuiltinRootConstructs(env) {
     { name: 'max', kind: 'aggregator', status: 'host-primitive' },
     { name: 'product', kind: 'aggregator', status: 'host-primitive' },
     { name: 'probabilistic_sum', kind: 'aggregator', status: 'host-primitive' },
+    { name: 'truth-table-fallback', kind: 'truth-table-fallback', status: 'host-derived' },
     // Logical layer
     { name: 'not', kind: 'truth-operator', status: 'user-configurable', dependsOn: ['truth-range', 'decimal-12-arithmetic'] },
     { name: 'and', kind: 'truth-operator', status: 'user-configurable', dependsOn: ['avg'] },

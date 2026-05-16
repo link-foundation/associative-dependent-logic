@@ -87,6 +87,23 @@ describe('pure-links strict mode', () => {
     assert.deepStrictEqual(out.results, [0, 0]);
   });
 
+  it('rejects partial truth tables because unmatched rows retain a host fallback', () => {
+    const out = evaluate(`
+(foundation partial-boolean
+  (carrier 0 1)
+  (strict-carrier)
+  (truth-table and (1 1 -> 1)))
+(strict-foundation pure-links)
+(with-foundation partial-boolean
+  (? (1 and 1)))
+`);
+    assert.strictEqual(out.results.length, 1);
+    assert.strictEqual(out.diagnostics.length, 1);
+    assert.strictEqual(out.diagnostics[0].code, 'E065');
+    assert.match(out.diagnostics[0].message, /and -> avg -> host-primitive/);
+    assert.match(out.diagnostics[0].message, /truth-table-fallback -> host-derived/);
+  });
+
   it('honours `(allow-host-primitive ...)` to whitelist specific constructs', () => {
     const out = evaluate(`
 (strict-foundation pure-links)

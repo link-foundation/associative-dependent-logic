@@ -734,6 +734,112 @@ fn resolve_truth_table_value(env: &Env, tok: &str) -> Option<f64> {
     env.symbol_prob.get(tok).copied()
 }
 
+fn truth_table_key(values: &[f64]) -> String {
+    values
+        .iter()
+        .map(|v| format!("{:.15}", v))
+        .collect::<Vec<_>>()
+        .join("\u{1}")
+}
+
+fn resolved_carrier_values(env: &Env, foundation: &FoundationDescriptor) -> Option<Vec<f64>> {
+    if !foundation.strict_carrier || foundation.carrier.is_empty() {
+        return None;
+    }
+    let mut values = Vec::new();
+    let mut seen = HashSet::new();
+    for tok in &foundation.carrier {
+        let value = resolve_truth_table_value(env, tok)?;
+        let key = truth_table_key(&[value]);
+        if seen.insert(key) {
+            values.push(value);
+        }
+    }
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
+fn truth_table_rows_complete_for_carrier(
+    env: &Env,
+    rows: &[TruthTableRow],
+    foundation: &FoundationDescriptor,
+) -> bool {
+    let carrier = match resolved_carrier_values(env, foundation) {
+        Some(values) => values,
+        None => return false,
+    };
+    let mut arity: Option<usize> = None;
+    let mut seen_rows: HashSet<String> = HashSet::new();
+    for row in rows {
+        if arity.is_none() {
+            arity = Some(row.inputs.len());
+        }
+        if Some(row.inputs.len()) != arity {
+            return false;
+        }
+        let mut inputs = Vec::with_capacity(row.inputs.len());
+        for tok in &row.inputs {
+            match resolve_truth_table_value(env, tok) {
+                Some(v) => inputs.push(v),
+                None => return false,
+            }
+        }
+        if resolve_truth_table_value(env, &row.output).is_none() {
+            return false;
+        }
+        seen_rows.insert(truth_table_key(&inputs));
+    }
+    let arity = match arity {
+        Some(a) => a,
+        None => return false,
+    };
+    let required = carrier.len().pow(arity as u32);
+    if seen_rows.len() < required {
+        return false;
+    }
+    fn visit(
+        carrier: &[f64],
+        seen_rows: &HashSet<String>,
+        arity: usize,
+        prefix: &mut Vec<f64>,
+    ) -> bool {
+        if prefix.len() == arity {
+            return seen_rows.contains(&truth_table_key(prefix));
+        }
+        for value in carrier {
+            prefix.push(*value);
+            if !visit(carrier, seen_rows, arity, prefix) {
+                prefix.pop();
+                return false;
+            }
+            prefix.pop();
+        }
+        true
+    }
+    visit(&carrier, &seen_rows, arity, &mut Vec::new())
+}
+
+fn truth_table_fallback_dependencies(
+    env: &Env,
+    op_name: &str,
+    previous_impl: Option<&ActiveImplementationDescriptor>,
+) -> Vec<String> {
+    let mut deps = Vec::new();
+    if let Some(implementation) = previous_impl {
+        deps.extend(implementation.depends_on.iter().cloned());
+    } else if let Some(rc) = env.root_constructs.get(op_name) {
+        deps.extend(rc.depends_on.iter().cloned());
+    }
+    deps.push("truth-table-fallback".to_string());
+    let mut seen = HashSet::new();
+    deps.into_iter()
+        .filter(|dep| seen.insert(dep.clone()))
+        .collect()
+}
+
 // ========== Operator ==========
 
 /// Operator types supported by the environment.
@@ -1647,6 +1753,13 @@ impl Env {
                 snapshot.push((op_name.clone(), prev));
             }
             snapshot_impl(self, &mut previous_active_implementations, op_name);
+            let previous_impl = self.active_implementations.get(op_name).cloned();
+            let is_total = truth_table_rows_complete_for_carrier(self, rows, &foundation);
+            let depends_on = if is_total {
+                Vec::new()
+            } else {
+                truth_table_fallback_dependencies(self, op_name, previous_impl.as_ref())
+            };
             let fallback = self.ops.get(op_name).cloned().map(Box::new);
             self.ops.insert(
                 op_name.clone(),
@@ -1662,7 +1775,7 @@ impl Env {
                     foundation: Some(name.to_string()),
                     implementation: Some(format!("truth-table:{}/{}", name, op_name)),
                     status: Some("links-defined".to_string()),
-                    depends_on: Vec::new(),
+                    depends_on,
                 },
             );
         }
@@ -3121,6 +3234,7 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         ("max", "aggregator", "host-primitive", vec![], None, None),
         ("product", "aggregator", "host-primitive", vec![], None, None),
         ("probabilistic_sum", "aggregator", "host-primitive", vec![], None, None),
+        ("truth-table-fallback", "truth-table-fallback", "host-derived", vec![], None, None),
         ("not", "truth-operator", "user-configurable", vec!["truth-range", "decimal-12-arithmetic"], None, None),
         ("and", "truth-operator", "user-configurable", vec!["avg"], None, None),
         ("or", "truth-operator", "user-configurable", vec!["max"], None, None),

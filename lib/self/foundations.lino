@@ -128,6 +128,9 @@
 (root-construct max     (kind aggregator) (status host-primitive))
 (root-construct product (kind aggregator) (status host-primitive))
 (root-construct probabilistic_sum (kind aggregator) (status host-primitive))
+(root-construct truth-table-fallback
+  (kind truth-table-fallback)
+  (status host-derived))
 
 # Logical operators are bound to aggregators via `(<op>: <aggregator>)`
 # top-level declarations, so a foundation can pick e.g. Łukasiewicz vs.

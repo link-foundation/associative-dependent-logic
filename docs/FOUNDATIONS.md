@@ -129,7 +129,7 @@ Field reference:
 | `(defines <op> <aggregator>)` | Re-binds operator `<op>` to aggregator `<aggregator>` while the foundation is active. Repeats are allowed; each new `(defines ...)` replaces the binding for that operator. |
 | `(carrier <v1> <v2> ...)` | Declares the set of values the foundation considers legal. Symbolic constants (`true`, `false`, `unknown`) resolve through `env.symbol_prob` on activation; numeric literals stay literal. Informational unless `(strict-carrier)` is also present (see §6). |
 | `(strict-carrier)` | Opts the foundation into runtime carrier enforcement. Out-of-carrier query results and probability assignments raise `E063` instead of being silently clamped. |
-| `(truth-table <op> (in1 in2 -> out) ...)` | Rebinds `<op>` to a finite truth table for the duration of `(with-foundation ...)` and records that active implementation as `links-defined`. The host still executes the table lookup; the selected behaviour comes from the rows. Partial tables are allowed — rows that don't match fall through to the previously installed op. Symbolic truth constants resolve through `env.symbol_prob` on activation. |
+| `(truth-table <op> (in1 in2 -> out) ...)` | Rebinds `<op>` to a finite truth table for the duration of `(with-foundation ...)`. The host still executes the table lookup; the selected behaviour comes from the rows. Partial tables are allowed — rows that don't match fall through to the previously installed op. In `(strict-foundation pure-links)`, only tables that are total over the active strict carrier are treated as fallback-free links-defined implementations. Symbolic truth constants resolve through `env.symbol_prob` on activation. |
 | `(experimental)` | Flags the foundation as experimental so the trust audit prints an `[experimental]` tag next to its name. Carries no behavioural guarantees. |
 | `(root <symbol>)` | Records the foundation's root concept (e.g. `∞` for `mtc-anum`). Informational; surfaced on the report. |
 | `(abit <symbol> <meaning>)` | Records one atomic bit of the foundation's alphabet. Used by experimental profiles like `mtc-anum` to publish their four-abit (`[`, `]`, `0`, `1`) serialization alphabet. Informational; surfaced on the report. |
@@ -386,25 +386,28 @@ host aggregator while the foundation is active. The evaluator still
 performs the table lookup, so this is not a self-hosted proof kernel.
 
 ```lino
-(foundation xor3
-  (description "three-valued exclusive-or")
-  (carrier true false unknown)
+(foundation xor-boolean
+  (description two-valued-exclusive-or)
+  (carrier 0 1)
+  (strict-carrier)
   (truth-table xor
-    (true  false   -> true)
-    (false true    -> true)
-    (true  true    -> false)
-    (false false   -> false)
-    (unknown _     -> unknown)
-    (_       unknown -> unknown)))
+    (1 1 -> 0)
+    (1 0 -> 1)
+    (0 1 -> 1)
+    (0 0 -> 0)))
 
-(with-foundation xor3
-  (? (a xor b)))
+(with-foundation xor-boolean
+  (? (1 xor 0)))
 ```
 
 Partial tables are allowed: rows that don't match fall through to the
 previously installed operator, which may be host-backed. The symbolic
 constants are resolved through `env.symbol_prob` on activation, just
-like `(carrier ...)`.
+like `(carrier ...)`. Under `(strict-foundation pure-links)`, that
+fallback remains visible as a `truth-table-fallback` dependency unless
+the table is total over the foundation's `(strict-carrier)` set. This is
+why the bundled `boolean-links` foundation can pass strict mode, while a
+partial table still reports the host-backed fallback path.
 
 ## 8. Pure-links strict mode
 
@@ -488,17 +491,18 @@ frames, and leaf payloads that are not byte-aligned, all with `E066`.
 ## 10. Status of the broader programme
 
 The issue #97 roadmap is implemented where the work could stay
-backward-compatible and inspectable. The remaining self-hosting target
-is still deliberately explicit: Phase 5 has descriptor and dependency
-coverage, but not a links-defined type/proof kernel.
+backward-compatible and inspectable. The remaining self-hosting boundary
+is still explicit: truth-table lookup and proof-rule matching are
+performed by the host, while the selected tables, proof rules, and
+derivations are links data.
 
 - **Phase 1 — inventory + reporting + scoped overrides.** Implemented.
   See §2 (registry), §4 (`foundation-report`), §3 (`(with-foundation ...)`).
-- **Phase 2 — equality and numeric-domain separation.** Implemented as
-  registry descriptors: `structural-equality`, `numeric-equality`,
-  `assigned-equality`, `definitional-equality` are distinct entries
-  with their own `depends-on`. Proof-trace layering remains an open
-  follow-up.
+- **Phase 2 — equality and numeric-domain separation.** Implemented:
+  `structural-equality`, `numeric-equality`, `assigned-equality`, and
+  `definitional-equality` are distinct entries with their own
+  `depends-on`, and query proof/provenance output reports the equality
+  layer used.
 - **Phase 3 — proof-object substrate.** Implemented via proof rules,
   `(assumption ...)` / `(axiom ...)`, `(proof-object ...)`, and
   `(check-proof ...)`. Premises must cite an assumption, axiom, or
@@ -509,20 +513,24 @@ coverage, but not a links-defined type/proof kernel.
   `(truth-table ...)` clause (§7), and `(carrier ...)` +
   `(strict-carrier)` (§6). The older `boolean-classical` /
   `kleene-three-valued` foundations remain host-aggregator examples.
-- **Phase 5 — links-defined type/proof kernel fragment.** Partial:
-  the registry's `Prop`, `Pi`, `lambda`, `apply`, `beta-reduction`, and
-  equality layers are catalogued with `depends-on` links, and the
-  trust audit can walk them via the dependency graph. The actual
-  type/proof kernel remains host-implemented.
+- **Phase 5 — links-defined type/proof kernel fragment.** Implemented
+  as a small object-level fragment. `examples/typed-kernel-links.lino`
+  declares `pi-formation`, `lambda-introduction`,
+  `application-elimination`, and `beta-conversion` as proof-substrate
+  rules and replays a typed identity derivation through
+  `(check-proof ...)`. The default host typed kernel remains available
+  for legacy programs.
 - **Phase 6 — pure-links checking mode.** Implemented. See §8.
 - **Phase 7 — dependency-graph traversal.** Implemented for trust
   reporting and strict-mode enforcement paths.
 - **Phase 8 — bundled `(carrier ...)` / `(strict-carrier)` /
   `(truth-table ...)`.** Implemented (§6, §7).
 - **Phase 9 — experimental profiles (`mtc-anum`).** Implemented as an
-  opt-in serialization profile (§9), with `encodeAnum` / `decodeAnum`
-  helpers and the `(experimental)` / `(root ...)` / `(abit ...)`
-  clauses. It does not implement a minimal trusted core evaluator.
+  opt-in serialization profile (§9) plus a links-defined MTC theory
+  fragment in `examples/mtc-anum-theory.lino`. The profile publishes the
+  four-abit alphabet and `encodeAnum` / `decodeAnum`; the companion
+  theory declares MTC rules and replays a composite proof. It does not
+  replace the default RML foundation.
 
 Everything in this document is the *backward-compatible* surface. The
 strict modes (`(strict-carrier)`, `(strict-foundation pure-links)`) are
