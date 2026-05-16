@@ -295,6 +295,7 @@ class Env {
     this.foundations = new Map();
     this.activeFoundation = 'default-rml';
     this._foundationStack = [];                 // for nested (with-foundation ...)
+    this.activeImplementations = new Map();     // construct -> active scoped implementation descriptor
     // Proof-object substrate (issue #97, Phase 3 of netkeep80's punch-list).
     // `proofRules` maps a declared rule name to its pattern (an array of
     // premise nodes + a conclusion node, with `?meta` leaves as
@@ -304,6 +305,7 @@ class Env {
     // are consumed by `(check-proof <name>)` and surfaced on
     // `foundationReport()` so the trust audit can inspect them.
     this.proofRules = new Map();
+    this.proofAssumptions = new Map();
     this.proofObjects = new Map();
     // Carrier enforcement state (issue #97, Section 2). Off by default so
     // legacy programs are not constrained; flipped on by an enclosing
@@ -561,6 +563,38 @@ class Env {
         { symbol: '0', meaning: 'zero-of-meaning' },
       ],
     });
+    this.foundations.set('boolean-links', {
+      name: 'boolean-links',
+      description: 'links-defined two-valued Boolean logic via finite truth tables',
+      uses: [],
+      defines: new Map(),
+      extends: null,
+      numericDomain: 'boolean-zero-one',
+      truthDomain: 'boolean-two-valued',
+      carrier: ['0', '1'],
+      strictCarrier: true,
+      truthTables: new Map([
+        ['and', [
+          { inputs: ['1', '1'], output: '1' },
+          { inputs: ['1', '0'], output: '0' },
+          { inputs: ['0', '1'], output: '0' },
+          { inputs: ['0', '0'], output: '0' },
+        ]],
+        ['or', [
+          { inputs: ['1', '1'], output: '1' },
+          { inputs: ['1', '0'], output: '1' },
+          { inputs: ['0', '1'], output: '1' },
+          { inputs: ['0', '0'], output: '0' },
+        ]],
+        ['not', [
+          { inputs: ['1'], output: '0' },
+          { inputs: ['0'], output: '1' },
+        ]],
+      ]),
+      experimental: false,
+      root: null,
+      abits: null,
+    });
     seedBuiltinRootConstructs(this);
   }
 
@@ -607,12 +641,29 @@ class Env {
     // a known truth aggregator are applied (avg, min, max, product,
     // probabilistic_sum); other entries are data-only.
     const snapshot = new Map();
+    const implementationSnapshot = new Map();
+    const snapshotImplementation = (opName) => {
+      if (implementationSnapshot.has(opName)) return;
+      const current = this.activeImplementations.get(opName);
+      implementationSnapshot.set(opName, current ? {
+        ...current,
+        dependsOn: Array.isArray(current.dependsOn) ? current.dependsOn.slice() : [],
+      } : null);
+    };
     if (foundation.defines && foundation.defines.size > 0) {
       for (const [opName, implName] of foundation.defines.entries()) {
         const fn = aggregatorOpFromName(this, implName);
         if (fn === null) continue;
+        snapshotImplementation(opName);
         snapshot.set(opName, this.ops.has(opName) ? this.ops.get(opName) : null);
         this.ops.set(opName, fn);
+        this.activeImplementations.set(opName, {
+          construct: opName,
+          foundation: name,
+          implementation: implName,
+          status: 'host-primitive',
+          dependsOn: [implName],
+        });
       }
     }
     // Truth tables apply on top of `(defines ...)` bindings so a foundation
@@ -626,7 +677,15 @@ class Env {
         const previous = this.ops.has(opName) ? this.ops.get(opName) : null;
         const fn = truthTableOpFromRows(this, opName, rows, previous);
         if (fn === null) continue;
+        snapshotImplementation(opName);
         this.ops.set(opName, fn);
+        this.activeImplementations.set(opName, {
+          construct: opName,
+          foundation: name,
+          implementation: `truth-table:${name}/${opName}`,
+          status: 'links-defined',
+          dependsOn: [],
+        });
       }
     }
     // Carrier snapshot for opt-in enforcement (issue #97, Section 2 of
@@ -654,13 +713,14 @@ class Env {
         }
       }
     }
-    this._foundationStack.push({ name: this.activeFoundation, snapshot, carrierFrame });
+    this._foundationStack.push({ name: this.activeFoundation, snapshot, implementationSnapshot, carrierFrame });
     this.activeFoundation = name;
   }
 
   exitFoundation() {
     if (this._foundationStack.length === 0) {
       this.activeFoundation = 'default-rml';
+      this.activeImplementations.clear();
       this._strictCarrier = false;
       this._carrier = null;
       this._carrierLabel = null;
@@ -673,6 +733,15 @@ class Env {
           this.ops.delete(opName);
         } else {
           this.ops.set(opName, op);
+        }
+      }
+    }
+    if (frame && frame.implementationSnapshot) {
+      for (const [opName, impl] of frame.implementationSnapshot.entries()) {
+        if (impl === null) {
+          this.activeImplementations.delete(opName);
+        } else {
+          this.activeImplementations.set(opName, impl);
         }
       }
     }
@@ -745,11 +814,11 @@ class Env {
         strictCarrier: f.strictCarrier === true,
         truthTables: f.truthTables instanceof Map && f.truthTables.size > 0
           ? [...f.truthTables.entries()]
-              .map(([op, rows]) => ({
-                op,
-                rows: rows.map(r => ({ inputs: r.inputs.slice(), output: r.output })),
-              }))
-              .sort((a, b) => a.op < b.op ? -1 : a.op > b.op ? 1 : 0)
+            .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+            .map(([op, rows]) => ({
+              op,
+              rows: rows.map(r => ({ inputs: r.inputs.slice(), output: r.output })),
+            }))
           : null,
         experimental: f.experimental === true,
         root: f.root || null,
@@ -757,6 +826,15 @@ class Env {
           ? f.abits.map(a => ({ symbol: a.symbol, meaning: a.meaning }))
           : null,
       })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      activeImplementations: [...this.activeImplementations.entries()]
+        .map(([construct, impl]) => ({
+          construct,
+          foundation: impl.foundation || null,
+          implementation: impl.implementation || null,
+          status: impl.status || null,
+          dependsOn: Array.isArray(impl.dependsOn) ? impl.dependsOn.slice() : [],
+        }))
+        .sort((a, b) => a.construct < b.construct ? -1 : a.construct > b.construct ? 1 : 0),
       proofRules: [...this.proofRules.entries()]
         .map(([name, r]) => ({
           name,
@@ -764,11 +842,19 @@ class Env {
           conclusion: keyOf(r.conclusion),
         }))
         .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      proofAssumptions: [...this.proofAssumptions.entries()]
+        .map(([name, a]) => ({
+          name,
+          kind: a.kind,
+          judgement: keyOf(a.judgement),
+        }))
+        .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
       proofObjects: [...this.proofObjects.entries()]
         .map(([name, po]) => ({
           name,
           rule: po.rule,
           premises: po.premises.map(p => keyOf(p)),
+          premiseRefs: (po.premiseRefs || []).slice(),
           conclusion: keyOf(po.conclusion),
         }))
         .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
@@ -807,6 +893,25 @@ class Env {
     return this.proofRules.get(name) || null;
   }
 
+  registerProofAssumption(assumption) {
+    if (!assumption || typeof assumption.name !== 'string' || !assumption.name) {
+      throw new RmlError('E064', 'proof assumption declaration requires a name');
+    }
+    if (assumption.judgement === null || assumption.judgement === undefined) {
+      throw new RmlError('E064', `${assumption.kind || 'assumption'} ${assumption.name} requires a judgement`);
+    }
+    this.proofAssumptions.set(assumption.name, {
+      name: assumption.name,
+      kind: assumption.kind || 'assumption',
+      judgement: assumption.judgement,
+    });
+    return this.proofAssumptions.get(assumption.name);
+  }
+
+  getProofAssumption(name) {
+    return this.proofAssumptions.get(name) || null;
+  }
+
   registerProofObject(po) {
     if (!po || typeof po.name !== 'string' || !po.name) {
       throw new RmlError('E064', 'proof-object declaration requires a name');
@@ -818,6 +923,7 @@ class Env {
       name: po.name,
       rule: po.rule,
       premises: po.premises ? po.premises.slice() : [],
+      premiseRefs: po.premiseRefs ? po.premiseRefs.slice() : [],
       conclusion: po.conclusion,
     });
     return this.proofObjects.get(po.name);
@@ -1206,7 +1312,7 @@ function seedBuiltinRootConstructs(env) {
     { name: 'product', kind: 'aggregator', status: 'host-primitive' },
     { name: 'probabilistic_sum', kind: 'aggregator', status: 'host-primitive' },
     // Logical layer
-    { name: 'not', kind: 'truth-operator', status: 'user-configurable', dependsOn: ['truth-range'] },
+    { name: 'not', kind: 'truth-operator', status: 'user-configurable', dependsOn: ['truth-range', 'decimal-12-arithmetic'] },
     { name: 'and', kind: 'truth-operator', status: 'user-configurable', dependsOn: ['avg'] },
     { name: 'or', kind: 'truth-operator', status: 'user-configurable', dependsOn: ['max'] },
     { name: 'both', kind: 'truth-operator', status: 'user-configurable', dependsOn: ['avg'] },
@@ -1528,6 +1634,20 @@ function formatFoundationReport(report) {
       }
     }
   }
+  if (Array.isArray(report.activeImplementations) && report.activeImplementations.length > 0) {
+    lines.push('');
+    lines.push('active implementations:');
+    for (const impl of report.activeImplementations) {
+      const parts = [];
+      if (impl.status) parts.push(impl.status);
+      if (impl.implementation) parts.push(`via ${impl.implementation}`);
+      if (impl.foundation) parts.push(`foundation ${impl.foundation}`);
+      if (Array.isArray(impl.dependsOn) && impl.dependsOn.length > 0) {
+        parts.push(`depends on ${impl.dependsOn.join(', ')}`);
+      }
+      lines.push(`  - ${impl.construct}: ${parts.join('; ')}`);
+    }
+  }
   if (Array.isArray(report.proofRules) && report.proofRules.length > 0) {
     lines.push('');
     lines.push('proof rules:');
@@ -1535,11 +1655,21 @@ function formatFoundationReport(report) {
       lines.push(`  - ${r.name} (${r.premises.length} premises → ${r.conclusion})`);
     }
   }
+  if (Array.isArray(report.proofAssumptions) && report.proofAssumptions.length > 0) {
+    lines.push('');
+    lines.push('proof assumptions:');
+    for (const a of report.proofAssumptions) {
+      lines.push(`  - ${a.name} [${a.kind}] : ${a.judgement}`);
+    }
+  }
   if (Array.isArray(report.proofObjects) && report.proofObjects.length > 0) {
     lines.push('');
     lines.push('proof objects:');
     for (const po of report.proofObjects) {
-      lines.push(`  - ${po.name} : applies ${po.rule} (${po.premises.length} premises → ${po.conclusion})`);
+      const refs = Array.isArray(po.premiseRefs) && po.premiseRefs.length > 0
+        ? ` using ${po.premiseRefs.join(', ')}`
+        : '';
+      lines.push(`  - ${po.name} : applies ${po.rule} (${po.premises.length} premises${refs} → ${po.conclusion})`);
     }
   }
   if (report.strictPureLinks === true) {
@@ -1568,6 +1698,19 @@ function formatFoundationReport(report) {
 
 // ---------- Proof-object substrate parsers (issue #97, Phase 3) ----------
 //
+// Data-only self-bootstrap files also use `(rule ...)` forms. Route to the
+// proof substrate only when every child clause is a proof premise/conclusion
+// and at least one conclusion exists.
+function isProofRuleShape(node) {
+  return Array.isArray(node) &&
+    node[0] === 'rule' &&
+    typeof node[1] === 'string' &&
+    node[1] &&
+    node.length >= 3 &&
+    node.slice(2).every(c => Array.isArray(c) && (c[0] === 'premise' || c[0] === 'conclusion')) &&
+    node.slice(2).some(c => c[0] === 'conclusion');
+}
+
 // Parse a `(rule <name> (premise <pat>)... (conclusion <pat>))` declaration.
 // Patterns are plain link nodes; leaves whose token starts with `?` are
 // metavariables and bind during `(check-proof <name>)` matching. Repeated
@@ -1609,8 +1752,44 @@ function parseRuleForm(node) {
   return rule;
 }
 
+// Parse `(assumption <name> (judgement <judgement>))` and
+// `(axiom <name> (judgement <judgement>))` proof leaves. These are explicit
+// proof dependencies: a proof object may cite them with `(premise-by <name>)`
+// or `(uses <name>)`, making assumptions visible instead of letting arbitrary
+// premises appear inside a proof object without justification.
+function parseProofAssumptionForm(node) {
+  if (!Array.isArray(node) || (node[0] !== 'assumption' && node[0] !== 'axiom') || node.length < 2) {
+    throw new RmlError('E064', 'proof assumption form must be `(assumption <name> (judgement <j>))` or `(axiom <name> (judgement <j>))`');
+  }
+  const kind = node[0];
+  if (typeof node[1] !== 'string' || !node[1]) {
+    throw new RmlError('E064', `${kind} name must be a non-empty identifier`);
+  }
+  const assumption = { name: node[1], kind, judgement: null };
+  for (const child of node.slice(2)) {
+    if (!Array.isArray(child) || child.length < 1 || typeof child[0] !== 'string') {
+      throw new RmlError('E064', `${kind} ${assumption.name}: clauses must be lists led by a keyword`);
+    }
+    if (child[0] !== 'judgement') {
+      throw new RmlError('E064', `${kind} ${assumption.name}: unknown clause keyword ${child[0]}`);
+    }
+    if (child.length !== 2) {
+      throw new RmlError('E064', `${kind} ${assumption.name}: (judgement <j>) requires one argument`);
+    }
+    if (assumption.judgement !== null) {
+      throw new RmlError('E064', `${kind} ${assumption.name}: only one (judgement ...) clause is allowed`);
+    }
+    assumption.judgement = child[1];
+  }
+  if (assumption.judgement === null) {
+    throw new RmlError('E064', `${kind} ${assumption.name}: (judgement <j>) clause is required`);
+  }
+  return assumption;
+}
+
 // Parse a `(proof-object <name> (applies <rule>) (premise <judgement>)...
-// (conclusion <judgement>))` declaration into a descriptor stored on the env.
+// (premise-by <dependency>)... (conclusion <judgement>))` declaration into a
+// descriptor stored on the env.
 function parseProofObjectForm(node) {
   if (!Array.isArray(node) || node[0] !== 'proof-object' || node.length < 2) {
     throw new RmlError('E064', 'proof-object form must be `(proof-object <name> (applies <rule>) ...)`');
@@ -1618,7 +1797,7 @@ function parseProofObjectForm(node) {
   if (typeof node[1] !== 'string' || !node[1]) {
     throw new RmlError('E064', 'proof-object name must be a non-empty identifier');
   }
-  const po = { name: node[1], rule: null, premises: [], conclusion: null };
+  const po = { name: node[1], rule: null, premises: [], premiseRefs: [], conclusion: null };
   for (const child of node.slice(2)) {
     if (!Array.isArray(child) || child.length < 1 || typeof child[0] !== 'string') {
       throw new RmlError('E064', `proof-object ${po.name}: clauses must be lists led by a keyword`);
@@ -1634,6 +1813,21 @@ function parseProofObjectForm(node) {
         throw new RmlError('E064', `proof-object ${po.name}: (premise <judgement>) requires one argument`);
       }
       po.premises.push(child[1]);
+    } else if (key === 'premise-by') {
+      if (child.length !== 2 || typeof child[1] !== 'string' || !child[1]) {
+        throw new RmlError('E064', `proof-object ${po.name}: (premise-by <name>) requires a dependency name`);
+      }
+      po.premiseRefs.push(child[1]);
+    } else if (key === 'uses') {
+      if (child.length < 2) {
+        throw new RmlError('E064', `proof-object ${po.name}: (uses <name>...) requires at least one dependency name`);
+      }
+      for (const ref of child.slice(1)) {
+        if (typeof ref !== 'string' || !ref) {
+          throw new RmlError('E064', `proof-object ${po.name}: (uses ...) dependencies must be names`);
+        }
+        po.premiseRefs.push(ref);
+      }
     } else if (key === 'conclusion') {
       if (child.length !== 2) {
         throw new RmlError('E064', `proof-object ${po.name}: (conclusion <judgement>) requires one argument`);
@@ -1678,23 +1872,69 @@ function matchProofPattern(pattern, candidate, subs) {
   return true;
 }
 
-// Validate a `(proof-object <name>)` against its declared rule. Returns
+function _resolveProofDependency(env, ref, stack) {
+  const assumption = env.getProofAssumption(ref);
+  if (assumption) {
+    return { ok: true, judgement: assumption.judgement, kind: assumption.kind };
+  }
+  const po = env.getProofObject(ref);
+  if (!po) {
+    return { ok: false, error: `unknown proof dependency ${ref}` };
+  }
+  const verdict = checkProofObject(env, ref, stack);
+  if (!verdict.ok) return verdict;
+  return { ok: true, judgement: po.conclusion, kind: 'proof-object' };
+}
+
+// Validate a `(proof-object <name>)` against its declared rule and recursively
+// verify every `(premise-by ...)` / `(uses ...)` dependency. Returns
 // `{ ok: true }` on success or `{ ok: false, error: '...' }` on failure so the
 // caller can decide whether to emit E064 or surface the result differently.
-function checkProofObject(env, name) {
+function checkProofObject(env, name, stack = []) {
+  if (stack.includes(name)) {
+    return { ok: false, error: `cyclic proof dependency: ${stack.concat([name]).join(' -> ')}` };
+  }
   const po = env.getProofObject(name);
   if (!po) return { ok: false, error: `unknown proof-object ${name}` };
   const rule = env.getProofRule(po.rule);
   if (!rule) return { ok: false, error: `proof-object ${name} references unknown rule ${po.rule}` };
-  if (po.premises.length !== rule.premises.length) {
+  const refs = Array.isArray(po.premiseRefs) ? po.premiseRefs : [];
+  let effectivePremises = po.premises.slice();
+  const dependencyStack = stack.concat([name]);
+  if (refs.length > 0) {
+    effectivePremises = [];
+    for (let i = 0; i < refs.length; i++) {
+      const resolved = _resolveProofDependency(env, refs[i], dependencyStack);
+      if (!resolved.ok) return resolved;
+      effectivePremises.push(resolved.judgement);
+      if (po.premises.length > 0 && po.premises[i] !== undefined && !isStructurallySame(po.premises[i], resolved.judgement)) {
+        return {
+          ok: false,
+          error: `proof-object ${name}: premise ${i + 1} does not match referenced judgement ${refs[i]}`,
+        };
+      }
+    }
+    if (po.premises.length > 0 && po.premises.length !== refs.length) {
+      return {
+        ok: false,
+        error: `proof-object ${name}: has ${po.premises.length} explicit premise(s) but ${refs.length} proof dependency reference(s)`,
+      };
+    }
+  } else if (po.premises.length > 0) {
     return {
       ok: false,
-      error: `proof-object ${name}: expected ${rule.premises.length} premise(s) for rule ${po.rule}, got ${po.premises.length}`,
+      error: `proof-object ${name}: premise 1 is unjustified; use (premise-by <name>) or declare an assumption/axiom`,
+    };
+  }
+  if (effectivePremises.length !== rule.premises.length) {
+    return {
+      ok: false,
+      error: `proof-object ${name}: expected ${rule.premises.length} premise(s) for rule ${po.rule}, got ${effectivePremises.length}`,
     };
   }
   const subs = {};
   for (let i = 0; i < rule.premises.length; i++) {
-    if (!matchProofPattern(rule.premises[i], po.premises[i], subs)) {
+    if (!matchProofPattern(rule.premises[i], effectivePremises[i], subs)) {
       return {
         ok: false,
         error: `proof-object ${name}: premise ${i + 1} does not match rule ${po.rule}`,
@@ -1704,7 +1944,7 @@ function checkProofObject(env, name) {
   if (!matchProofPattern(rule.conclusion, po.conclusion, subs)) {
     return { ok: false, error: `proof-object ${name}: conclusion does not match rule ${po.rule}` };
   }
-  return { ok: true, substitution: subs };
+  return { ok: true, substitution: subs, dependencies: refs.slice() };
 }
 
 // ---------- Pure-links strict mode (issue #97, Phase 6) ----------
@@ -1760,7 +2000,8 @@ const PURE_LINKS_SCANNER_IGNORED = new Set([
   'has', 'probability',
   'is', 'a', 'an',
   'sequence', 'normalizes-to',
-  'applies', 'premise', 'conclusion', 'rule', 'proof-object', 'check-proof',
+  'applies', 'premise', 'premise-by', 'conclusion', 'uses', 'judgement',
+  'assumption', 'axiom', 'rule', 'proof-object', 'check-proof',
   'foundation', 'with-foundation', 'foundation-report', 'foundation-report?',
   'root-construct', 'strict-carrier', 'truth-table',
   'strict-foundation', 'allow-host-primitive',
@@ -1770,47 +2011,63 @@ function _isStrictlyOffendingStatus(status) {
   return status === 'host-primitive' || status === 'host-derived';
 }
 
+function _strictDependencyOffenders(env, name, path = []) {
+  const allow = env.allowedHostPrimitives instanceof Set ? env.allowedHostPrimitives : new Set();
+  if (allow.has(name)) return [];
+  if (path.includes(name)) return [];
+  const currentPath = path.concat([name]);
+  const active = env.activeImplementations instanceof Map ? env.activeImplementations.get(name) : null;
+  const rc = env.getRootConstruct(name);
+  const status = active && active.status ? active.status : (rc && rc.status);
+  const deps = active && Array.isArray(active.dependsOn)
+    ? active.dependsOn
+    : (rc && Array.isArray(rc.dependsOn) ? rc.dependsOn : []);
+  if (active && active.status === 'links-defined' && deps.length === 0) {
+    return [];
+  }
+  if (_isStrictlyOffendingStatus(status) && deps.length === 0) {
+    return [`${currentPath.join(' -> ')} -> ${status}`];
+  }
+  const offenders = [];
+  for (const dep of deps) {
+    if (allow.has(dep)) continue;
+    offenders.push(..._strictDependencyOffenders(env, dep, currentPath));
+  }
+  if (_isStrictlyOffendingStatus(status) && offenders.length === 0) {
+    offenders.push(`${currentPath.join(' -> ')} -> ${status}`);
+  }
+  return offenders;
+}
+
 // Walk the queried AST, look up every operator-head leaf in the root-construct
-// registry, and collect the names of any constructs with an offending status
-// that are not in the allow list. Returns a sorted, deduplicated array.
+// registry and active-foundation implementation map, and collect transitive
+// dependency paths that end at an unallowed host primitive/derived construct.
+// Returns a sorted, deduplicated array of paths such as
+// `and -> avg -> host-primitive`.
 function scanPureLinksOffenders(node, env) {
   if (env.strictPureLinks !== true) return [];
   const offenders = new Set();
   const allow = env.allowedHostPrimitives instanceof Set ? env.allowedHostPrimitives : new Set();
+  const check = (name) => {
+    if (PURE_LINKS_SCANNER_IGNORED.has(name) || allow.has(name)) return;
+    for (const offender of _strictDependencyOffenders(env, name)) offenders.add(offender);
+  };
   const visit = (n) => {
     if (Array.isArray(n)) {
       const head = n[0];
-      if (typeof head === 'string') {
-        if (!PURE_LINKS_SCANNER_IGNORED.has(head) && !allow.has(head)) {
-          const rc = env.getRootConstruct(head);
-          if (rc && _isStrictlyOffendingStatus(rc.status)) {
-            offenders.add(head);
-          }
-        }
-      }
+      if (typeof head === 'string') check(head);
       // Inspect every list child too — the head may live deeper inside a
       // sublist (e.g. an infix `(L op R)` shape).
       for (let i = 0; i < n.length; i++) visit(n[i]);
       // For infix `(L op R)` the operator is the middle element; check it
       // explicitly so we don't miss it.
       if (n.length === 3 && typeof n[1] === 'string') {
-        const op = n[1];
-        if (!PURE_LINKS_SCANNER_IGNORED.has(op) && !allow.has(op)) {
-          const rc = env.getRootConstruct(op);
-          if (rc && _isStrictlyOffendingStatus(rc.status)) {
-            offenders.add(op);
-          }
-        }
+        check(n[1]);
       }
       return;
     }
     if (typeof n === 'string') {
-      if (!PURE_LINKS_SCANNER_IGNORED.has(n) && !allow.has(n)) {
-        const rc = env.getRootConstruct(n);
-        if (rc && _isStrictlyOffendingStatus(rc.status)) {
-          offenders.add(n);
-        }
-      }
+      check(n);
     }
   };
   visit(node);
@@ -6486,6 +6743,58 @@ function evaluate(code, options) {
             if (traceEnabled && trace) {
               trace.push(new TraceEvent({ kind: 'foundation', detail: foundation.name, span }));
             }
+          } else if (Array.isArray(body) && body[0] === 'root-construct') {
+            const descriptor = parseRootConstructForm(body);
+            env.registerRootConstruct(descriptor);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: 'root-construct', detail: descriptor.name, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === 'rule' && isProofRuleShape(body)) {
+            const rule = parseRuleForm(body);
+            env.registerProofRule(rule);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: 'rule', detail: rule.name, span }));
+            }
+          } else if (Array.isArray(body) && (body[0] === 'assumption' || body[0] === 'axiom')) {
+            const assumption = parseProofAssumptionForm(body);
+            env.registerProofAssumption(assumption);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: assumption.kind, detail: assumption.name, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === 'proof-object') {
+            const po = parseProofObjectForm(body);
+            env.registerProofObject(po);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: 'proof-object', detail: po.name, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === 'check-proof') {
+            if (body.length !== 2 || typeof body[1] !== 'string' || !body[1]) {
+              throw new RmlError('E064', '(check-proof <name>) requires a proof-object name');
+            }
+            const target = body[1];
+            const verdict = checkProofObject(env, target);
+            const value = verdict.ok ? 1 : 0;
+            results.push(value);
+            if (proofs !== null) proofs.push(null);
+            if (provenance !== null) provenance.push(null);
+            if (!verdict.ok) {
+              diagnostics.push(new Diagnostic({ code: 'E064', message: verdict.error, span }));
+            }
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: 'check-proof', detail: `${target} -> ${verdict.ok ? 'ok' : 'fail'}`, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === 'strict-foundation') {
+            const decl = parseStrictFoundationForm(body);
+            env.strictPureLinks = true;
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: 'strict-foundation', detail: decl.profile, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === 'allow-host-primitive') {
+            const decl = parseAllowHostPrimitiveForm(body);
+            for (const name of decl.names) env.allowedHostPrimitives.add(name);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: 'allow-host-primitive', detail: decl.names.join(' '), span }));
+            }
           } else {
             const expanded = expandTemplates(body, env);
             const res = evalNode(expanded, env);
@@ -6664,20 +6973,28 @@ function evaluate(code, options) {
     // proof substrate only when every clause uses the `premise`/`conclusion`
     // keywords and at least one `conclusion` clause is present. Other shapes
     // fall through to the legacy data path unchanged.
-    if (
-      Array.isArray(form) &&
-      form[0] === 'rule' &&
-      typeof form[1] === 'string' &&
-      form[1] &&
-      form.length >= 3 &&
-      form.slice(2).every(c => Array.isArray(c) && (c[0] === 'premise' || c[0] === 'conclusion')) &&
-      form.slice(2).some(c => c[0] === 'conclusion')
-    ) {
+    if (isProofRuleShape(form)) {
       try {
         const rule = parseRuleForm(form);
         env.registerProofRule(rule);
         if (traceEnabled && trace) {
           trace.push(new TraceEvent({ kind: 'rule', detail: rule.name, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: (err && err.code) || 'E064',
+          message: err && err.message ? err.message : String(err),
+          span: (err && err.span) || span,
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && (form[0] === 'assumption' || form[0] === 'axiom')) {
+      try {
+        const assumption = parseProofAssumptionForm(form);
+        env.registerProofAssumption(assumption);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: assumption.kind, detail: assumption.name, span }));
         }
       } catch (err) {
         diagnostics.push(new Diagnostic({
@@ -8133,6 +8450,7 @@ export {
   parseFoundationForm,
   formatFoundationReport,
   parseRuleForm,
+  parseProofAssumptionForm,
   parseProofObjectForm,
   matchProofPattern,
   checkProofObject,

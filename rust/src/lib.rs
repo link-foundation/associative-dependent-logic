@@ -931,6 +931,7 @@ pub struct Env {
     pub foundations: HashMap<String, FoundationDescriptor>,
     pub active_foundation: String,
     pub foundation_stack: Vec<FoundationFrame>,
+    pub active_implementations: HashMap<String, ActiveImplementationDescriptor>,
     /// Carrier enforcement state (issue #97, Section 2). Off by default so
     /// legacy programs are not constrained; flipped on by an enclosing
     /// `(with-foundation <name>)` whose descriptor includes both
@@ -945,6 +946,7 @@ pub struct Env {
     /// `(check-proof <name>)`. Both are data-only: declaring a rule never
     /// alters evaluator behaviour. The CLI's foundation report surfaces them.
     pub proof_rules: HashMap<String, ProofRule>,
+    pub proof_assumptions: HashMap<String, ProofAssumption>,
     pub proof_objects: HashMap<String, ProofObject>,
     /// Pure-links strict mode (issue #97, Phase 6 of netkeep80's punch-list).
     /// When `strict_pure_links` is true, every queried form is audited
@@ -967,6 +969,7 @@ pub struct Env {
 pub struct FoundationFrame {
     pub previous_active: String,
     pub snapshot: Vec<(String, Option<Op>)>,
+    pub previous_active_implementations: Vec<(String, Option<ActiveImplementationDescriptor>)>,
     pub previous_strict_carrier: bool,
     pub previous_carrier: Option<Vec<f64>>,
     pub previous_carrier_label: Option<String>,
@@ -1036,6 +1039,19 @@ pub struct FoundationDescriptor {
     pub abits: Vec<(String, String)>,
 }
 
+/// Active implementation selected by the current foundation scope for a
+/// construct such as `and` or `not`. This is the behaviour-facing counterpart
+/// to the global root-construct descriptor: strict pure-links mode consults
+/// it before falling back to the global registry.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ActiveImplementationDescriptor {
+    pub construct: String,
+    pub foundation: Option<String>,
+    pub implementation: Option<String>,
+    pub status: Option<String>,
+    pub depends_on: Vec<String>,
+}
+
 /// One row of a `(truth-table <op> ...)` declaration: a sequence of input
 /// tokens and the output token. See `FoundationDescriptor::truth_tables`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1054,10 +1070,12 @@ pub struct FoundationReport {
     pub root_constructs: Vec<RootConstructDescriptor>,
     pub by_status: Vec<(String, Vec<String>)>,
     pub foundations: Vec<FoundationDescriptor>,
+    pub active_implementations: Vec<ActiveImplementationDescriptor>,
     /// Proof-object substrate (issue #97, Phase 3). Surfaced on the report so
     /// the trust audit can list every declared rule and concrete derivation.
     /// Names are kept sorted for stable output across runs.
     pub proof_rules: Vec<ProofRuleSnapshot>,
+    pub proof_assumptions: Vec<ProofAssumptionSnapshot>,
     pub proof_objects: Vec<ProofObjectSnapshot>,
     /// Pure-links strict mode state (issue #97, Phase 6). Surfaced so the
     /// trust audit can prove the engine is running in strict mode and list
@@ -1082,6 +1100,15 @@ pub struct ProofRule {
     pub conclusion: Node,
 }
 
+/// An explicit proof leaf. Proof objects cite these with `(premise-by name)`
+/// or `(uses name)` so assumptions and axioms are visible in the proof graph.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofAssumption {
+    pub name: String,
+    pub kind: String,
+    pub judgement: Node,
+}
+
 /// A concrete derivation that claims to be an instance of a rule. Stored
 /// alongside the rule so `(check-proof <name>)` can re-validate it on
 /// demand without re-parsing the source.
@@ -1090,6 +1117,7 @@ pub struct ProofObject {
     pub name: String,
     pub rule: String,
     pub premises: Vec<Node>,
+    pub premise_refs: Vec<String>,
     pub conclusion: Node,
 }
 
@@ -1103,6 +1131,14 @@ pub struct ProofRuleSnapshot {
     pub conclusion: String,
 }
 
+/// Printed view of a proof assumption/axiom for `foundation_report()`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProofAssumptionSnapshot {
+    pub name: String,
+    pub kind: String,
+    pub judgement: String,
+}
+
 /// Printed view of a `ProofObject` for `foundation_report()`. Mirrors
 /// `ProofRuleSnapshot` and additionally records the referenced rule.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1110,6 +1146,7 @@ pub struct ProofObjectSnapshot {
     pub name: String,
     pub rule: String,
     pub premises: Vec<String>,
+    pub premise_refs: Vec<String>,
     pub conclusion: String,
 }
 
@@ -1262,10 +1299,12 @@ impl Env {
             foundations: HashMap::new(),
             active_foundation: "default-rml".to_string(),
             foundation_stack: Vec::new(),
+            active_implementations: HashMap::new(),
             strict_carrier: false,
             carrier: None,
             carrier_label: None,
             proof_rules: HashMap::new(),
+            proof_assumptions: HashMap::new(),
             proof_objects: HashMap::new(),
             strict_pure_links: false,
             allowed_host_primitives: HashSet::new(),
@@ -1377,6 +1416,81 @@ impl Env {
             ],
         };
         self.foundations.insert(mtc_anum.name.clone(), mtc_anum);
+        let boolean_links = FoundationDescriptor {
+            name: "boolean-links".to_string(),
+            description: Some(
+                "links-defined two-valued Boolean logic via finite truth tables".to_string(),
+            ),
+            uses: Vec::new(),
+            defines: Vec::new(),
+            extends: None,
+            numeric_domain: Some("boolean-zero-one".to_string()),
+            truth_domain: Some("boolean-two-valued".to_string()),
+            carrier: vec!["0".to_string(), "1".to_string()],
+            strict_carrier: true,
+            truth_tables: vec![
+                (
+                    "and".to_string(),
+                    vec![
+                        TruthTableRow {
+                            inputs: vec!["1".to_string(), "1".to_string()],
+                            output: "1".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["1".to_string(), "0".to_string()],
+                            output: "0".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string(), "1".to_string()],
+                            output: "0".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string(), "0".to_string()],
+                            output: "0".to_string(),
+                        },
+                    ],
+                ),
+                (
+                    "or".to_string(),
+                    vec![
+                        TruthTableRow {
+                            inputs: vec!["1".to_string(), "1".to_string()],
+                            output: "1".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["1".to_string(), "0".to_string()],
+                            output: "1".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string(), "1".to_string()],
+                            output: "1".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string(), "0".to_string()],
+                            output: "0".to_string(),
+                        },
+                    ],
+                ),
+                (
+                    "not".to_string(),
+                    vec![
+                        TruthTableRow {
+                            inputs: vec!["1".to_string()],
+                            output: "0".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string()],
+                            output: "1".to_string(),
+                        },
+                    ],
+                ),
+            ],
+            experimental: false,
+            root: None,
+            abits: Vec::new(),
+        };
+        self.foundations
+            .insert(boolean_links.name.clone(), boolean_links);
         seed_builtin_root_constructs(self);
     }
 
@@ -1389,7 +1503,8 @@ impl Env {
         }
         let prev = self.root_constructs.get(&descriptor.name).cloned();
         let merged = merge_root_construct_descriptors(prev, descriptor);
-        self.root_constructs.insert(merged.name.clone(), merged.clone());
+        self.root_constructs
+            .insert(merged.name.clone(), merged.clone());
         Ok(merged)
     }
 
@@ -1398,8 +1513,7 @@ impl Env {
     }
 
     pub fn list_root_constructs(&self) -> Vec<RootConstructDescriptor> {
-        let mut v: Vec<RootConstructDescriptor> =
-            self.root_constructs.values().cloned().collect();
+        let mut v: Vec<RootConstructDescriptor> = self.root_constructs.values().cloned().collect();
         v.sort_by(|a, b| a.name.cmp(&b.name));
         v
     }
@@ -1431,11 +1545,37 @@ impl Env {
         // entries that name a known truth aggregator are applied (avg, min,
         // max, product, probabilistic_sum); other entries are data-only.
         let mut snapshot: Vec<(String, Option<Op>)> = Vec::new();
+        let mut previous_active_implementations: Vec<(
+            String,
+            Option<ActiveImplementationDescriptor>,
+        )> = Vec::new();
+        let snapshot_impl = |env: &Env,
+                             store: &mut Vec<(String, Option<ActiveImplementationDescriptor>)>,
+                             op_name: &str| {
+            if store.iter().any(|(n, _)| n == op_name) {
+                return;
+            }
+            store.push((
+                op_name.to_string(),
+                env.active_implementations.get(op_name).cloned(),
+            ));
+        };
         for (op_name, impl_name) in &foundation.defines {
             if let Some(agg) = Aggregator::from_name(impl_name) {
+                snapshot_impl(self, &mut previous_active_implementations, op_name);
                 let prev = self.ops.get(op_name).cloned();
                 snapshot.push((op_name.clone(), prev));
                 self.ops.insert(op_name.clone(), Op::Agg(agg));
+                self.active_implementations.insert(
+                    op_name.clone(),
+                    ActiveImplementationDescriptor {
+                        construct: op_name.clone(),
+                        foundation: Some(name.to_string()),
+                        implementation: Some(impl_name.clone()),
+                        status: Some("host-primitive".to_string()),
+                        depends_on: vec![impl_name.clone()],
+                    },
+                );
             }
         }
         // Truth tables (issue #97, Section 3 of netkeep80's punch-list).
@@ -1472,12 +1612,23 @@ impl Env {
                 let prev = self.ops.get(op_name).cloned();
                 snapshot.push((op_name.clone(), prev));
             }
+            snapshot_impl(self, &mut previous_active_implementations, op_name);
             let fallback = self.ops.get(op_name).cloned().map(Box::new);
             self.ops.insert(
                 op_name.clone(),
                 Op::TruthTable {
                     rows: resolved,
                     fallback,
+                },
+            );
+            self.active_implementations.insert(
+                op_name.clone(),
+                ActiveImplementationDescriptor {
+                    construct: op_name.clone(),
+                    foundation: Some(name.to_string()),
+                    implementation: Some(format!("truth-table:{}/{}", name, op_name)),
+                    status: Some("links-defined".to_string()),
+                    depends_on: Vec::new(),
                 },
             );
         }
@@ -1509,6 +1660,7 @@ impl Env {
         let frame = FoundationFrame {
             previous_active: std::mem::take(&mut self.active_foundation),
             snapshot,
+            previous_active_implementations,
             previous_strict_carrier,
             previous_carrier,
             previous_carrier_label,
@@ -1530,12 +1682,23 @@ impl Env {
                     }
                 }
             }
+            for (op_name, prev) in frame.previous_active_implementations.into_iter().rev() {
+                match prev {
+                    Some(implementation) => {
+                        self.active_implementations.insert(op_name, implementation);
+                    }
+                    None => {
+                        self.active_implementations.remove(&op_name);
+                    }
+                }
+            }
             self.active_foundation = frame.previous_active;
             self.strict_carrier = frame.previous_strict_carrier;
             self.carrier = frame.previous_carrier;
             self.carrier_label = frame.previous_carrier_label;
         } else {
             self.active_foundation = "default-rml".to_string();
+            self.active_implementations.clear();
             self.strict_carrier = false;
             self.carrier = None;
             self.carrier_label = None;
@@ -1591,6 +1754,9 @@ impl Env {
         let mut foundations: Vec<FoundationDescriptor> =
             self.foundations.values().cloned().collect();
         foundations.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut active_implementations: Vec<ActiveImplementationDescriptor> =
+            self.active_implementations.values().cloned().collect();
+        active_implementations.sort_by(|a, b| a.construct.cmp(&b.construct));
         let mut proof_rules: Vec<ProofRuleSnapshot> = self
             .proof_rules
             .values()
@@ -1601,6 +1767,16 @@ impl Env {
             })
             .collect();
         proof_rules.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut proof_assumptions: Vec<ProofAssumptionSnapshot> = self
+            .proof_assumptions
+            .values()
+            .map(|a| ProofAssumptionSnapshot {
+                name: a.name.clone(),
+                kind: a.kind.clone(),
+                judgement: key_of(&a.judgement),
+            })
+            .collect();
+        proof_assumptions.sort_by(|a, b| a.name.cmp(&b.name));
         let mut proof_objects: Vec<ProofObjectSnapshot> = self
             .proof_objects
             .values()
@@ -1608,6 +1784,7 @@ impl Env {
                 name: po.name.clone(),
                 rule: po.rule.clone(),
                 premises: po.premises.iter().map(key_of).collect(),
+                premise_refs: po.premise_refs.clone(),
                 conclusion: key_of(&po.conclusion),
             })
             .collect();
@@ -1623,7 +1800,9 @@ impl Env {
             root_constructs: constructs,
             by_status,
             foundations,
+            active_implementations,
             proof_rules,
+            proof_assumptions,
             proof_objects,
             strict_pure_links: self.strict_pure_links,
             allowed_host_primitives: allowed,
@@ -1652,6 +1831,13 @@ impl Env {
         self.proof_rules.insert(rule.name.clone(), rule);
     }
 
+    /// Register an explicit proof assumption/axiom. Data-only; proof objects
+    /// cite these leaves via `(premise-by <name>)` or `(uses <name>...)`.
+    pub fn register_proof_assumption(&mut self, assumption: ProofAssumption) {
+        self.proof_assumptions
+            .insert(assumption.name.clone(), assumption);
+    }
+
     /// Register a concrete derivation. Data-only; verification runs lazily
     /// when `(check-proof <name>)` evaluates.
     pub fn register_proof_object(&mut self, po: ProofObject) {
@@ -1660,6 +1846,10 @@ impl Env {
 
     pub fn get_proof_rule(&self, name: &str) -> Option<&ProofRule> {
         self.proof_rules.get(name)
+    }
+
+    pub fn get_proof_assumption(&self, name: &str) -> Option<&ProofAssumption> {
+        self.proof_assumptions.get(name)
     }
 
     pub fn get_proof_object(&self, name: &str) -> Option<&ProofObject> {
@@ -1764,8 +1954,7 @@ impl Env {
             .current_span
             .clone()
             .unwrap_or_else(|| self.default_span.clone());
-        self.trace_events
-            .push(TraceEvent::new(kind, detail, span));
+        self.trace_events.push(TraceEvent::new(kind, detail, span));
     }
 
     pub fn set_type(&mut self, expr: &str, type_expr: &str) {
@@ -2898,7 +3087,7 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         ("max", "aggregator", "host-primitive", vec![], None, None),
         ("product", "aggregator", "host-primitive", vec![], None, None),
         ("probabilistic_sum", "aggregator", "host-primitive", vec![], None, None),
-        ("not", "truth-operator", "user-configurable", vec!["truth-range"], None, None),
+        ("not", "truth-operator", "user-configurable", vec!["truth-range", "decimal-12-arithmetic"], None, None),
         ("and", "truth-operator", "user-configurable", vec!["avg"], None, None),
         ("or", "truth-operator", "user-configurable", vec!["max"], None, None),
         ("both", "truth-operator", "user-configurable", vec!["avg"], None, None),
@@ -3448,17 +3637,99 @@ pub fn parse_rule_form(node: &Node) -> Result<ProofRule, String> {
 
 // Parse `(proof-object <name> (applies <rule>) (premise <judgement>)...
 // (conclusion <judgement>))` into a descriptor stored on the env.
+pub fn parse_proof_assumption_form(node: &Node) -> Result<ProofAssumption, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => {
+            return Err(
+                "proof assumption form must be `(assumption <name> (judgement <j>))` or `(axiom <name> (judgement <j>))`".to_string(),
+            );
+        }
+    };
+    if children.len() < 2 {
+        return Err(
+            "proof assumption form must be `(assumption <name> (judgement <j>))` or `(axiom <name> (judgement <j>))`".to_string(),
+        );
+    }
+    let kind = match &children[0] {
+        Node::Leaf(s) if s == "assumption" || s == "axiom" => s.clone(),
+        _ => {
+            return Err(
+                "proof assumption form must be `(assumption <name> (judgement <j>))` or `(axiom <name> (judgement <j>))`".to_string(),
+            );
+        }
+    };
+    let name = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err(format!("{} name must be a non-empty identifier", kind)),
+    };
+    let mut judgement: Option<Node> = None;
+    for child in &children[2..] {
+        let clause = match child {
+            Node::List(c) => c,
+            _ => {
+                return Err(format!(
+                    "{} {}: clauses must be lists led by a keyword",
+                    kind, name
+                ));
+            }
+        };
+        let key = match clause.first() {
+            Some(Node::Leaf(k)) => k.as_str(),
+            _ => {
+                return Err(format!(
+                    "{} {}: clauses must be lists led by a keyword",
+                    kind, name
+                ));
+            }
+        };
+        match key {
+            "judgement" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "{} {}: (judgement <j>) requires one argument",
+                        kind, name
+                    ));
+                }
+                if judgement.is_some() {
+                    return Err(format!(
+                        "{} {}: only one (judgement ...) clause is allowed",
+                        kind, name
+                    ));
+                }
+                judgement = Some(clause[1].clone());
+            }
+            other => {
+                return Err(format!(
+                    "{} {}: unknown clause keyword {}",
+                    kind, name, other
+                ));
+            }
+        }
+    }
+    let judgement = judgement
+        .ok_or_else(|| format!("{} {}: (judgement <j>) clause is required", kind, name))?;
+    Ok(ProofAssumption {
+        name,
+        kind,
+        judgement,
+    })
+}
+
+// Parse `(proof-object <name> (applies <rule>) (premise <judgement>)...
+// (premise-by <dependency>)... (uses <dependency>...) (conclusion <judgement>))`
+// into a descriptor stored on the env.
 pub fn parse_proof_object_form(node: &Node) -> Result<ProofObject, String> {
     let children = match node {
         Node::List(items) => items,
         _ => {
             return Err(
-                "proof-object form must be `(proof-object <name> (applies <rule>) ...)`".to_string(),
+                "proof-object form must be `(proof-object <name> (applies <rule>) ...)`"
+                    .to_string(),
             );
         }
     };
-    if children.len() < 2
-        || !matches!(children.first(), Some(Node::Leaf(h)) if h == "proof-object")
+    if children.len() < 2 || !matches!(children.first(), Some(Node::Leaf(h)) if h == "proof-object")
     {
         return Err(
             "proof-object form must be `(proof-object <name> (applies <rule>) ...)`".to_string(),
@@ -3470,6 +3741,7 @@ pub fn parse_proof_object_form(node: &Node) -> Result<ProofObject, String> {
     };
     let mut rule: Option<String> = None;
     let mut premises: Vec<Node> = Vec::new();
+    let mut premise_refs: Vec<String> = Vec::new();
     let mut conclusion: Option<Node> = None;
     for child in &children[2..] {
         let clause = match child {
@@ -3517,6 +3789,42 @@ pub fn parse_proof_object_form(node: &Node) -> Result<ProofObject, String> {
                 }
                 premises.push(clause[1].clone());
             }
+            "premise-by" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "proof-object {}: (premise-by <name>) requires a dependency name",
+                        name
+                    ));
+                }
+                match &clause[1] {
+                    Node::Leaf(s) if !s.is_empty() => premise_refs.push(s.clone()),
+                    _ => {
+                        return Err(format!(
+                            "proof-object {}: (premise-by <name>) requires a dependency name",
+                            name
+                        ));
+                    }
+                }
+            }
+            "uses" => {
+                if clause.len() < 2 {
+                    return Err(format!(
+                        "proof-object {}: (uses <name>...) requires at least one dependency name",
+                        name
+                    ));
+                }
+                for dep in &clause[1..] {
+                    match dep {
+                        Node::Leaf(s) if !s.is_empty() => premise_refs.push(s.clone()),
+                        _ => {
+                            return Err(format!(
+                                "proof-object {}: (uses ...) dependencies must be names",
+                                name
+                            ));
+                        }
+                    }
+                }
+            }
             "conclusion" => {
                 if clause.len() != 2 {
                     return Err(format!(
@@ -3540,12 +3848,8 @@ pub fn parse_proof_object_form(node: &Node) -> Result<ProofObject, String> {
             }
         }
     }
-    let rule = rule.ok_or_else(|| {
-        format!(
-            "proof-object {}: (applies <rule>) clause is required",
-            name
-        )
-    })?;
+    let rule =
+        rule.ok_or_else(|| format!("proof-object {}: (applies <rule>) clause is required", name))?;
     let conclusion = conclusion.ok_or_else(|| {
         format!(
             "proof-object {}: (conclusion <judgement>) clause is required",
@@ -3556,6 +3860,7 @@ pub fn parse_proof_object_form(node: &Node) -> Result<ProofObject, String> {
         name,
         rule,
         premises,
+        premise_refs,
         conclusion,
     })
 }
@@ -3605,32 +3910,99 @@ pub enum CheckProofVerdict {
 }
 
 pub fn check_proof_object(env: &Env, name: &str) -> CheckProofVerdict {
+    match check_proof_object_inner(env, name, &[]) {
+        Ok(subs) => CheckProofVerdict::Ok(subs),
+        Err(message) => CheckProofVerdict::Err(message),
+    }
+}
+
+fn resolve_proof_dependency(env: &Env, name: &str, stack: &[String]) -> Result<Node, String> {
+    if let Some(assumption) = env.get_proof_assumption(name) {
+        return Ok(assumption.judgement.clone());
+    }
+    let po = env
+        .get_proof_object(name)
+        .ok_or_else(|| format!("unknown proof dependency {}", name))?;
+    check_proof_object_inner(env, name, stack)?;
+    Ok(po.conclusion.clone())
+}
+
+fn check_proof_object_inner(
+    env: &Env,
+    name: &str,
+    stack: &[String],
+) -> Result<HashMap<String, Node>, String> {
+    if stack.iter().any(|n| n == name) {
+        let mut cycle = stack.to_vec();
+        cycle.push(name.to_string());
+        return Err(format!("cyclic proof dependency: {}", cycle.join(" -> ")));
+    }
     let po = match env.get_proof_object(name) {
         Some(po) => po,
-        None => return CheckProofVerdict::Err(format!("unknown proof-object {}", name)),
+        None => return Err(format!("unknown proof-object {}", name)),
     };
     let rule = match env.get_proof_rule(&po.rule) {
         Some(r) => r,
         None => {
-            return CheckProofVerdict::Err(format!(
+            return Err(format!(
                 "proof-object {} references unknown rule {}",
                 name, po.rule
             ));
         }
     };
-    if po.premises.len() != rule.premises.len() {
-        return CheckProofVerdict::Err(format!(
+
+    let mut effective_premises = po.premises.clone();
+    if !po.premise_refs.is_empty() {
+        effective_premises.clear();
+        let mut dependency_stack = stack.to_vec();
+        dependency_stack.push(name.to_string());
+        for (idx, dep) in po.premise_refs.iter().enumerate() {
+            let judgement = resolve_proof_dependency(env, dep, &dependency_stack)?;
+            if let Some(explicit) = po.premises.get(idx) {
+                if key_of(explicit) != key_of(&judgement) {
+                    return Err(format!(
+                        "proof-object {}: premise {} does not match referenced judgement {}",
+                        name,
+                        idx + 1,
+                        dep
+                    ));
+                }
+            }
+            effective_premises.push(judgement);
+        }
+        if !po.premises.is_empty() && po.premises.len() != po.premise_refs.len() {
+            return Err(format!(
+                "proof-object {}: has {} explicit premise(s) but {} proof dependency reference(s)",
+                name,
+                po.premises.len(),
+                po.premise_refs.len()
+            ));
+        }
+    } else if !po.premises.is_empty() {
+        return Err(format!(
+            "proof-object {}: premise 1 is unjustified; use (premise-by <name>) or declare an assumption/axiom",
+            name
+        ));
+    }
+
+    if effective_premises.len() != rule.premises.len() {
+        return Err(format!(
             "proof-object {}: expected {} premise(s) for rule {}, got {}",
             name,
             rule.premises.len(),
             po.rule,
-            po.premises.len()
+            effective_premises.len()
         ));
     }
     let mut subs: HashMap<String, Node> = HashMap::new();
-    for (i, (pat, cand)) in rule.premises.iter().zip(po.premises.iter()).enumerate() {
+    for (i, (pat, cand)) in rule
+        .premises
+        .iter()
+        .zip(effective_premises.iter())
+        .enumerate()
+    {
         if !match_proof_pattern(pat, cand, &mut subs) {
-            return CheckProofVerdict::Err(format!(
+            return Err(format!(
                 "proof-object {}: premise {} does not match rule {}",
                 name,
                 i + 1,
@@ -3639,12 +4011,12 @@ pub fn check_proof_object(env: &Env, name: &str) -> CheckProofVerdict {
         }
     }
     if !match_proof_pattern(&rule.conclusion, &po.conclusion, &mut subs) {
-        return CheckProofVerdict::Err(format!(
+        return Err(format!(
             "proof-object {}: conclusion does not match rule {}",
             name, po.rule
         ));
     }
-    CheckProofVerdict::Ok(subs)
+    Ok(subs)
 }
 
 // ---------- Pure-links strict mode (issue #97, Phase 6) ----------
@@ -3743,7 +4115,12 @@ fn pure_links_scanner_ignored(name: &str) -> bool {
             | "normalizes-to"
             | "applies"
             | "premise"
+            | "premise-by"
             | "conclusion"
+            | "uses"
+            | "judgement"
+            | "assumption"
+            | "axiom"
             | "rule"
             | "proof-object"
             | "check-proof"
@@ -3766,44 +4143,83 @@ fn is_strictly_offending_status(status: Option<&String>) -> bool {
     }
 }
 
-/// Walk a queried node and return the sorted, deduplicated names of every
-/// operator that maps to a `host-primitive` or `host-derived` root-construct
-/// and is not in `env.allowed_host_primitives`.
+fn strict_dependency_offenders(env: &Env, name: &str, path: &[String]) -> Vec<String> {
+    if env.allowed_host_primitives.contains(name) {
+        return Vec::new();
+    }
+    if path.iter().any(|n| n == name) {
+        return Vec::new();
+    }
+    let mut current_path = path.to_vec();
+    current_path.push(name.to_string());
+    let active = env.active_implementations.get(name);
+    let rc = env.root_constructs.get(name);
+    let status = active
+        .and_then(|i| i.status.as_ref())
+        .or_else(|| rc.and_then(|r| r.status.as_ref()));
+    let deps: Vec<String> = active
+        .map(|i| i.depends_on.clone())
+        .or_else(|| rc.map(|r| r.depends_on.clone()))
+        .unwrap_or_default();
+
+    if matches!(
+        active.and_then(|i| i.status.as_deref()),
+        Some("links-defined")
+    ) && deps.is_empty()
+    {
+        return Vec::new();
+    }
+    if is_strictly_offending_status(status) && deps.is_empty() {
+        return vec![format!(
+            "{} -> {}",
+            current_path.join(" -> "),
+            status.cloned().unwrap_or_default()
+        )];
+    }
+
+    let mut offenders: Vec<String> = Vec::new();
+    for dep in deps {
+        if env.allowed_host_primitives.contains(&dep) {
+            continue;
+        }
+        offenders.extend(strict_dependency_offenders(env, &dep, &current_path));
+    }
+    if is_strictly_offending_status(status) && offenders.is_empty() {
+        offenders.push(format!(
+            "{} -> {}",
+            current_path.join(" -> "),
+            status.cloned().unwrap_or_default()
+        ));
+    }
+    offenders
+}
+
+/// Walk a queried node and return sorted, deduplicated dependency paths that
+/// end at a `host-primitive` or `host-derived` construct and are not covered
+/// by `(allow-host-primitive ...)`.
 pub fn scan_pure_links_offenders(node: &Node, env: &Env) -> Vec<String> {
     if !env.strict_pure_links {
         return Vec::new();
     }
     let mut offenders: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    fn visit(
-        node: &Node,
-        env: &Env,
-        offenders: &mut std::collections::BTreeSet<String>,
-    ) {
+    fn check(name: &str, env: &Env, offenders: &mut std::collections::BTreeSet<String>) {
+        if pure_links_scanner_ignored(name) || env.allowed_host_primitives.contains(name) {
+            return;
+        }
+        for offender in strict_dependency_offenders(env, name, &[]) {
+            offenders.insert(offender);
+        }
+    }
+    fn visit(node: &Node, env: &Env, offenders: &mut std::collections::BTreeSet<String>) {
         match node {
             Node::List(children) => {
                 if let Some(Node::Leaf(head)) = children.first() {
-                    if !pure_links_scanner_ignored(head)
-                        && !env.allowed_host_primitives.contains(head)
-                    {
-                        if let Some(rc) = env.root_constructs.get(head) {
-                            if is_strictly_offending_status(rc.status.as_ref()) {
-                                offenders.insert(head.clone());
-                            }
-                        }
-                    }
+                    check(head, env, offenders);
                 }
                 // Infix (L op R) — operator is the middle element.
                 if children.len() == 3 {
                     if let Node::Leaf(op) = &children[1] {
-                        if !pure_links_scanner_ignored(op)
-                            && !env.allowed_host_primitives.contains(op)
-                        {
-                            if let Some(rc) = env.root_constructs.get(op) {
-                                if is_strictly_offending_status(rc.status.as_ref()) {
-                                    offenders.insert(op.clone());
-                                }
-                            }
-                        }
+                        check(op, env, offenders);
                     }
                 }
                 for c in children {
@@ -3811,13 +4227,7 @@ pub fn scan_pure_links_offenders(node: &Node, env: &Env) -> Vec<String> {
                 }
             }
             Node::Leaf(s) => {
-                if !pure_links_scanner_ignored(s) && !env.allowed_host_primitives.contains(s) {
-                    if let Some(rc) = env.root_constructs.get(s) {
-                        if is_strictly_offending_status(rc.status.as_ref()) {
-                            offenders.insert(s.clone());
-                        }
-                    }
-                }
+                check(s, env, offenders);
             }
         }
     }
@@ -3873,6 +4283,33 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
             lines.push(format!("  - {}", n));
         }
     }
+    if !report.active_implementations.is_empty() {
+        lines.push(String::new());
+        lines.push("active implementations:".to_string());
+        for implementation in &report.active_implementations {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(status) = &implementation.status {
+                parts.push(status.clone());
+            }
+            if let Some(implementation_name) = &implementation.implementation {
+                parts.push(format!("via {}", implementation_name));
+            }
+            if let Some(foundation) = &implementation.foundation {
+                parts.push(format!("foundation {}", foundation));
+            }
+            if !implementation.depends_on.is_empty() {
+                parts.push(format!(
+                    "depends on {}",
+                    implementation.depends_on.join(", ")
+                ));
+            }
+            lines.push(format!(
+                "  - {}: {}",
+                implementation.construct,
+                parts.join("; ")
+            ));
+        }
+    }
     if !report.proof_rules.is_empty() {
         lines.push(String::new());
         lines.push("proof rules:".to_string());
@@ -3885,15 +4322,28 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
             ));
         }
     }
+    if !report.proof_assumptions.is_empty() {
+        lines.push(String::new());
+        lines.push("proof assumptions:".to_string());
+        for a in &report.proof_assumptions {
+            lines.push(format!("  - {} [{}] : {}", a.name, a.kind, a.judgement));
+        }
+    }
     if !report.proof_objects.is_empty() {
         lines.push(String::new());
         lines.push("proof objects:".to_string());
         for po in &report.proof_objects {
+            let refs = if po.premise_refs.is_empty() {
+                String::new()
+            } else {
+                format!(" using {}", po.premise_refs.join(", "))
+            };
             lines.push(format!(
-                "  - {} : applies {} ({} premises → {})",
+                "  - {} : applies {} ({} premises{} → {})",
                 po.name,
                 po.rule,
                 po.premises.len(),
+                refs,
                 po.conclusion
             ));
         }
@@ -3907,7 +4357,11 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
                 .as_ref()
                 .map(|d| format!(" — {}", d))
                 .unwrap_or_default();
-            let tag = if f.experimental { " [experimental]" } else { "" };
+            let tag = if f.experimental {
+                " [experimental]"
+            } else {
+                ""
+            };
             lines.push(format!("  - {}{}{}", f.name, tag, suffix));
             if let Some(n) = &f.numeric_domain {
                 lines.push(format!("      numeric domain: {}", n));
@@ -3938,7 +4392,8 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
                 lines.push(format!("      defines: {}", parts.join(", ")));
             }
             if !f.truth_tables.is_empty() {
-                let mut sorted: Vec<&(String, Vec<TruthTableRow>)> = f.truth_tables.iter().collect();
+                let mut sorted: Vec<&(String, Vec<TruthTableRow>)> =
+                    f.truth_tables.iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));
                 let parts: Vec<String> = sorted
                     .iter()
@@ -11435,7 +11890,14 @@ fn eval_foundation_body_form(
                 let bodies: Vec<Node> = children[2..].to_vec();
                 for body in bodies {
                     eval_foundation_body_form(
-                        body, span, env, diagnostics, results, proofs, provenance, options,
+                        body,
+                        span,
+                        env,
+                        diagnostics,
+                        results,
+                        proofs,
+                        provenance,
+                        options,
                     );
                 }
                 env.exit_foundation();
@@ -11506,6 +11968,160 @@ fn eval_foundation_body_form(
                 }
                 return;
             }
+            if head == "rule" && is_proof_rule_shape(children) {
+                match parse_rule_form(&form) {
+                    Ok(rule) => {
+                        let name = rule.name.clone();
+                        env.register_proof_rule(rule);
+                        if options.trace {
+                            env.trace_events
+                                .push(TraceEvent::new("rule", name, span.clone()));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "assumption" || head == "axiom" {
+                match parse_proof_assumption_form(&form) {
+                    Ok(assumption) => {
+                        let kind = assumption.kind.clone();
+                        let name = assumption.name.clone();
+                        env.register_proof_assumption(assumption);
+                        if options.trace {
+                            env.trace_events
+                                .push(TraceEvent::new(&kind, name, span.clone()));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "proof-object" {
+                match parse_proof_object_form(&form) {
+                    Ok(po) => {
+                        let name = po.name.clone();
+                        env.register_proof_object(po);
+                        if options.trace {
+                            env.trace_events.push(TraceEvent::new(
+                                "proof-object",
+                                name,
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "check-proof" {
+                if children.len() != 2 {
+                    diagnostics.push(Diagnostic::new(
+                        "E064",
+                        "(check-proof <name>) requires a proof-object name",
+                        span.clone(),
+                    ));
+                    return;
+                }
+                let target = match &children[1] {
+                    Node::Leaf(s) if !s.is_empty() => s.clone(),
+                    _ => {
+                        diagnostics.push(Diagnostic::new(
+                            "E064",
+                            "(check-proof <name>) requires a proof-object name",
+                            span.clone(),
+                        ));
+                        return;
+                    }
+                };
+                let verdict = check_proof_object(env, &target);
+                let (value, error) = match verdict {
+                    CheckProofVerdict::Ok(_) => (1.0_f64, None),
+                    CheckProofVerdict::Err(msg) => (0.0_f64, Some(msg)),
+                };
+                results.push(RunResult::Num(value));
+                if let Some(p) = proofs.as_mut() {
+                    p.push(None);
+                }
+                if let Some(pv) = provenance.as_mut() {
+                    pv.push(None);
+                }
+                if let Some(msg) = error {
+                    diagnostics.push(Diagnostic::new("E064", msg, span.clone()));
+                }
+                if options.trace {
+                    env.trace_events.push(TraceEvent::new(
+                        "check-proof",
+                        format!("{} → {}", target, if value == 1.0 { "ok" } else { "fail" }),
+                        span.clone(),
+                    ));
+                }
+                return;
+            }
+            if head == "strict-foundation" {
+                match parse_strict_foundation_form(&form) {
+                    Ok(decl) => {
+                        env.strict_pure_links = true;
+                        if options.trace {
+                            env.trace_events.push(TraceEvent::new(
+                                "strict-foundation",
+                                decl.profile,
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E065", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "allow-host-primitive" {
+                match parse_allow_host_primitive_form(&form) {
+                    Ok(decl) => {
+                        for name in &decl.names {
+                            env.allowed_host_primitives.insert(name.clone());
+                        }
+                        if options.trace {
+                            env.trace_events.push(TraceEvent::new(
+                                "allow-host-primitive",
+                                decl.names.join(" "),
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E065", message, span.clone()));
+                    }
+                }
+                return;
+            }
+        }
+    }
+    if let Node::Leaf(head) = &form {
+        if head == "foundation-report" || head == "foundation-report?" {
+            let report = env.foundation_report();
+            if options.trace {
+                env.trace_events.push(TraceEvent::new(
+                    "foundation-report",
+                    report.active_foundation.clone(),
+                    span.clone(),
+                ));
+            }
+            results.push(RunResult::Foundation(report));
+            if let Some(p) = proofs.as_mut() {
+                p.push(None);
+            }
+            if let Some(pv) = provenance.as_mut() {
+                pv.push(None);
+            }
+            return;
         }
     }
 
@@ -11517,8 +12133,7 @@ fn eval_foundation_body_form(
     }));
     match inner_result {
         Ok((expanded, eval_res)) => {
-            let was_query =
-                matches!(eval_res, EvalResult::Query(_) | EvalResult::TypeQuery(_));
+            let was_query = matches!(eval_res, EvalResult::Query(_) | EvalResult::TypeQuery(_));
             let query_value = if let EvalResult::Query(v) = &eval_res {
                 Some(*v)
             } else {
@@ -11534,7 +12149,15 @@ fn eval_foundation_body_form(
                     p.push(None);
                 }
                 let prov = equality_provenance_for_query(&expanded, env);
-                record_provenance(provenance, results.len(), prov, env, &expanded, span, options);
+                record_provenance(
+                    provenance,
+                    results.len(),
+                    prov,
+                    env,
+                    &expanded,
+                    span,
+                    options,
+                );
                 // Carrier enforcement (issue #97 Section 2): when the active
                 // foundation strict-carrier is on, a numeric query result
                 // outside the carrier produces an E063 diagnostic alongside
@@ -11618,7 +12241,13 @@ fn record_provenance(
     }
 }
 
-fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &EvaluateOptions, ctx: &mut ImportContext) -> EvaluateResult {
+fn evaluate_inner(
+    text: &str,
+    file: Option<&str>,
+    env: &mut Env,
+    options: &EvaluateOptions,
+    ctx: &mut ImportContext,
+) -> EvaluateResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let extracted_literate = if is_literate_lino_path(file) {
         Some(extract_literate_lino(text))
@@ -11649,10 +12278,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
             // (mirrors the JS evaluator's `['whnf']` shape and lets the
             // normalization driver E038 fall-through fire).
             let toks = tokenize_one(link_str);
-            let toks = if toks.len() == 1
-                && toks[0] != "("
-                && toks[0] != ")"
-            {
+            let toks = if toks.len() == 1 && toks[0] != "(" && toks[0] != ")" {
                 vec!["(".to_string(), toks[0].clone(), ")".to_string()]
             } else {
                 toks
@@ -11735,8 +12361,11 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         } else {
                             env.namespace = Some(n.clone());
                             if options.trace {
-                                env.trace_events
-                                    .push(TraceEvent::new("namespace", n.clone(), span.clone()));
+                                env.trace_events.push(TraceEvent::new(
+                                    "namespace",
+                                    n.clone(),
+                                    span.clone(),
+                                ));
                             }
                         }
                         continue;
@@ -11831,11 +12460,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         Ok(descriptor) => {
                             let name = descriptor.name.clone();
                             if let Err(message) = env.register_root_construct(descriptor) {
-                                diagnostics.push(Diagnostic::new(
-                                    "E060",
-                                    message,
-                                    span.clone(),
-                                ));
+                                diagnostics.push(Diagnostic::new("E060", message, span.clone()));
                             } else if options.trace {
                                 env.trace_events.push(TraceEvent::new(
                                     "root-construct",
@@ -11855,11 +12480,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         Ok(foundation) => {
                             let name = foundation.name.clone();
                             if let Err(message) = env.register_foundation(foundation) {
-                                diagnostics.push(Diagnostic::new(
-                                    "E061",
-                                    message,
-                                    span.clone(),
-                                ));
+                                diagnostics.push(Diagnostic::new("E061", message, span.clone()));
                             } else if options.trace {
                                 env.trace_events.push(TraceEvent::new(
                                     "foundation",
@@ -11895,11 +12516,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         }
                     };
                     if let Err(message) = env.enter_foundation(&fname) {
-                        diagnostics.push(Diagnostic::new(
-                            "E062",
-                            message,
-                            span.clone(),
-                        ));
+                        diagnostics.push(Diagnostic::new("E062", message, span.clone()));
                         continue;
                     }
                     if options.trace {
@@ -11963,11 +12580,25 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                             let name = rule.name.clone();
                             env.register_proof_rule(rule);
                             if options.trace {
-                                env.trace_events.push(TraceEvent::new(
-                                    "rule",
-                                    name,
-                                    span.clone(),
-                                ));
+                                env.trace_events
+                                    .push(TraceEvent::new("rule", name, span.clone()));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "assumption" || head == "axiom" {
+                    match parse_proof_assumption_form(&form) {
+                        Ok(assumption) => {
+                            let kind = assumption.kind.clone();
+                            let name = assumption.name.clone();
+                            env.register_proof_assumption(assumption);
+                            if options.trace {
+                                env.trace_events
+                                    .push(TraceEvent::new(&kind, name, span.clone()));
                             }
                         }
                         Err(message) => {
@@ -12033,11 +12664,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                     if options.trace {
                         env.trace_events.push(TraceEvent::new(
                             "check-proof",
-                            format!(
-                                "{} → {}",
-                                target,
-                                if value == 1.0 { "ok" } else { "fail" }
-                            ),
+                            format!("{} → {}", target, if value == 1.0 { "ok" } else { "fail" }),
                             span.clone(),
                         ));
                     }

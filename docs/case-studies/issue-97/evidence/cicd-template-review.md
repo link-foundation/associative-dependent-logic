@@ -200,11 +200,11 @@ remain captured in `docs/case-studies/issue-171/data/recommendations.md`.
 
 The CI workflow already runs `npm test` and `cargo test` on every push
 and PR; this can be confirmed by viewing recent runs of the `tests`
-workflow on the `issue-97-2fa46f510db9` branch. The eight new JS
-tests in `foundations.test.mjs` and the eight new Rust tests in
-`foundations_tests.rs`, plus the extended self-evaluator coverage,
-all execute under the existing `tests` workflow. No additional
-workflow changes are needed for issue #97.
+workflow on the `issue-97-2fa46f510db9` branch. The extended JS
+coverage in `foundations.test.mjs`, `proof-substrate.test.mjs`, and
+`pure-links-strict.test.mjs`, plus the mirrored Rust coverage and
+self-evaluator checks, all execute under the existing `tests`
+workflow. No additional workflow changes are needed for issue #97.
 
 ### 8.1 Phase 2–9 follow-up coverage (PR #175)
 

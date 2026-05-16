@@ -60,6 +60,33 @@ const REQUIRED_EVAL_RULES: &[&str] = &[
     "(eval (foundation name details))",
     "(eval (with-foundation name body))",
     "(eval foundation-report)",
+    "(eval (strict-foundation pure-links))",
+    "(eval (allow-host-primitive names))",
+    "(eval (assumption name (judgement judgement)))",
+    "(eval (axiom name (judgement judgement)))",
+    "(eval (proof-object name clauses))",
+    "(eval (check-proof name))",
+    "(eval (encodeAnum node))",
+    "(eval (decodeAnum payload))",
+];
+
+const REQUIRED_SURFACE_RULES: &[&str] = &[
+    "(foundation-clause (description text))",
+    "(foundation-clause (uses name))",
+    "(foundation-clause (defines operator implementation))",
+    "(foundation-clause (extends name))",
+    "(foundation-clause (numeric-domain name))",
+    "(foundation-clause (truth-domain name))",
+    "(foundation-clause (carrier values))",
+    "(foundation-clause strict-carrier)",
+    "(foundation-clause (truth-table operator rows))",
+    "(foundation-clause experimental)",
+    "(foundation-clause (root symbol))",
+    "(foundation-clause (abit symbol bits))",
+    "(proof-object-clause (premise judgement))",
+    "(proof-object-clause (premise-by name))",
+    "(proof-object-clause (uses names))",
+    "(equality-provenance left right)",
 ];
 
 const REQUIRED_OPERATORS: &[&str] = &[
@@ -101,6 +128,23 @@ fn eval_rule_patterns(forms: &[Node]) -> HashSet<String> {
                 if head == "rule"
                     && matches!(pattern.first(), Some(Node::Leaf(eval)) if eval == "eval")
                 {
+                    patterns.insert(key_of(&children[1]));
+                }
+            }
+        }
+    }
+    patterns
+}
+
+fn rule_patterns(forms: &[Node]) -> HashSet<String> {
+    let mut patterns = HashSet::new();
+    for form in forms {
+        let Node::List(children) = form else {
+            continue;
+        };
+        if children.len() >= 2 {
+            if let Node::Leaf(head) = &children[0] {
+                if head == "rule" {
                     patterns.insert(key_of(&children[1]));
                 }
             }
@@ -163,6 +207,20 @@ fn self_evaluator_declares_required_builtin_rules() {
             operators.contains(*operator),
             "missing operator {}",
             operator
+        );
+    }
+}
+
+#[test]
+fn self_evaluator_declares_phase_2_9_surface_rules() {
+    let forms = parse_forms(&evaluator_path());
+    let patterns = rule_patterns(&forms);
+    for pattern in REQUIRED_SURFACE_RULES {
+        assert!(
+            patterns.contains(*pattern),
+            "missing surface rule {}; got {:?}",
+            pattern,
+            patterns
         );
     }
 }

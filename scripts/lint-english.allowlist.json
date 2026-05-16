@@ -1,5 +1,8 @@
 {
   "_comment": "Allow-list for scripts/lint-english.mjs. Every entry is a deliberate exception that should still read as English in context. Add inline reasons in this file's history (commit messages / PR descriptions).",
-  "identifiers": [],
+  "identifiers": [
+    "decodeAnum",
+    "encodeAnum"
+  ],
   "links": []
 }

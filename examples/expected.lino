@@ -31,7 +31,7 @@
 
 (flipped-axioms.lino: 0.5 1)
 
-(foundation-boolean-kleene.lino: 0.5 0.6 0.4 0.6 0.4 0.6 0.5 0.6)
+(foundation-boolean-kleene.lino: 0.5 0.6 0.4 0.6 0.4 0.6 0 1 1 0.5 0.6)
 
 (foundation-with-min.lino: 0.5 0.4 0.5)
 

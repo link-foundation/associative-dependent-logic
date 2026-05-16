@@ -244,23 +244,99 @@
 (rule (eval (expression of type))
   (type-membership expression type))
 
-# Foundation and root-construct forms. `(root-construct ...)` and
-# `(foundation ...)` declarations are data: they populate the registry
-# `(foundation-report)` consults. `(with-foundation ...)` swaps the
-# active operator implementations while evaluating the body, then
-# restores them on exit so legacy programs are unaffected.
+# Foundation, proof-substrate, and root-construct forms. These rules are
+# declarative coverage for the self-bootstrap layer: today the host records
+# and checks the data, while a future self-hosted evaluator can consume the
+# same surface directly.
 
 (rule (eval (root-construct name details))
-  (register-root-construct name details))
+  (record-root-construct name details))
 
 (rule (eval (foundation name details))
-  (register-foundation name details))
+  (record-foundation name details))
+
+(rule (foundation-clause (description text))
+  (record-foundation-description text))
+
+(rule (foundation-clause (uses name))
+  (record-foundation-use name))
+
+(rule (foundation-clause (defines operator implementation))
+  (record-foundation-implementation operator implementation))
+
+(rule (foundation-clause (extends name))
+  (record-foundation-extension name))
+
+(rule (foundation-clause (numeric-domain name))
+  (record-foundation-numeric-domain name))
+
+(rule (foundation-clause (truth-domain name))
+  (record-foundation-truth-domain name))
+
+(rule (foundation-clause (carrier values))
+  (record-foundation-carrier values))
+
+(rule (foundation-clause strict-carrier)
+  (record-foundation-strict-carrier))
+
+(rule (foundation-clause (truth-table operator rows))
+  (record-foundation-truth-table operator rows))
+
+(rule (foundation-clause experimental)
+  (record-foundation-experimental))
+
+(rule (foundation-clause (root symbol))
+  (record-foundation-root symbol))
+
+(rule (foundation-clause (abit symbol bits))
+  (record-foundation-abit symbol bits))
 
 (rule (eval (with-foundation name body))
   (evaluate-body-under-foundation name body))
 
 (rule (eval (foundation-report))
-  (query (foundation-report-snapshot)))
+  (emit-foundation-report))
+
+(rule (eval (strict-foundation pure-links))
+  (enable-strict-foundation pure-links))
+
+(rule (eval (allow-host-primitive names))
+  (record-allowed-host-primitives names))
+
+(rule (eval (assumption name (judgement judgement)))
+  (record-proof-assumption name judgement))
+
+(rule (eval (axiom name (judgement judgement)))
+  (record-proof-axiom name judgement))
+
+(rule (eval (proof-object name clauses))
+  (record-proof-object name clauses))
+
+(rule (proof-object-clause (premise judgement))
+  (record-raw-proof-premise judgement))
+
+(rule (proof-object-clause (premise-by name))
+  (record-proof-dependency name))
+
+(rule (proof-object-clause (uses names))
+  (record-proof-dependencies names))
+
+(rule (eval (check-proof name))
+  (check-proof-object name))
+
+(rule (eval (encodeAnum node))
+  (encode-anum node))
+
+(rule (eval (decodeAnum payload))
+  (decode-anum payload))
+
+(rule (equality-provenance left right)
+  (first-defined-source
+    (lookup-assignment (left = right))
+    (lookup-assignment (= left right))
+    (lookup-assignment ((normalize left) = (normalize right)))
+    (structural-equality (normalize left) (normalize right))
+    (numeric-equality (numeric left) (numeric right))))
 
 # Meta-evaluator declarations used by tests and future self-hosted work.
 

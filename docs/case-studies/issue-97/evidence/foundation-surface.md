@@ -133,7 +133,7 @@ Snapshot-shape tests:
 - Rust — `rust/tests/foundations_tests.rs:172-211`
   (`builds_a_structured_foundation_report_snapshot`).
 
-## R7 — Structured diagnostics E060 / E061 / E062
+## R7 — Structured diagnostics E060 / E061 / E062 and follow-up foundation diagnostics
 
 The codes are emitted at:
 
@@ -155,55 +155,107 @@ Unknown-foundation tests:
 - Rust — `rust/tests/foundations_tests.rs:116-132`
   (`reports_unknown_foundation_as_e062_without_aborting`).
 
-The doc surface — `docs/DIAGNOSTICS.md` — lists E060, E061, E062 as
-new rows in its error code table.
+The doc surface — `docs/DIAGNOSTICS.md` — lists E060 through E066 in
+its error code table. E063 covers strict-carrier failures, E064 covers
+proof-substrate failures, E065 covers pure-links strict-mode failures,
+and E066 covers MTC/anum encode/decode failures.
 
 ## R8 — Self-bootstrap encoding
 
-`lib/self/foundations.lino` declares the registry as data
-(367 lines total, every section commented). `lib/self/evaluator.lino`
-encodes four matching evaluator rules at lines 253-263:
+`lib/self/foundations.lino` declares the registry as data and records
+the bundled foundations, including the finite truth-table
+`boolean-links` profile. `lib/self/evaluator.lino` encodes matching
+data-only evaluator rules for the foundation surface, strict mode,
+proof substrate, and MTC/anum helpers:
 
 ```lino
 (rule (eval (root-construct name details))
-  (register-root-construct name details))
+  (record-root-construct name details))
 
 (rule (eval (foundation name details))
-  (register-foundation name details))
+  (record-foundation name details))
+
+(rule (foundation-clause (carrier values))
+  (record-foundation-carrier values))
+
+(rule (foundation-clause strict-carrier)
+  (record-foundation-strict-carrier))
+
+(rule (foundation-clause (truth-table operator rows))
+  (record-foundation-truth-table operator rows))
+
+(rule (foundation-clause experimental)
+  (record-foundation-experimental))
+
+(rule (foundation-clause (root symbol))
+  (record-foundation-root symbol))
+
+(rule (foundation-clause (abit symbol bits))
+  (record-foundation-abit symbol bits))
 
 (rule (eval (with-foundation name body))
   (evaluate-body-under-foundation name body))
 
 (rule (eval (foundation-report))
-  (query (foundation-report-snapshot)))
+  (emit-foundation-report))
+
+(rule (eval (strict-foundation pure-links))
+  (enable-strict-foundation pure-links))
+
+(rule (eval (allow-host-primitive names))
+  (record-allowed-host-primitives names))
+
+(rule (eval (assumption name (judgement judgement)))
+  (record-proof-assumption name judgement))
+
+(rule (eval (axiom name (judgement judgement)))
+  (record-proof-axiom name judgement))
+
+(rule (eval (proof-object name clauses))
+  (record-proof-object name clauses))
+
+(rule (proof-object-clause (premise-by name))
+  (record-proof-dependency name))
+
+(rule (proof-object-clause (uses names))
+  (record-proof-dependencies names))
+
+(rule (eval (check-proof name))
+  (check-proof-object name))
+
+(rule (eval (encodeAnum node))
+  (encode-anum node))
+
+(rule (eval (decodeAnum payload))
+  (decode-anum payload))
 ```
 
-The Rust self-evaluator parity test requires all four rules to be
+The Rust self-evaluator parity test requires these rules to be
 present in the data file:
-`rust/tests/self_evaluator_tests.rs:11-63` enumerates
-`REQUIRED_EVAL_RULES`, including the four `(eval (root-construct …))`
-/ `(eval (foundation …))` / `(eval (with-foundation …))` /
-`(eval foundation-report)` entries; the assertion is at
-`rust/tests/self_evaluator_tests.rs:143-164`. The JS parity test
-covers the same forms with the `EncodedEvaluator` class which has
-explicit cases for `with-foundation`, `foundation`, and
-`root-construct` at
-`js/tests/self-evaluator.test.mjs:218-243`.
+`rust/tests/self_evaluator_tests.rs` enumerates `REQUIRED_EVAL_RULES`,
+including the foundation, strict-mode, proof, and MTC/anum entries, and
+`REQUIRED_SURFACE_RULES`, including foundation clauses, proof dependency
+clauses, and equality provenance. The JS parity test covers the same
+forms with the `EncodedEvaluator` class, including the bundled
+`boolean-links` truth-table foundation.
 
 ## R9 — Links-defined finite-logic example
 
-Two named alternative foundations ship as data in
+Three named alternative foundations ship as data in
 `lib/self/foundations.lino`:
 
-- `boolean-classical` at `lib/self/foundations.lino:343-351` —
-  two-valued logic, `and=min`, `or=max`, `both=min`,
-  `neither=product`, `(extends default-rml)`.
-- `kleene-three-valued` at `lib/self/foundations.lino:359-367` —
-  Strong Kleene over the real unit interval, same `and`/`or` shape.
+- `boolean-links` — strict `{0,1}` Boolean logic with finite
+  truth-table rows for `and`, `or`, and `not`. Activating this
+  foundation records those operators as `links-defined`.
+- `boolean-classical` — two-valued logic, `and=min`, `or=max`,
+  `both=min`, `neither=product`, `(extends default-rml)`. These are
+  host aggregator bindings.
+- `kleene-three-valued` — Strong Kleene over the real unit interval,
+  same `and`/`or` shape. These are also host aggregator bindings.
 
-A complete end-to-end example uses both inside one file:
-`examples/foundation-boolean-kleene.lino` (46 lines, replayed through
-both engines). A minimal sanity-check example is at
+A complete end-to-end example uses all three profiles inside one file:
+`examples/foundation-boolean-kleene.lino` (replayed through both
+engines). A minimal sanity-check example is at
 `examples/foundation-with-min.lino` (16 lines). Both are picked up
 automatically by the shared-example replay
 (`rust/tests/shared_examples.rs`, `js/tests/shared-examples.test.mjs`).

@@ -102,8 +102,8 @@ so partial descriptors can be accumulated.
 | `E061` | Malformed `(foundation ...)` declaration (missing name, unknown child clause shape, malformed `(defines ...)` clause, malformed `(root ...)` / `(abit ...)` clause). |
 | `E062` | `(with-foundation <name> ...)` references a foundation that has not been registered. The diagnostic does not abort evaluation — forms after the bad scope still run. |
 | `E063` | Carrier violation under `(strict-carrier)` — a query result or probability assignment falls outside the active foundation's declared carrier. |
-| `E064` | Malformed `(check-proof ...)` form or proof-object replay failure (premise/conclusion mismatch). |
-| `E065` | Pure-links strict mode rejected a query that referenced a `host-primitive` / `host-derived` construct not on the `(allow-host-primitive ...)` list; also raised for malformed `(strict-foundation ...)` / `(allow-host-primitive ...)` forms. |
+| `E064` | Malformed proof rule / assumption / proof object / `(check-proof ...)` form, premise/conclusion mismatch, unjustified raw premise, or cyclic proof dependency. |
+| `E065` | Pure-links strict mode rejected a query whose transitive dependency path reaches an unallowed `host-primitive` / `host-derived` construct; also raised for malformed `(strict-foundation ...)` / `(allow-host-primitive ...)` forms. |
 | `E066` | MTC/anum encode/decode error (input outside the four-abit alphabet, unbalanced frame, leaf payload not byte-aligned, or non-Node value passed to `encodeAnum`). |
 
 ## 3. Foundations
@@ -129,7 +129,7 @@ Field reference:
 | `(defines <op> <aggregator>)` | Re-binds operator `<op>` to aggregator `<aggregator>` while the foundation is active. Repeats are allowed; each new `(defines ...)` replaces the binding for that operator. |
 | `(carrier <v1> <v2> ...)` | Declares the set of values the foundation considers legal. Symbolic constants (`true`, `false`, `unknown`) resolve through `env.symbol_prob` on activation; numeric literals stay literal. Informational unless `(strict-carrier)` is also present (see §6). |
 | `(strict-carrier)` | Opts the foundation into runtime carrier enforcement. Out-of-carrier query results and probability assignments raise `E063` instead of being silently clamped. |
-| `(truth-table <op> (in1 in2 -> out) ...)` | Rebinds `<op>` to a links-defined finite truth table for the duration of `(with-foundation ...)`. Partial tables are allowed — rows that don't match fall through to the previously installed op. Symbolic truth constants resolve through `env.symbol_prob` on activation. |
+| `(truth-table <op> (in1 in2 -> out) ...)` | Rebinds `<op>` to a finite truth table for the duration of `(with-foundation ...)` and records that active implementation as `links-defined`. The host still executes the table lookup; the selected behaviour comes from the rows. Partial tables are allowed — rows that don't match fall through to the previously installed op. Symbolic truth constants resolve through `env.symbol_prob` on activation. |
 | `(experimental)` | Flags the foundation as experimental so the trust audit prints an `[experimental]` tag next to its name. Carries no behavioural guarantees. |
 | `(root <symbol>)` | Records the foundation's root concept (e.g. `∞` for `mtc-anum`). Informational; surfaced on the report. |
 | `(abit <symbol> <meaning>)` | Records one atomic bit of the foundation's alphabet. Used by experimental profiles like `mtc-anum` to publish their four-abit (`[`, `]`, `0`, `1`) serialization alphabet. Informational; surfaced on the report. |
@@ -216,6 +216,12 @@ snapshot of the active foundation. The snapshot has the shape:
   rootConstructs:   [ { name, kind, status, dependsOn, encodedAs, ... } ],
   byStatus:         { "<status>": ["<name>", ...] },
   foundations:      [ { name, description, defines, ... } ],
+  activeImplementations: [
+    { construct, foundation, implementation, status, dependsOn }
+  ],
+  proofRules:       [ { name, premises, conclusion } ],
+  proofAssumptions: [ { name, kind, judgement } ],
+  proofObjects:     [ { name, rule, premises, premiseRefs, conclusion } ],
 }
 ```
 
@@ -272,6 +278,10 @@ external-trusted:
   - smt-trusted
 
 foundations:
+  - boolean-links — links-defined two-valued Boolean logic via finite truth tables
+      numeric domain: boolean-zero-one
+      truth domain: boolean-two-valued
+      truth tables: and(4 rows), not(2 rows), or(4 rows)
   - boolean-classical — two-valued-classical-boolean-logic
       numeric domain: boolean-zero-one
       truth domain: two-valued
@@ -313,17 +323,23 @@ env.exit_foundation();
 
 ## 5. Bundled foundations
 
-Two alternative foundations ship in [`lib/self/foundations.lino`](../lib/self/foundations.lino):
+Three alternative foundations ship in [`lib/self/foundations.lino`](../lib/self/foundations.lino)
+and are pre-seeded by the JS and Rust hosts:
 
+- **`boolean-links`** — two-valued Boolean logic over the strict carrier
+  `{0,1}`. `and`, `or`, and `not` are selected from finite truth-table
+  rows, so the active implementation descriptors for those operators
+  are `links-defined` while the foundation is active.
 - **`boolean-classical`** — two-valued classical Boolean logic. `and`
   becomes `min`, `or` becomes `max`, `both` collapses to `min`, and
   `neither` to `product`. The numeric domain field is set to
-  `boolean-zero-one` so the trust report records the intended carrier;
-  numeric-domain enforcement is planned (§6).
+  `boolean-zero-one` so the trust report records the intended carrier.
+  These bindings still use host aggregator implementations.
 - **`kleene-three-valued`** — Strong Kleene three-valued logic.
   Same `min`/`max` operator shape as classical, but the truth domain is
   `three-valued` and the numeric domain is the real unit interval; the
-  midpoint `0.5` represents `unknown`.
+  midpoint `0.5` represents `unknown`. These bindings also use host
+  aggregators.
 
 The example [`examples/foundation-boolean-kleene.lino`](../examples/foundation-boolean-kleene.lino)
 exercises both in one file and shows the default semantics being
@@ -363,10 +379,11 @@ whether `true`/`false` are bound to `{0,1}` or `{0.0, 1.0}` or `{0, 0.5,
 
 ## 7. Truth tables: `(truth-table ...)`
 
-Operators can also be rebound to a finite truth table written in pure
-`.lino`. This is the simplest path to a "links-defined" operator — the
-rows are data, no host aggregator is consulted while the foundation is
-active.
+Operators can also be rebound to a finite truth table written in
+`.lino`. This is the smallest implemented path to a `links-defined`
+operator: the rows are links data, and matching rows do not consult a
+host aggregator while the foundation is active. The evaluator still
+performs the table lookup, so this is not a self-hosted proof kernel.
 
 ```lino
 (foundation xor3
@@ -385,8 +402,9 @@ active.
 ```
 
 Partial tables are allowed: rows that don't match fall through to the
-previously installed operator. The symbolic constants are resolved
-through `env.symbol_prob` on activation, just like `(carrier ...)`.
+previously installed operator, which may be host-backed. The symbolic
+constants are resolved through `env.symbol_prob` on activation, just
+like `(carrier ...)`.
 
 ## 8. Pure-links strict mode
 
@@ -395,19 +413,32 @@ The `(strict-foundation pure-links)` form (paired with optional
 described in the original roadmap. While active, any query that
 transitively depends on a `host-primitive` or `host-derived` construct
 not on the whitelist raises `E065`. The dependency graph in the trust
-audit drives the check — it is the transitive closure of `depends-on`
-links in the registry.
+audit drives the check. The scanner reports concrete paths through the
+active implementation map and the root-construct `depends-on` graph,
+for example `and -> avg -> host-primitive`.
 
 ```lino
 (strict-foundation pure-links)
-(allow-host-primitive + - lambda apply)
 
-; OK: uses only whitelisted primitives.
-(? (1 + 2))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 1)
+((b = true) has probability 0)
 
-; E065: `min` is host-primitive and not whitelisted.
-(? (min 1 2))
+; E065: default `and` depends on the host `avg` aggregator:
+;       and -> avg -> host-primitive
+(? ((a = true) and (b = true)))
+
+; OK: the active implementation of `and` is a truth-table row set
+; recorded as links-defined.
+(with-foundation boolean-links
+  (? ((a = true) and (b = true))))
 ```
+
+`(allow-host-primitive <name>...)` whitelists exact construct or
+dependency names. For example, allowing `avg` permits the default
+`and -> avg -> host-primitive` path, while allowing an unrelated
+ancestor does not.
 
 The strict mode is *opt-in*; nothing about its presence in the host
 changes the behaviour of a file that does not use it. The dependency
@@ -422,7 +453,9 @@ It is **never** activated implicitly — `default-rml` stays the active
 foundation on every fresh `Env`. The profile carries an `[experimental]`
 tag, a root symbol `∞`, and four "abits" (atomic bits): `[`, `]`, `0`,
 `1`. Together those four characters form a self-contained serialization
-alphabet for arbitrary `Node` values.
+alphabet for arbitrary `Node` values. It is descriptive metadata plus
+encode/decode helpers, not a replacement evaluator, proof checker, or
+minimal trusted kernel.
 
 ```text
 mtc-anum [experimental] — minimal-trust-core experimental anum profile
@@ -454,8 +487,10 @@ frames, and leaf payloads that are not byte-aligned, all with `E066`.
 
 ## 10. Status of the broader programme
 
-The full multi-phase roadmap from issue #97 is now implemented on the
-backward-compatible side of the line:
+The issue #97 roadmap is implemented where the work could stay
+backward-compatible and inspectable. The remaining self-hosting target
+is still deliberately explicit: Phase 5 has descriptor and dependency
+coverage, but not a links-defined type/proof kernel.
 
 - **Phase 1 — inventory + reporting + scoped overrides.** Implemented.
   See §2 (registry), §4 (`foundation-report`), §3 (`(with-foundation ...)`).
@@ -464,26 +499,30 @@ backward-compatible side of the line:
   `assigned-equality`, `definitional-equality` are distinct entries
   with their own `depends-on`. Proof-trace layering remains an open
   follow-up.
-- **Phase 3 — proof-object substrate.** Implemented via `(check-proof
-  ...)` and the proof-object replay path. Diagnostic `E064` covers
-  malformed forms and premise/conclusion mismatches.
+- **Phase 3 — proof-object substrate.** Implemented via proof rules,
+  `(assumption ...)` / `(axiom ...)`, `(proof-object ...)`, and
+  `(check-proof ...)`. Premises must cite an assumption, axiom, or
+  earlier proof object using `(premise-by ...)` / `(uses ...)`;
+  unjustified raw premises raise `E064`.
 - **Phase 4 — links-defined finite logics.** Implemented. See the
-  bundled `boolean-classical` / `kleene-three-valued` foundations
-  (§5), the `(truth-table ...)` clause (§7), and `(carrier ...)` +
-  `(strict-carrier)` (§6).
-- **Phase 5 — links-defined type/proof kernel fragment.** The
-  registry's `Prop`, `Pi`, `lambda`, `apply`, `beta-reduction`, and
+  bundled `boolean-links` truth-table foundation (§5), the
+  `(truth-table ...)` clause (§7), and `(carrier ...)` +
+  `(strict-carrier)` (§6). The older `boolean-classical` /
+  `kleene-three-valued` foundations remain host-aggregator examples.
+- **Phase 5 — links-defined type/proof kernel fragment.** Partial:
+  the registry's `Prop`, `Pi`, `lambda`, `apply`, `beta-reduction`, and
   equality layers are catalogued with `depends-on` links, and the
-  trust audit can walk them via the dependency graph.
+  trust audit can walk them via the dependency graph. The actual
+  type/proof kernel remains host-implemented.
 - **Phase 6 — pure-links checking mode.** Implemented. See §8.
-- **Phase 7 — dependency-graph traversal.** The trust audit now renders
-  the transitive closure of `depends-on` and is what powers strict-mode
-  enforcement.
+- **Phase 7 — dependency-graph traversal.** Implemented for trust
+  reporting and strict-mode enforcement paths.
 - **Phase 8 — bundled `(carrier ...)` / `(strict-carrier)` /
   `(truth-table ...)`.** Implemented (§6, §7).
-- **Phase 9 — experimental profiles (`mtc-anum`).** Implemented (§9),
-  pre-seeded but opt-in, with `encodeAnum` / `decodeAnum` helpers and
-  the `(experimental)` / `(root ...)` / `(abit ...)` clauses.
+- **Phase 9 — experimental profiles (`mtc-anum`).** Implemented as an
+  opt-in serialization profile (§9), with `encodeAnum` / `decodeAnum`
+  helpers and the `(experimental)` / `(root ...)` / `(abit ...)`
+  clauses. It does not implement a minimal trusted core evaluator.
 
 Everything in this document is the *backward-compatible* surface. The
 strict modes (`(strict-carrier)`, `(strict-foundation pure-links)`) are

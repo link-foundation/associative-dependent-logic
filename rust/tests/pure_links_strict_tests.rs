@@ -37,7 +37,11 @@ fn list(items: Vec<Node>) -> Node {
 #[test]
 fn strict_mode_is_off_by_default() {
     let out = evaluate("(? (1 + 2))", None, None);
-    assert!(out.diagnostics.is_empty(), "diagnostics: {:?}", out.diagnostics);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
     assert_eq!(out.results.len(), 1);
 }
 
@@ -49,9 +53,16 @@ fn emits_e065_when_query_depends_on_host_primitive_arithmetic_op() {
 "#;
     let out = evaluate(src, None, None);
     assert_eq!(out.results.len(), 1);
-    assert_eq!(out.diagnostics.len(), 1, "diagnostics: {:?}", out.diagnostics);
+    assert_eq!(
+        out.diagnostics.len(),
+        1,
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
     assert_eq!(out.diagnostics[0].code, "E065");
-    assert!(out.diagnostics[0].message.contains("pure-links strict mode"));
+    assert!(out.diagnostics[0]
+        .message
+        .contains("pure-links strict mode"));
     assert!(out.diagnostics[0].message.contains('+'));
 }
 
@@ -62,7 +73,12 @@ fn lists_every_offending_construct_in_a_single_e065_diagnostic() {
 (? ((1 + 2) - (3 * 4)))
 "#;
     let out = evaluate(src, None, None);
-    assert_eq!(out.diagnostics.len(), 1, "diagnostics: {:?}", out.diagnostics);
+    assert_eq!(
+        out.diagnostics.len(),
+        1,
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
     assert_eq!(out.diagnostics[0].code, "E065");
     let msg = &out.diagnostics[0].message;
     assert!(msg.contains('*'));
@@ -77,23 +93,56 @@ fn flags_host_derived_constructs_too() {
 (? (a != b))
 "#;
     let out = evaluate(src, None, None);
-    assert_eq!(out.diagnostics.len(), 1, "diagnostics: {:?}", out.diagnostics);
+    assert_eq!(
+        out.diagnostics.len(),
+        1,
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
     assert_eq!(out.diagnostics[0].code, "E065");
     assert!(out.diagnostics[0].message.contains("!="));
 }
 
 #[test]
-fn does_not_flag_user_configurable_constructs() {
-    // `and`, `or`, `not` are seeded with status `user-configurable`, so
-    // strict mode lets them pass.
+fn flags_user_configurable_truth_operators_whose_active_implementation_is_host_backed() {
     let src = r#"
 (strict-foundation pure-links)
 (? (1 and 0))
 (? (not 1))
 "#;
     let out = evaluate(src, None, None);
-    assert!(out.diagnostics.is_empty(), "diagnostics: {:?}", out.diagnostics);
+    assert_eq!(
+        out.diagnostics.len(),
+        2,
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(out.diagnostics[0].code, "E065");
+    assert_eq!(out.diagnostics[1].code, "E065");
+    assert!(out.diagnostics[0]
+        .message
+        .contains("and -> avg -> host-primitive"));
+    assert!(out.diagnostics[1]
+        .message
+        .contains("not -> decimal-12-arithmetic -> host-primitive"));
     assert_eq!(out.results.len(), 2);
+}
+
+#[test]
+fn accepts_truth_operators_when_active_foundation_provides_links_defined_truth_tables() {
+    let src = r#"
+(strict-foundation pure-links)
+(with-foundation boolean-links
+  (? (1 and 0))
+  (? (not 1)))
+"#;
+    let out = evaluate(src, None, None);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![0.0, 0.0]);
 }
 
 #[test]
@@ -105,7 +154,11 @@ fn honours_allow_host_primitive_for_specific_constructs() {
 (? (5 - 2))
 "#;
     let out = evaluate(src, None, None);
-    assert!(out.diagnostics.is_empty(), "diagnostics: {:?}", out.diagnostics);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
     assert_eq!(out.results.len(), 2);
 }
 
@@ -119,7 +172,12 @@ fn still_flags_constructs_not_in_allow_list() {
 "#;
     let out = evaluate(src, None, None);
     assert_eq!(out.results.len(), 2);
-    assert_eq!(out.diagnostics.len(), 1, "diagnostics: {:?}", out.diagnostics);
+    assert_eq!(
+        out.diagnostics.len(),
+        1,
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
     assert_eq!(out.diagnostics[0].code, "E065");
     assert!(out.diagnostics[0].message.contains('*'));
 }
@@ -143,8 +201,7 @@ fn rejects_unknown_strict_foundation_profile_with_e065() {
     let out = evaluate("(strict-foundation handwritten)", None, None);
     assert_eq!(out.diagnostics.len(), 1);
     assert_eq!(out.diagnostics[0].code, "E065");
-    assert!(out
-        .diagnostics[0]
+    assert!(out.diagnostics[0]
         .message
         .contains("unknown strict-foundation profile"));
 }
@@ -154,8 +211,7 @@ fn rejects_malformed_strict_foundation_forms_with_e065() {
     let out = evaluate("(strict-foundation)", None, None);
     assert_eq!(out.diagnostics.len(), 1);
     assert_eq!(out.diagnostics[0].code, "E065");
-    assert!(out
-        .diagnostics[0]
+    assert!(out.diagnostics[0]
         .message
         .contains("requires a single profile name"));
 }
@@ -165,8 +221,7 @@ fn rejects_malformed_allow_host_primitive_forms_with_e065() {
     let out = evaluate("(allow-host-primitive)", None, None);
     assert_eq!(out.diagnostics.len(), 1);
     assert_eq!(out.diagnostics[0].code, "E065");
-    assert!(out
-        .diagnostics[0]
+    assert!(out.diagnostics[0]
         .message
         .contains("requires at least one construct name"));
 }
@@ -181,7 +236,10 @@ fn surfaces_strict_pure_links_state_on_foundation_report() {
     evaluate_with_env(src, None, &mut env);
     let report = env.foundation_report();
     assert!(report.strict_pure_links);
-    assert_eq!(report.allowed_host_primitives, vec!["+".to_string(), "-".to_string()]);
+    assert_eq!(
+        report.allowed_host_primitives,
+        vec!["+".to_string(), "-".to_string()]
+    );
     let printed = format_foundation_report(&report);
     assert!(printed.contains("pure-links strict mode: on"));
     assert!(printed.contains("allowed host primitives: +, -"));
@@ -203,7 +261,10 @@ fn parse_allow_host_primitive_form_accepts_multiple_construct_names() {
         leaf("*"),
     ]);
     let decl = parse_allow_host_primitive_form(&node).expect("parse");
-    assert_eq!(decl.names, vec!["+".to_string(), "-".to_string(), "*".to_string()]);
+    assert_eq!(
+        decl.names,
+        vec!["+".to_string(), "-".to_string(), "*".to_string()]
+    );
 }
 
 #[test]
@@ -225,7 +286,11 @@ fn scan_pure_links_offenders_surfaces_every_host_primitive_operator() {
     let offenders = scan_pure_links_offenders(&node, &env);
     assert_eq!(
         offenders,
-        vec!["*".to_string(), "+".to_string(), "-".to_string()]
+        vec![
+            "* -> decimal-12-arithmetic -> host-primitive".to_string(),
+            "+ -> decimal-12-arithmetic -> host-primitive".to_string(),
+            "- -> decimal-12-arithmetic -> host-primitive".to_string()
+        ]
     );
 }
 
@@ -238,7 +303,11 @@ fn lets_links_encoded_self_bootstrap_forms_keep_working_under_strict_mode() {
   (normalizes-to document))
 "#;
     let out = evaluate(src, None, None);
-    assert!(out.diagnostics.is_empty(), "diagnostics: {:?}", out.diagnostics);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
 }
 
 #[test]
@@ -249,15 +318,21 @@ fn lets_proof_substrate_stay_clean_under_strict_mode() {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption rain (judgement raining))
 (proof-object mp-rain
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise raining)
+  (premise-by rain-implies-wet)
+  (premise-by rain)
   (conclusion wet))
 (check-proof mp-rain)
 "#;
     let out = evaluate(src, None, None);
-    assert!(out.diagnostics.is_empty(), "diagnostics: {:?}", out.diagnostics);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
     assert_eq!(nums(&out.results), vec![1.0]);
 }
 
@@ -269,6 +344,10 @@ fn allows_queries_that_only_reference_user_constants_under_strict_mode() {
 (? 0)
 "#;
     let out = evaluate(src, None, None);
-    assert!(out.diagnostics.is_empty(), "diagnostics: {:?}", out.diagnostics);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
     assert_eq!(nums(&out.results), vec![1.0, 0.0]);
 }

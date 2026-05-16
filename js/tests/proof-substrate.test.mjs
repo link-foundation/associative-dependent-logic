@@ -5,7 +5,8 @@
 // pattern matching against the declared rule. The three surface forms are:
 //
 //   (rule <name> (premise <pat>)... (conclusion <pat>))
-//   (proof-object <name> (applies <rule>) (premise <judgement>)... (conclusion <judgement>))
+//   (assumption <name> (judgement <judgement>)) / (axiom <name> ...)
+//   (proof-object <name> (applies <rule>) (premise-by <dependency>)... (conclusion <judgement>))
 //   (check-proof <name>)
 //
 // `?meta` leaves inside patterns are metavariables; repeated metavariables
@@ -21,6 +22,7 @@ import {
   evaluate,
   formatFoundationReport,
   parseRuleForm,
+  parseProofAssumptionForm,
   parseProofObjectForm,
   matchProofPattern,
   checkProofObject,
@@ -46,13 +48,29 @@ describe('proof-object substrate as links', () => {
       'mp-1',
       ['applies', 'modus-ponens'],
       ['premise', ['raining', 'implies', 'wet']],
+      ['premise-by', 'rain-implies-wet'],
       ['premise', 'raining'],
+      ['uses', 'rain'],
       ['conclusion', 'wet'],
     ]);
     assert.strictEqual(po.name, 'mp-1');
     assert.strictEqual(po.rule, 'modus-ponens');
     assert.strictEqual(po.premises.length, 2);
+    assert.deepStrictEqual(po.premiseRefs, ['rain-implies-wet', 'rain']);
     assert.strictEqual(po.conclusion, 'wet');
+  });
+
+  it('parses assumptions and axioms as explicit proof leaves', () => {
+    const assumption = parseProofAssumptionForm([
+      'assumption',
+      'rain',
+      ['judgement', 'raining'],
+    ]);
+    assert.deepStrictEqual(assumption, {
+      name: 'rain',
+      kind: 'assumption',
+      judgement: 'raining',
+    });
   });
 
   it('matches `?meta` leaves and binds them into the substitution map', () => {
@@ -79,10 +97,12 @@ describe('proof-object substrate as links', () => {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption rain (judgement raining))
 (proof-object mp-rain
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise raining)
+  (premise-by rain-implies-wet)
+  (premise-by rain)
   (conclusion wet))
 (check-proof mp-rain)
 `);
@@ -96,10 +116,12 @@ describe('proof-object substrate as links', () => {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption sunny-now (judgement sunny))
 (proof-object mp-bad
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise sunny)
+  (premise-by rain-implies-wet)
+  (premise-by sunny-now)
   (conclusion wet))
 (check-proof mp-bad)
 `);
@@ -115,9 +137,10 @@ describe('proof-object substrate as links', () => {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
 (proof-object mp-short
   (applies modus-ponens)
-  (premise (raining implies wet))
+  (premise-by rain-implies-wet)
   (conclusion wet))
 (check-proof mp-short)
 `);
@@ -154,10 +177,12 @@ describe('proof-object substrate as links', () => {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption rain (judgement raining))
 (proof-object mp-skew
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise raining)
+  (premise-by rain-implies-wet)
+  (premise-by rain)
   (conclusion snowing))
 (check-proof mp-skew)
 `);
@@ -228,6 +253,7 @@ describe('proof-object substrate as links', () => {
         name: 'refl-a',
         rule: 'reflexivity',
         premises: [],
+        premiseRefs: [],
         conclusion: '(apple = apple)',
       },
     ]);
@@ -238,6 +264,36 @@ describe('proof-object substrate as links', () => {
     assert.match(printed, /refl-a : applies reflexivity \(0 premises → \(apple = apple\)\)/);
   });
 
+  it('surfaces proof assumptions and dependency refs on foundationReport()', () => {
+    const env = new Env();
+    evaluate(
+      `
+(rule identity
+  (premise ?a)
+  (conclusion ?a))
+(assumption rain (judgement raining))
+(proof-object id-rain
+  (applies identity)
+  (premise-by rain)
+  (conclusion raining))
+`,
+      { env },
+    );
+    const report = env.foundationReport();
+    assert.deepStrictEqual(report.proofAssumptions, [
+      {
+        name: 'rain',
+        kind: 'assumption',
+        judgement: 'raining',
+      },
+    ]);
+    assert.deepStrictEqual(report.proofObjects[0].premiseRefs, ['rain']);
+    const printed = formatFoundationReport(report);
+    assert.match(printed, /proof assumptions:/);
+    assert.match(printed, /rain \[assumption\] : raining/);
+    assert.match(printed, /id-rain : applies identity \(0 premises using rain → raining\)/);
+  });
+
   it('lets `checkProofObject()` return a substitution witness on success', () => {
     const env = new Env();
     evaluate(
@@ -246,10 +302,12 @@ describe('proof-object substrate as links', () => {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption rain (judgement raining))
 (proof-object mp-rain
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise raining)
+  (premise-by rain-implies-wet)
+  (premise-by rain)
   (conclusion wet))
 `,
       { env },
@@ -258,6 +316,63 @@ describe('proof-object substrate as links', () => {
     assert.strictEqual(verdict.ok, true);
     assert.strictEqual(verdict.substitution['?a'], 'raining');
     assert.strictEqual(verdict.substitution['?b'], 'wet');
+    assert.deepStrictEqual(verdict.dependencies, ['rain-implies-wet', 'rain']);
+  });
+
+  it('rejects raw proof-object premises that cite no proof dependency', () => {
+    const out = evaluate(`
+(rule identity
+  (premise ?a)
+  (conclusion ?a))
+(proof-object raw
+  (applies identity)
+  (premise raining)
+  (conclusion raining))
+(check-proof raw)
+`);
+    assert.deepStrictEqual(out.results, [0]);
+    assert.strictEqual(out.diagnostics[0].code, 'E064');
+    assert.match(out.diagnostics[0].message, /premise 1 is unjustified/);
+  });
+
+  it('accepts proof-object dependencies produced by other proof objects', () => {
+    const out = evaluate(`
+(rule identity
+  (premise ?a)
+  (conclusion ?a))
+(rule reflexivity
+  (conclusion (?a = ?a)))
+(proof-object refl-rain
+  (applies reflexivity)
+  (conclusion (raining = raining)))
+(proof-object id-rain
+  (applies identity)
+  (premise-by refl-rain)
+  (conclusion (raining = raining)))
+(check-proof id-rain)
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('detects cyclic proof-object dependencies', () => {
+    const out = evaluate(`
+(rule identity
+  (premise ?a)
+  (conclusion ?a))
+(proof-object a
+  (applies identity)
+  (premise-by b)
+  (conclusion rain))
+(proof-object b
+  (applies identity)
+  (premise-by a)
+  (conclusion rain))
+(check-proof a)
+`);
+    assert.deepStrictEqual(out.results, [0]);
+    assert.strictEqual(out.diagnostics[0].code, 'E064');
+    assert.match(out.diagnostics[0].message, /cyclic proof dependency: a -> b -> a/);
   });
 
   it('does not hijack existing `(rule ...)` data forms from self-bootstrap files', () => {

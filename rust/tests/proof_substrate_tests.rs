@@ -6,7 +6,8 @@
 // the declared rule. The three surface forms are:
 //
 //   (rule <name> (premise <pat>)... (conclusion <pat>))
-//   (proof-object <name> (applies <rule>) (premise <judgement>)... (conclusion <judgement>))
+//   (assumption <name> (judgement <judgement>)) / (axiom <name> ...)
+//   (proof-object <name> (applies <rule>) (premise-by <dependency>)... (conclusion <judgement>))
 //   (check-proof <name>)
 //
 // `?meta` leaves inside patterns are metavariables; repeated metavariables
@@ -17,9 +18,9 @@
 // See: https://github.com/link-foundation/relative-meta-logic/issues/97
 
 use rml::{
-    check_proof_object, evaluate, evaluate_with_env, format_foundation_report,
-    match_proof_pattern, parse_proof_object_form, parse_rule_form, CheckProofVerdict, Env, Node,
-    RunResult,
+    check_proof_object, evaluate, evaluate_with_env, format_foundation_report, match_proof_pattern,
+    parse_proof_assumption_form, parse_proof_object_form, parse_rule_form, CheckProofVerdict, Env,
+    Node, RunResult,
 };
 use std::collections::HashMap;
 
@@ -69,14 +70,33 @@ fn parses_a_proof_object_form_into_a_structured_descriptor() {
             leaf("premise"),
             list(vec![leaf("raining"), leaf("implies"), leaf("wet")]),
         ]),
+        list(vec![leaf("premise-by"), leaf("rain-implies-wet")]),
         list(vec![leaf("premise"), leaf("raining")]),
+        list(vec![leaf("uses"), leaf("rain")]),
         list(vec![leaf("conclusion"), leaf("wet")]),
     ]);
     let po = parse_proof_object_form(&node).expect("parse");
     assert_eq!(po.name, "mp-1");
     assert_eq!(po.rule, "modus-ponens");
     assert_eq!(po.premises.len(), 2);
+    assert_eq!(
+        po.premise_refs,
+        vec!["rain-implies-wet".to_string(), "rain".to_string()]
+    );
     assert!(matches!(po.conclusion, Node::Leaf(ref s) if s == "wet"));
+}
+
+#[test]
+fn parses_assumptions_and_axioms_as_explicit_proof_leaves() {
+    let node = list(vec![
+        leaf("assumption"),
+        leaf("rain"),
+        list(vec![leaf("judgement"), leaf("raining")]),
+    ]);
+    let assumption = parse_proof_assumption_form(&node).expect("parse");
+    assert_eq!(assumption.name, "rain");
+    assert_eq!(assumption.kind, "assumption");
+    assert!(matches!(assumption.judgement, Node::Leaf(ref s) if s == "raining"));
 }
 
 #[test]
@@ -112,15 +132,22 @@ fn verifies_a_valid_modus_ponens_derivation_end_to_end() {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption rain (judgement raining))
 (proof-object mp-rain
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise raining)
+  (premise-by rain-implies-wet)
+  (premise-by rain)
   (conclusion wet))
 (check-proof mp-rain)
 "#;
     let out = evaluate(src, None, None);
-    assert_eq!(out.diagnostics.len(), 0, "diagnostics: {:?}", out.diagnostics);
+    assert_eq!(
+        out.diagnostics.len(),
+        0,
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
     assert_eq!(nums(&out.results), vec![1.0]);
 }
 
@@ -131,10 +158,12 @@ fn fails_with_e064_when_a_premise_does_not_match_the_rule_pattern() {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption sunny-now (judgement sunny))
 (proof-object mp-bad
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise sunny)
+  (premise-by rain-implies-wet)
+  (premise-by sunny-now)
   (conclusion wet))
 (check-proof mp-bad)
 "#;
@@ -154,9 +183,10 @@ fn fails_with_e064_when_premise_count_differs_from_rule_arity() {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
 (proof-object mp-short
   (applies modus-ponens)
-  (premise (raining implies wet))
+  (premise-by rain-implies-wet)
   (conclusion wet))
 (check-proof mp-short)
 "#;
@@ -204,10 +234,12 @@ fn enforces_metavariable_consistency_across_premises_and_conclusion() {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption rain (judgement raining))
 (proof-object mp-skew
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise raining)
+  (premise-by rain-implies-wet)
+  (premise-by rain)
   (conclusion snowing))
 (check-proof mp-skew)
 "#;
@@ -284,6 +316,7 @@ fn surfaces_rules_and_proof_objects_on_foundation_report() {
     assert_eq!(report.proof_objects.len(), 1);
     assert_eq!(report.proof_objects[0].name, "refl-a");
     assert_eq!(report.proof_objects[0].rule, "reflexivity");
+    assert!(report.proof_objects[0].premise_refs.is_empty());
     assert_eq!(report.proof_objects[0].conclusion, "(apple = apple)");
 
     let printed = format_foundation_report(&report);
@@ -294,6 +327,35 @@ fn surfaces_rules_and_proof_objects_on_foundation_report() {
 }
 
 #[test]
+fn surfaces_proof_assumptions_and_dependency_refs_on_foundation_report() {
+    let mut env = Env::new(None);
+    let src = r#"
+(rule identity
+  (premise ?a)
+  (conclusion ?a))
+(assumption rain (judgement raining))
+(proof-object id-rain
+  (applies identity)
+  (premise-by rain)
+  (conclusion raining))
+"#;
+    evaluate_with_env(src, None, &mut env);
+    let report = env.foundation_report();
+    assert_eq!(report.proof_assumptions.len(), 1);
+    assert_eq!(report.proof_assumptions[0].name, "rain");
+    assert_eq!(report.proof_assumptions[0].kind, "assumption");
+    assert_eq!(report.proof_assumptions[0].judgement, "raining");
+    assert_eq!(
+        report.proof_objects[0].premise_refs,
+        vec!["rain".to_string()]
+    );
+    let printed = format_foundation_report(&report);
+    assert!(printed.contains("proof assumptions:"));
+    assert!(printed.contains("rain [assumption] : raining"));
+    assert!(printed.contains("id-rain : applies identity (0 premises using rain → raining)"));
+}
+
+#[test]
 fn check_proof_object_returns_substitution_witness_on_success() {
     let mut env = Env::new(None);
     let src = r#"
@@ -301,10 +363,12 @@ fn check_proof_object_returns_substitution_witness_on_success() {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption rain (judgement raining))
 (proof-object mp-rain
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise raining)
+  (premise-by rain-implies-wet)
+  (premise-by rain)
   (conclusion wet))
 "#;
     evaluate_with_env(src, None, &mut env);
@@ -315,6 +379,76 @@ fn check_proof_object_returns_substitution_witness_on_success() {
         }
         CheckProofVerdict::Err(msg) => panic!("expected ok, got err: {msg}"),
     }
+}
+
+#[test]
+fn rejects_raw_proof_object_premises_that_cite_no_dependency() {
+    let src = r#"
+(rule identity
+  (premise ?a)
+  (conclusion ?a))
+(proof-object raw
+  (applies identity)
+  (premise raining)
+  (conclusion raining))
+(check-proof raw)
+"#;
+    let out = evaluate(src, None, None);
+    assert_eq!(nums(&out.results), vec![0.0]);
+    assert_eq!(out.diagnostics[0].code, "E064");
+    assert!(out.diagnostics[0]
+        .message
+        .contains("premise 1 is unjustified"));
+}
+
+#[test]
+fn accepts_proof_object_dependencies_produced_by_other_proof_objects() {
+    let src = r#"
+(rule identity
+  (premise ?a)
+  (conclusion ?a))
+(rule reflexivity
+  (conclusion (?a = ?a)))
+(proof-object refl-rain
+  (applies reflexivity)
+  (conclusion (raining = raining)))
+(proof-object id-rain
+  (applies identity)
+  (premise-by refl-rain)
+  (conclusion (raining = raining)))
+(check-proof id-rain)
+"#;
+    let out = evaluate(src, None, None);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn detects_cyclic_proof_object_dependencies() {
+    let src = r#"
+(rule identity
+  (premise ?a)
+  (conclusion ?a))
+(proof-object a
+  (applies identity)
+  (premise-by b)
+  (conclusion rain))
+(proof-object b
+  (applies identity)
+  (premise-by a)
+  (conclusion rain))
+(check-proof a)
+"#;
+    let out = evaluate(src, None, None);
+    assert_eq!(nums(&out.results), vec![0.0]);
+    assert_eq!(out.diagnostics[0].code, "E064");
+    assert!(out.diagnostics[0]
+        .message
+        .contains("cyclic proof dependency: a -> b -> a"));
 }
 
 #[test]

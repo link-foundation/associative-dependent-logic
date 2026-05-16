@@ -32,6 +32,16 @@ describe('foundation / root-construct registry', () => {
     assert.strictEqual(def.description.length > 0, true);
   });
 
+  it('preregisters `boolean-links` as a strict carrier truth-table foundation', () => {
+    const env = new Env();
+    const f = env.foundations.get('boolean-links');
+    assert.ok(f, 'boolean-links descriptor is missing');
+    assert.deepStrictEqual(f.carrier, ['0', '1']);
+    assert.strictEqual(f.strictCarrier, true);
+    assert.strictEqual(f.truthTables.get('and').length, 4);
+    assert.strictEqual(f.truthTables.get('not').length, 2);
+  });
+
   it('does not change baseline semantics when no foundation is declared', () => {
     const results = run(`
 (a: a is a)
@@ -538,5 +548,24 @@ describe('foundation carrier enforcement', () => {
     assert.strictEqual(andTable.rows.length, 4);
     const printed = formatFoundationReport(report);
     assert.ok(printed.includes('truth tables: and(4 rows), or(4 rows)'));
+  });
+
+  it('reports active truth-table implementations inside with-foundation', () => {
+    const out = evaluate(`
+(with-foundation boolean-links
+  (foundation-report))
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    const report = out.results[0];
+    assert.strictEqual(report.activeFoundation, 'boolean-links');
+    const activeAnd = report.activeImplementations.find(i => i.construct === 'and');
+    assert.ok(activeAnd, 'active and implementation should be reported');
+    assert.strictEqual(activeAnd.status, 'links-defined');
+    assert.strictEqual(activeAnd.foundation, 'boolean-links');
+    assert.strictEqual(activeAnd.implementation, 'truth-table:boolean-links/and');
+    assert.deepStrictEqual(activeAnd.dependsOn, []);
+    const printed = formatFoundationReport(report);
+    assert.ok(printed.includes('active implementations:'));
+    assert.ok(printed.includes('and: links-defined; via truth-table:boolean-links/and; foundation boolean-links'));
   });
 });

@@ -4,7 +4,7 @@
 # Every entry is data. Evaluating this file with the host evaluator
 # populates `Env.rootConstructs` and `Env.foundations` with the same
 # descriptors that the host seeds on construction, plus the named
-# alternative foundations (boolean-classical, kleene-three-valued).
+# alternative foundations (boolean-classical, kleene-three-valued, boolean-links).
 #
 # Foundations are scopes that swap operator semantics without altering
 # the kernel: `(with-foundation <name> ...)` evaluates a body under the
@@ -136,7 +136,7 @@
 (root-construct not
   (kind truth-operator)
   (status user-configurable)
-  (depends-on truth-range))
+  (depends-on truth-range decimal-12-arithmetic))
 
 (root-construct and
   (kind truth-operator)
@@ -333,6 +333,34 @@
   (defines or max)
   (defines both avg)
   (defines neither product))
+
+# ---------------------------------------------------------------------------
+# Two-valued Boolean logic whose connectives are finite truth-table rows.
+# The host still executes the table machinery, but the active operator
+# descriptors are marked `links-defined` because the rows below provide the
+# behaviour being selected by the foundation.
+# ---------------------------------------------------------------------------
+
+(foundation boolean-links
+  (description links-defined-two-valued-boolean-logic)
+  (numeric-domain boolean-zero-one)
+  (truth-domain boolean-two-valued)
+  (extends default-rml)
+  (carrier 0 1)
+  (strict-carrier)
+  (truth-table and
+    (1 1 -> 1)
+    (1 0 -> 0)
+    (0 1 -> 0)
+    (0 0 -> 0))
+  (truth-table or
+    (1 1 -> 1)
+    (1 0 -> 1)
+    (0 1 -> 1)
+    (0 0 -> 0))
+  (truth-table not
+    (1 -> 0)
+    (0 -> 1)))
 
 # ---------------------------------------------------------------------------
 # Two-valued classical Boolean logic. Numeric domain is {0,1}; operators

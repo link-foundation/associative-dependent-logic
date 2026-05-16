@@ -62,18 +62,29 @@ describe('pure-links strict mode', () => {
     assert.match(out.diagnostics[0].message, /!=/);
   });
 
-  it('does NOT flag user-configurable constructs (the truth-operator layer)', () => {
-    // `and`, `or`, `not` are seeded with status `user-configurable`, which
-    // explicitly opts them out of strict-mode rejection — they are exactly
-    // the constructs the user can pin via `(truth-table ...)` or `(foundation
-    // ...defines ...)`.
+  it('flags user-configurable truth operators whose active implementation is still host-backed', () => {
     const out = evaluate(`
 (strict-foundation pure-links)
 (? (1 and 0))
 (? (not 1))
 `);
-    assert.deepStrictEqual(out.diagnostics, []);
+    assert.strictEqual(out.diagnostics.length, 2);
+    assert.strictEqual(out.diagnostics[0].code, 'E065');
+    assert.strictEqual(out.diagnostics[1].code, 'E065');
+    assert.match(out.diagnostics[0].message, /and -> avg -> host-primitive/);
+    assert.match(out.diagnostics[1].message, /not -> decimal-12-arithmetic -> host-primitive/);
     assert.strictEqual(out.results.length, 2);
+  });
+
+  it('accepts truth operators when the active foundation provides links-defined truth tables', () => {
+    const out = evaluate(`
+(strict-foundation pure-links)
+(with-foundation boolean-links
+  (? (1 and 0))
+  (? (not 1)))
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [0, 0]);
   });
 
   it('honours `(allow-host-primitive ...)` to whitelist specific constructs', () => {
@@ -166,8 +177,13 @@ describe('pure-links strict mode', () => {
     const env = new Env();
     env.strictPureLinks = true;
     const offenders = scanPureLinksOffenders([['1', '+', '2'], '-', ['3', '*', '4']], env);
-    // `+`, `-`, `*` are all `host-primitive`; the scanner returns them sorted.
-    assert.deepStrictEqual(offenders, ['*', '+', '-']);
+    // `+`, `-`, `*` are all host-backed through decimal-12 arithmetic; the
+    // scanner returns transitive paths sorted/deduplicated.
+    assert.deepStrictEqual(offenders, [
+      '* -> decimal-12-arithmetic -> host-primitive',
+      '+ -> decimal-12-arithmetic -> host-primitive',
+      '- -> decimal-12-arithmetic -> host-primitive',
+    ]);
   });
 
   it('lets links-encoded self-bootstrap files keep working under strict mode', () => {
@@ -193,10 +209,12 @@ describe('pure-links strict mode', () => {
   (premise (?a implies ?b))
   (premise ?a)
   (conclusion ?b))
+(assumption rain-implies-wet (judgement (raining implies wet)))
+(assumption rain (judgement raining))
 (proof-object mp-rain
   (applies modus-ponens)
-  (premise (raining implies wet))
-  (premise raining)
+  (premise-by rain-implies-wet)
+  (premise-by rain)
   (conclusion wet))
 (check-proof mp-rain)
 `);

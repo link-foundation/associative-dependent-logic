@@ -60,6 +60,30 @@ fn preregisters_default_rml_so_legacy_programs_need_no_migration() {
 }
 
 #[test]
+fn preregisters_boolean_links_as_strict_carrier_truth_table_foundation() {
+    let env = Env::new(None);
+    let f = env
+        .get_foundation("boolean-links")
+        .expect("boolean-links descriptor is missing");
+    assert_eq!(f.carrier, vec!["0".to_string(), "1".to_string()]);
+    assert!(f.strict_carrier);
+    assert_eq!(
+        f.truth_tables
+            .iter()
+            .find(|(op, _)| op == "and")
+            .map(|(_, rows)| rows.len()),
+        Some(4)
+    );
+    assert_eq!(
+        f.truth_tables
+            .iter()
+            .find(|(op, _)| op == "not")
+            .map(|(_, rows)| rows.len()),
+        Some(2)
+    );
+}
+
+#[test]
 fn baseline_semantics_unchanged_when_no_foundation_is_declared() {
     let results = run_clean(
         r#"
@@ -297,11 +321,7 @@ fn provenance_reports_structural_equality_for_self_equality() {
 
 #[test]
 fn provenance_reports_assigned_equality_when_rule_exists() {
-    let out = evaluate(
-        "((a = a) has probability 0.7)\n(? (a = a))",
-        None,
-        None,
-    );
+    let out = evaluate("((a = a) has probability 0.7)\n(? (a = a))", None, None);
     assert!(out.diagnostics.is_empty());
     assert_eq!(out.results, vec![RunResult::Num(0.7)]);
     assert_eq!(
@@ -334,11 +354,7 @@ fn provenance_reports_definitional_equality_for_beta_reducible_terms() {
 
 #[test]
 fn provenance_reports_assigned_inequality() {
-    let out = evaluate(
-        "((a = a) has probability 0.7)\n(? (a != a))",
-        None,
-        None,
-    );
+    let out = evaluate("((a = a) has probability 0.7)\n(? (a != a))", None, None);
     assert!(out.diagnostics.is_empty());
     assert_eq!(
         prov(&out.provenance),
@@ -812,4 +828,43 @@ fn truth_table_exposes_truth_tables_on_foundation_report() {
         "printed report missing truth tables line:\n{}",
         printed
     );
+}
+
+#[test]
+fn truth_table_reports_active_implementations_inside_with_foundation() {
+    let out = evaluate(
+        r#"
+(with-foundation boolean-links
+  (foundation-report))
+"#,
+        None,
+        None,
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+    let report = match &out.results[0] {
+        RunResult::Foundation(report) => report,
+        other => panic!("expected foundation report, got {other:?}"),
+    };
+    assert_eq!(report.active_foundation, "boolean-links");
+    let active_and = report
+        .active_implementations
+        .iter()
+        .find(|implementation| implementation.construct == "and")
+        .expect("active and implementation should be reported");
+    assert_eq!(active_and.status.as_deref(), Some("links-defined"));
+    assert_eq!(active_and.foundation.as_deref(), Some("boolean-links"));
+    assert_eq!(
+        active_and.implementation.as_deref(),
+        Some("truth-table:boolean-links/and")
+    );
+    assert!(active_and.depends_on.is_empty());
+    let printed = format_foundation_report(report);
+    assert!(printed.contains("active implementations:"));
+    assert!(printed.contains(
+        "and: links-defined; via truth-table:boolean-links/and; foundation boolean-links"
+    ));
 }
