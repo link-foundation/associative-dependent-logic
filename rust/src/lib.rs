@@ -91,6 +91,13 @@ pub struct EvaluateResult {
     pub diagnostics: Vec<Diagnostic>,
     pub trace: Vec<TraceEvent>,
     pub proofs: Vec<Option<Node>>,
+    /// Equality-layer provenance (issue #97). For every query that is a
+    /// direct equality (`(? (L = R))`), records which of the four equality
+    /// layers fired: `assigned-equality`, `structural-equality`,
+    /// `definitional-equality`, or `numeric-equality`. Non-equality queries
+    /// get `None`. The vec is empty when no equality query was observed,
+    /// matching JavaScript's lazy `out.provenance` shape.
+    pub provenance: Vec<Option<String>>,
 }
 
 /// Options for `evaluate_with_options` — bundles environment settings with
@@ -3960,6 +3967,151 @@ fn query_requests_proof(node: &Node) -> bool {
     false
 }
 
+/// Read-only beta-normalization used by equality-layer classification.
+/// Unlike `normalize_term`, this helper only handles the on-the-fly
+/// `(apply (lambda (T x) body) arg)` redex shape and recurses into other
+/// nodes structurally. That keeps it free of `&mut Env` so it can run from
+/// the immutable `build_proof` walker without cloning the environment.
+fn pure_beta_normalize(node: &Node) -> Node {
+    if let Node::List(children) = node {
+        if children.len() == 3 {
+            if let Node::Leaf(head) = &children[0] {
+                if head == "apply" {
+                    let fn_n = pure_beta_normalize(&children[1]);
+                    let arg = pure_beta_normalize(&children[2]);
+                    if let Node::List(fn_children) = &fn_n {
+                        if fn_children.len() == 3 {
+                            if let Node::Leaf(fn_head) = &fn_children[0] {
+                                if fn_head == "lambda" {
+                                    if let Some((param, _)) =
+                                        parse_binding(&fn_children[1])
+                                    {
+                                        let reduced =
+                                            subst(&fn_children[2], &param, &arg);
+                                        return pure_beta_normalize(&reduced);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return Node::List(vec![Node::Leaf("apply".into()), fn_n, arg]);
+                }
+            }
+        }
+        let normalized: Vec<Node> = children.iter().map(pure_beta_normalize).collect();
+        return Node::List(normalized);
+    }
+    node.clone()
+}
+
+fn contains_lambda_or_apply(node: &Node) -> bool {
+    if let Node::List(children) = node {
+        if let Some(Node::Leaf(head)) = children.first() {
+            if head == "lambda" || head == "apply" {
+                return true;
+            }
+        }
+        return children.iter().any(contains_lambda_or_apply);
+    }
+    false
+}
+
+/// Equality-layer classification used by both `build_proof` and the
+/// per-query provenance walker. Precedence (issue #97): assigned >
+/// structural > definitional > numeric. Returns the rule string verbatim
+/// so JS and Rust emit identical labels.
+pub fn classify_equality_rule(l: &Node, r: &Node, op: &str, env: &Env) -> &'static str {
+    let is_inequality = op == "!=";
+    let k_prefix = key_of(&Node::List(vec![leaf("="), l.clone(), r.clone()]));
+    let k_infix = key_of(&Node::List(vec![l.clone(), leaf("="), r.clone()]));
+    if env.assign.contains_key(&k_prefix) || env.assign.contains_key(&k_infix) {
+        return if is_inequality {
+            "assigned-inequality"
+        } else {
+            "assigned-equality"
+        };
+    }
+    if is_structurally_same(l, r) {
+        return if is_inequality {
+            "structural-inequality"
+        } else {
+            "structural-equality"
+        };
+    }
+    // Definitional equality: if one side contains a lambda/apply and both
+    // sides beta-normalize to structurally-identical terms, the equality
+    // holds by reduction rather than by raw arithmetic.
+    if contains_lambda_or_apply(l) || contains_lambda_or_apply(r) {
+        let ln = pure_beta_normalize(l);
+        let rn = pure_beta_normalize(r);
+        if is_structurally_same(&ln, &rn) && !is_structurally_same(l, r) {
+            return if is_inequality {
+                "definitional-inequality"
+            } else {
+                "definitional-equality"
+            };
+        }
+    }
+    if is_inequality {
+        "numeric-inequality"
+    } else {
+        "numeric-equality"
+    }
+}
+
+/// Strip an optional `with proof` suffix and then unwrap a singleton
+/// container so `(? (a = b))` and `(? ((a = b)))` both yield `(a = b)`.
+fn query_body_for_provenance(form: &Node) -> Option<Node> {
+    if let Node::List(children) = form {
+        if let Some(Node::Leaf(head)) = children.first() {
+            if head == "?" {
+                let stripped = strip_with_proof(&children[1..]);
+                let mut body: Node = if stripped.len() == 1 {
+                    stripped[0].clone()
+                } else {
+                    Node::List(stripped.to_vec())
+                };
+                loop {
+                    match body {
+                        Node::List(ref inner) if inner.len() == 1 => {
+                            if matches!(&inner[0], Node::List(_)) {
+                                body = inner[0].clone();
+                            } else {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                return Some(body);
+            }
+        }
+    }
+    None
+}
+
+/// Return the equality-layer rule for a query whose body is a direct
+/// equality, or `None` for any other query shape. Composite queries like
+/// `((a = true) and (b = true))` are intentionally returned as `None`: the
+/// per-equality rules still appear in the proof witness, but the surface
+/// provenance describes the query itself.
+pub fn equality_provenance_for_query(form: &Node, env: &Env) -> Option<String> {
+    let body = query_body_for_provenance(form)?;
+    if let Node::List(children) = &body {
+        if children.len() == 3 {
+            if let Node::Leaf(op) = &children[1] {
+                if op == "=" || op == "!=" {
+                    return Some(
+                        classify_equality_rule(&children[0], &children[2], op, env)
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Build a derivation tree witnessing how `node` reduces under `env`.
 /// Returns a `Node::List` of the form `(by <rule> <subderivation>...)`.
 ///
@@ -3967,8 +4119,10 @@ fn query_requests_proof(node: &Node) -> bool {
 /// configuration directives become leaf witnesses, infix and prefix
 /// operators become rule applications whose subderivations recurse through
 /// `build_proof`, and equality picks `assigned-equality` /
-/// `structural-equality` / `numeric-equality` (and the negated counterparts)
-/// based on the same lookups `eval_node` performs.
+/// `structural-equality` / `definitional-equality` / `numeric-equality`
+/// (and the negated counterparts) based on the same lookups `eval_node`
+/// performs — delegating to `classify_equality_rule` so both the proof
+/// witness and the per-query provenance agree on which layer fired.
 pub fn build_proof(node: &Node, env: &Env) -> Node {
     match node {
         // Numeric and bare-symbol leaves are axiomatic at this level.
@@ -4105,29 +4259,7 @@ pub fn build_proof(node: &Node, env: &Env) -> Node {
                     if op_name == "=" || op_name == "!=" {
                         let l = &children[0];
                         let r = &children[2];
-                        let k_prefix =
-                            key_of(&Node::List(vec![leaf("="), l.clone(), r.clone()]));
-                        let k_infix =
-                            key_of(&Node::List(vec![l.clone(), leaf("="), r.clone()]));
-                        let rule = if env.assign.contains_key(&k_prefix)
-                            || env.assign.contains_key(&k_infix)
-                        {
-                            if op_name == "!=" {
-                                "assigned-inequality"
-                            } else {
-                                "assigned-equality"
-                            }
-                        } else if is_structurally_same(l, r) {
-                            if op_name == "!=" {
-                                "structural-inequality"
-                            } else {
-                                "structural-equality"
-                            }
-                        } else if op_name == "!=" {
-                            "numeric-inequality"
-                        } else {
-                            "numeric-equality"
-                        };
+                        let rule = classify_equality_rule(l, r, op_name, env);
                         // Sub-derivation of equality preserves the original
                         // operands as a link so the witness reads
                         // `(by structural-equality (a a))` per the issue.
@@ -9604,6 +9736,7 @@ pub fn evaluate_file(file_path: &str, options: EvaluateOptions) -> EvaluateResul
                 diagnostics: vec![diag],
                 trace: Vec::new(),
                 proofs: Vec::new(),
+                provenance: Vec::new(),
             };
         }
     };
@@ -9860,6 +9993,7 @@ fn eval_foundation_body_form(
     diagnostics: &mut Vec<Diagnostic>,
     results: &mut Vec<RunResult>,
     proofs: &mut Option<Vec<Option<Node>>>,
+    provenance: &mut Option<Vec<Option<String>>>,
     options: &EvaluateOptions,
 ) {
     let mut form = form;
@@ -9912,7 +10046,7 @@ fn eval_foundation_body_form(
                 let bodies: Vec<Node> = children[2..].to_vec();
                 for body in bodies {
                     eval_foundation_body_form(
-                        body, span, env, diagnostics, results, proofs, options,
+                        body, span, env, diagnostics, results, proofs, provenance, options,
                     );
                 }
                 env.exit_foundation();
@@ -9978,6 +10112,9 @@ fn eval_foundation_body_form(
                 if let Some(p) = proofs.as_mut() {
                     p.push(None);
                 }
+                if let Some(pv) = provenance.as_mut() {
+                    pv.push(None);
+                }
                 return;
             }
         }
@@ -9990,15 +10127,57 @@ fn eval_foundation_body_form(
         (expanded, eval_res)
     }));
     match inner_result {
-        Ok((_, eval_res)) => match eval_res {
-            EvalResult::Query(v) => results.push(RunResult::Num(v)),
-            EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
-            _ => {}
-        },
+        Ok((expanded, eval_res)) => {
+            let was_query =
+                matches!(eval_res, EvalResult::Query(_) | EvalResult::TypeQuery(_));
+            match eval_res {
+                EvalResult::Query(v) => results.push(RunResult::Num(v)),
+                EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
+                _ => {}
+            }
+            if was_query {
+                if let Some(p) = proofs.as_mut() {
+                    p.push(None);
+                }
+                let prov = equality_provenance_for_query(&expanded, env);
+                record_provenance(provenance, results.len(), prov, env, &expanded, span, options);
+            }
+        }
         Err(payload) => {
             let (code, message) = decode_panic_payload(&payload);
             diagnostics.push(Diagnostic::new(&code, message, span.clone()));
         }
+    }
+}
+
+/// Append a per-query provenance entry, lazily allocating the vector on the
+/// first non-`None` rule (mirrors JS's `out.provenance` shape). When `rule`
+/// is `Some`, also emits an `equality-layer` trace event so tracing tools
+/// can attribute each classification to its source span.
+fn record_provenance(
+    provenance: &mut Option<Vec<Option<String>>>,
+    results_len: usize,
+    rule: Option<String>,
+    env: &mut Env,
+    _form: &Node,
+    span: &Span,
+    options: &EvaluateOptions,
+) {
+    if let Some(rule_name) = rule {
+        if provenance.is_none() {
+            let backfill = results_len.saturating_sub(1);
+            *provenance = Some(vec![None; backfill]);
+        }
+        provenance.as_mut().unwrap().push(Some(rule_name.clone()));
+        if options.trace {
+            env.trace_events.push(TraceEvent::new(
+                "equality-layer",
+                rule_name,
+                span.clone(),
+            ));
+        }
+    } else if let Some(pv) = provenance.as_mut() {
+        pv.push(None);
     }
 }
 
@@ -10069,6 +10248,14 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
     } else {
         None
     };
+
+    // Equality-layer provenance (issue #97). Lazily allocated on the first
+    // query that classifies into one of the four equality layers; prior
+    // bare queries are backfilled with `None` so indices stay aligned with
+    // `results`. When no equality query ever fires the vector stays empty
+    // and the public field is returned as `Vec::new()`, matching the JS
+    // `{results, diagnostics}` shape for legacy programs.
+    let mut provenance: Option<Vec<Option<String>>> = None;
 
     // Silence the default panic hook while we deliberately catch evaluator
     // panics — otherwise they'd leak to stderr alongside the diagnostics.
@@ -10294,6 +10481,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                             &mut diagnostics,
                             &mut results,
                             &mut proofs,
+                            &mut provenance,
                             options,
                         );
                     }
@@ -10319,6 +10507,9 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                     results.push(RunResult::Foundation(report));
                     if let Some(p) = proofs.as_mut() {
                         p.push(None);
+                    }
+                    if let Some(pv) = provenance.as_mut() {
+                        pv.push(None);
                     }
                     continue;
                 }
@@ -10395,6 +10586,16 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                     } else if let Some(p) = proofs.as_mut() {
                         p.push(None);
                     }
+                    let prov = equality_provenance_for_query(&expanded_form, env);
+                    record_provenance(
+                        &mut provenance,
+                        results.len(),
+                        prov,
+                        env,
+                        &expanded_form,
+                        &span,
+                        options,
+                    );
                 }
             }
             Err(payload) => {
@@ -10424,11 +10625,22 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
         Vec::new()
     };
 
+    let provenance_vec = match provenance {
+        Some(mut v) => {
+            while v.len() < results.len() {
+                v.push(None);
+            }
+            v
+        }
+        None => Vec::new(),
+    };
+
     EvaluateResult {
         results,
         diagnostics,
         trace,
         proofs: proofs.unwrap_or_default(),
+        provenance: provenance_vec,
     }
 }
 

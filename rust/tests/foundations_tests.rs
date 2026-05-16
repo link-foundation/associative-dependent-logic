@@ -13,7 +13,10 @@
 //
 // See: https://github.com/link-foundation/relative-meta-logic/issues/97
 
-use rml::{evaluate, evaluate_with_env, format_foundation_report, Aggregator, Env, Op, RunResult};
+use rml::{
+    evaluate, evaluate_with_env, evaluate_with_options, format_foundation_report, Aggregator, Env,
+    EvaluateOptions, Op, RunResult,
+};
 
 fn agg_of(op: Option<&Op>) -> Option<Aggregator> {
     match op {
@@ -246,4 +249,173 @@ fn enter_foundation_snapshots_ops_so_exit_restores_them() {
 "#,
     );
     assert_eq!(restored, vec![0.5, 0.4, 0.5]);
+}
+
+// ---------------------------------------------------------------------------
+// Equality-layer provenance (issue #97). Parallel to the JS suite — every
+// JS provenance test has a Rust twin so drift between the engines fails
+// both suites simultaneously.
+// ---------------------------------------------------------------------------
+
+fn prov(out_provenance: &[Option<String>]) -> Vec<Option<String>> {
+    out_provenance.to_vec()
+}
+
+#[test]
+fn provenance_is_empty_when_no_equality_query_is_present() {
+    let out = evaluate(
+        r#"
+(a: a is a)
+((a = true) has probability 0.5)
+(? ((a = true) and (a = true)))
+"#,
+        None,
+        None,
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert!(
+        out.provenance.is_empty(),
+        "provenance should be empty when no top-level equality query fires: {:?}",
+        out.provenance
+    );
+}
+
+#[test]
+fn provenance_reports_structural_equality_for_self_equality() {
+    let out = evaluate("(a: a is a)\n(? (a = a))", None, None);
+    assert!(out.diagnostics.is_empty());
+    assert_eq!(out.results, vec![RunResult::Num(1.0)]);
+    assert_eq!(
+        prov(&out.provenance),
+        vec![Some("structural-equality".to_string())]
+    );
+}
+
+#[test]
+fn provenance_reports_assigned_equality_when_rule_exists() {
+    let out = evaluate(
+        "((a = a) has probability 0.7)\n(? (a = a))",
+        None,
+        None,
+    );
+    assert!(out.diagnostics.is_empty());
+    assert_eq!(out.results, vec![RunResult::Num(0.7)]);
+    assert_eq!(
+        prov(&out.provenance),
+        vec![Some("assigned-equality".to_string())]
+    );
+}
+
+#[test]
+fn provenance_reports_numeric_equality_for_constants() {
+    let out = evaluate("(? ((0.1 + 0.2) = 0.3))", None, None);
+    assert!(out.diagnostics.is_empty());
+    assert_eq!(out.results, vec![RunResult::Num(1.0)]);
+    assert_eq!(
+        prov(&out.provenance),
+        vec![Some("numeric-equality".to_string())]
+    );
+}
+
+#[test]
+fn provenance_reports_definitional_equality_for_beta_reducible_terms() {
+    // (apply (lambda (Natural x) x) y) ≡ y via one beta step.
+    let out = evaluate("(? ((apply (lambda (Natural x) x) y) = y))", None, None);
+    assert!(out.diagnostics.is_empty());
+    assert_eq!(
+        prov(&out.provenance),
+        vec![Some("definitional-equality".to_string())]
+    );
+}
+
+#[test]
+fn provenance_reports_assigned_inequality() {
+    let out = evaluate(
+        "((a = a) has probability 0.7)\n(? (a != a))",
+        None,
+        None,
+    );
+    assert!(out.diagnostics.is_empty());
+    assert_eq!(
+        prov(&out.provenance),
+        vec![Some("assigned-inequality".to_string())]
+    );
+}
+
+#[test]
+fn provenance_aligns_with_results_when_equality_and_non_equality_queries_mix() {
+    let out = evaluate(
+        r#"
+(a: a is a)
+(b: b is b)
+((a = true) has probability 0.6)
+((b = true) has probability 0.4)
+(? ((a = true) and (b = true)))
+(? (a = a))
+(? (1 = 2))
+"#,
+        None,
+        None,
+    );
+    assert!(out.diagnostics.is_empty());
+    assert_eq!(
+        out.results,
+        vec![
+            RunResult::Num(0.5),
+            RunResult::Num(1.0),
+            RunResult::Num(0.0),
+        ]
+    );
+    assert_eq!(
+        prov(&out.provenance),
+        vec![
+            None,
+            Some("structural-equality".to_string()),
+            Some("numeric-equality".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn provenance_propagates_inside_with_foundation_bodies() {
+    let out = evaluate(
+        r#"
+(foundation classical-min (defines and min) (defines or max))
+(a: a is a)
+(with-foundation classical-min
+  (? (a = a)))
+(? (a = a))
+"#,
+        None,
+        None,
+    );
+    assert!(out.diagnostics.is_empty());
+    assert_eq!(
+        prov(&out.provenance),
+        vec![
+            Some("structural-equality".to_string()),
+            Some("structural-equality".to_string())
+        ]
+    );
+}
+
+#[test]
+fn provenance_emits_equality_layer_trace_event_per_classified_query() {
+    let options = EvaluateOptions {
+        trace: true,
+        ..EvaluateOptions::default()
+    };
+    let out = evaluate_with_options("(a: a is a)\n(? (a = a))", None, options);
+    assert!(out.diagnostics.is_empty());
+    let equality_events: Vec<_> = out
+        .trace
+        .iter()
+        .filter(|e| e.kind == "equality-layer")
+        .collect();
+    assert_eq!(equality_events.len(), 1);
+    assert_eq!(equality_events[0].detail, "structural-equality");
 }

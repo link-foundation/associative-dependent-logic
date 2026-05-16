@@ -1431,6 +1431,69 @@ function _proofValue(v) {
   return String(v);
 }
 
+// Equality-layer provenance (issue #97). Centralises the precedence used by
+// `buildProof()` (and surfaced verbatim through `out.provenance`) so JS and
+// Rust agree on which equality layer fires for a given `(L = R)` pair.
+// Precedence: assigned > structural > definitional > numeric.
+function _containsLambdaOrApply(node) {
+  if (!Array.isArray(node)) return false;
+  if (node[0] === 'lambda' || node[0] === 'apply') return true;
+  for (const child of node) if (_containsLambdaOrApply(child)) return true;
+  return false;
+}
+
+function classifyEqualityRule(L, R, op, env) {
+  const isInequality = op === '!=';
+  const kPrefix = keyOf(['=', L, R]);
+  const kInfix = keyOf([L, '=', R]);
+  if (env.assign.has(kPrefix) || env.assign.has(kInfix)) {
+    return isInequality ? 'assigned-inequality' : 'assigned-equality';
+  }
+  if (isStructurallySame(L, R)) {
+    return isInequality ? 'structural-inequality' : 'structural-equality';
+  }
+  // Definitional equality: if one side contains a lambda/apply and both
+  // sides normalize to structurally-identical terms, the equality holds by
+  // beta-reduction. Wrapped in a try/catch so a pathological normalization
+  // never breaks classification (worst case we fall through to numeric).
+  if (_containsLambdaOrApply(L) || _containsLambdaOrApply(R)) {
+    try {
+      const Ln = normalizeTerm(L, env);
+      const Rn = normalizeTerm(R, env);
+      if (isStructurallySame(Ln, Rn) && !isStructurallySame(L, R)) {
+        return isInequality ? 'definitional-inequality' : 'definitional-equality';
+      }
+    } catch (_) { /* fall through */ }
+  }
+  return isInequality ? 'numeric-inequality' : 'numeric-equality';
+}
+
+// Strip an optional `with proof` keyword pair, then unwrap a singleton
+// container so `(? (a = b))` and `(? ((a = b)))` both yield `(a = b)`.
+function _queryBody(queryForm) {
+  if (!Array.isArray(queryForm) || queryForm[0] !== '?') return null;
+  const stripped = _stripWithProof(queryForm.slice(1));
+  let body = stripped.length === 1 ? stripped[0] : stripped;
+  while (Array.isArray(body) && body.length === 1 && Array.isArray(body[0])) {
+    body = body[0];
+  }
+  return body;
+}
+
+// Return the equality-layer rule for a query whose body is a direct
+// equality, or null for any other query shape. Composite queries like
+// `((a = true) and (b = true))` are intentionally returned as `null`: the
+// per-equality rules still appear in the proof witness, but the surface
+// provenance describes the query itself.
+function equalityProvenanceForQuery(queryForm, env) {
+  const body = _queryBody(queryForm);
+  if (!Array.isArray(body)) return null;
+  if (body.length === 3 && typeof body[1] === 'string' && (body[1] === '=' || body[1] === '!=')) {
+    return classifyEqualityRule(body[0], body[2], body[1], env);
+  }
+  return null;
+}
+
 function buildProof(node, env) {
   // Literals
   if (typeof node === 'string') {
@@ -1500,16 +1563,7 @@ function buildProof(node, env) {
   if (node.length === 3 && typeof node[1] === 'string' && (node[1]==='=' || node[1]==='!=')) {
     const L = node[0];
     const R = node[2];
-    const kPrefix = keyOf(['=', L, R]);
-    const kInfix = keyOf([L, '=', R]);
-    let rule;
-    if (env.assign.has(kPrefix) || env.assign.has(kInfix)) {
-      rule = node[1] === '!=' ? 'assigned-inequality' : 'assigned-equality';
-    } else if (isStructurallySame(L, R)) {
-      rule = node[1] === '!=' ? 'structural-inequality' : 'structural-equality';
-    } else {
-      rule = node[1] === '!=' ? 'numeric-inequality' : 'numeric-equality';
-    }
+    const rule = classifyEqualityRule(L, R, node[1], env);
     // Sub-derivations of equality preserve the original operands as links
     // so the witness reads (by structural-equality (a a)) per the issue.
     return _wrap(rule, [L, R]);
@@ -5502,6 +5556,28 @@ function evaluate(code, options) {
   const proofsEnabled = !!opts.withProofs;
   let proofs = proofsEnabled ? [] : null;
 
+  // Equality-layer provenance (issue #97). Lazy-allocated: as soon as one
+  // query reports a non-null equality layer we backfill nulls for prior
+  // queries so the array stays index-aligned with `results`. The property
+  // is only attached to the output when at least one entry is non-null,
+  // which keeps the baseline `{results, diagnostics}` shape unchanged for
+  // programs that never test equality.
+  let provenance = null;
+  const recordProvenance = (expandedForm, expandedSpan) => {
+    const rule = equalityProvenanceForQuery(expandedForm, env);
+    if (rule === null) {
+      if (provenance !== null) provenance.push(null);
+      return;
+    }
+    if (provenance === null) {
+      provenance = results.slice(0, -1).map(() => null);
+    }
+    provenance.push(rule);
+    if (traceEnabled && trace) {
+      trace.push(new TraceEvent({ kind: 'equality-layer', detail: rule, span: expandedSpan }));
+    }
+  };
+
   // Import context: a stack of canonical paths currently being loaded (cycle
   // detection) and a set of canonical paths already loaded into this env
   // (caching for diamond patterns). Both are reused across recursive calls.
@@ -5528,6 +5604,7 @@ function evaluate(code, options) {
     const out = { results, diagnostics };
     if (traceEnabled) out.trace = trace;
     if (proofs !== null) out.proofs = proofs;
+    if (provenance !== null) out.provenance = provenance;
     return out;
   }
 
@@ -5581,6 +5658,7 @@ function evaluate(code, options) {
             if (res && res.query) {
               results.push(res.value);
               if (proofs !== null) proofs.push(null);
+              recordProvenance(expanded, span);
             }
           }
         } catch (innerErr) {
@@ -5761,6 +5839,7 @@ function evaluate(code, options) {
         } else if (proofs !== null) {
           proofs.push(null);
         }
+        recordProvenance(expandedForm, span);
       }
     } catch (err) {
       const diagSpan = (err && err.span) || span;
@@ -5779,6 +5858,13 @@ function evaluate(code, options) {
   const out = { results, diagnostics };
   if (traceEnabled) out.trace = trace;
   if (proofs !== null) out.proofs = proofs;
+  if (provenance !== null) {
+    // Pad in the rare case where late queries returned without going
+    // through `recordProvenance` (defensive — keeps the array aligned
+    // with `results` for consumers iterating by index).
+    while (provenance.length < results.length) provenance.push(null);
+    out.provenance = provenance;
+  }
   return out;
 }
 

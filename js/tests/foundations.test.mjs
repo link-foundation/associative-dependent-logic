@@ -162,3 +162,106 @@ describe('foundation / root-construct registry', () => {
     assert.strictEqual(env.ops.get('and')(0.6, 0.4), 0.5);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Equality-layer provenance (issue #97, Section 1 of netkeep80's punch-list).
+//
+// The evaluator must surface which of the four equality layers fired for
+// every equality query so foundations can argue about identity without
+// recomputing the proof tree. The layers, in precedence order, are:
+//
+//   assigned-equality     — `((L = R) has probability p)` was declared
+//   structural-equality   — L and R are syntactically the same node
+//   definitional-equality — L and R normalize to the same term via
+//                           beta-reduction (one side contains a lambda/apply)
+//   numeric-equality      — no other layer applied; classical numeric test
+//
+// JS and Rust must agree on the rule string for the same source. The
+// per-query `out.provenance` array is index-aligned with `out.results`, and
+// is only attached when at least one equality query was observed so legacy
+// programs keep the original `{results, diagnostics}` shape.
+// ---------------------------------------------------------------------------
+describe('equality-layer provenance', () => {
+  it('omits the provenance field when no equality query is present', () => {
+    const out = evaluate(`
+(a: a is a)
+((a = true) has probability 0.5)
+(? ((a = true) and (a = true)))
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.strictEqual('provenance' in out, false,
+      'provenance should stay unset when no top-level equality query fires');
+  });
+
+  it('reports structural-equality for `(? (a = a))`', () => {
+    const out = evaluate('(a: a is a)\n(? (a = a))');
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+    assert.deepStrictEqual(out.provenance, ['structural-equality']);
+  });
+
+  it('reports assigned-equality once a `has probability` rule exists', () => {
+    const out = evaluate('((a = a) has probability 0.7)\n(? (a = a))');
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [0.7]);
+    assert.deepStrictEqual(out.provenance, ['assigned-equality']);
+  });
+
+  it('reports numeric-equality for `(? ((0.1 + 0.2) = 0.3))`', () => {
+    const out = evaluate('(? ((0.1 + 0.2) = 0.3))');
+    assert.deepStrictEqual(out.diagnostics, []);
+    // 0.1 + 0.2 == 0.3 holds under the dec-12 numeric domain.
+    assert.deepStrictEqual(out.results, [1]);
+    assert.deepStrictEqual(out.provenance, ['numeric-equality']);
+  });
+
+  it('reports definitional-equality when a beta-reduction connects both sides', () => {
+    // (apply (lambda (Natural x) x) y) ≡ y via single beta step.
+    const out = evaluate('(? ((apply (lambda (Natural x) x) y) = y))');
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.provenance, ['definitional-equality']);
+  });
+
+  it('reports assigned-inequality for `(? (a != a))` when an assignment exists', () => {
+    const out = evaluate('((a = a) has probability 0.7)\n(? (a != a))');
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.provenance, ['assigned-inequality']);
+  });
+
+  it('aligns provenance with results when equality and non-equality queries mix', () => {
+    const out = evaluate(`
+(a: a is a)
+(b: b is b)
+((a = true) has probability 0.6)
+((b = true) has probability 0.4)
+(? ((a = true) and (b = true)))
+(? (a = a))
+(? (1 = 2))
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [0.5, 1, 0]);
+    assert.deepStrictEqual(out.provenance,
+      [null, 'structural-equality', 'numeric-equality']);
+  });
+
+  it('records provenance inside `(with-foundation ...)` bodies', () => {
+    const out = evaluate(`
+(foundation classical-min (defines and min) (defines or max))
+(a: a is a)
+(with-foundation classical-min
+  (? (a = a)))
+(? (a = a))
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.provenance,
+      ['structural-equality', 'structural-equality']);
+  });
+
+  it('emits an equality-layer trace event for each classified query', () => {
+    const out = evaluate('(a: a is a)\n(? (a = a))', { trace: true });
+    assert.deepStrictEqual(out.diagnostics, []);
+    const equalityEvents = out.trace.filter(e => e.kind === 'equality-layer');
+    assert.strictEqual(equalityEvents.length, 1);
+    assert.strictEqual(equalityEvents[0].detail, 'structural-equality');
+  });
+});
