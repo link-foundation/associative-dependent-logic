@@ -99,8 +99,12 @@ so partial descriptors can be accumulated.
 | Code | Cause |
 |------|-------|
 | `E060` | Malformed `(root-construct ...)` declaration (missing name, unknown child clause shape, non-symbolic field value). |
-| `E061` | Malformed `(foundation ...)` declaration (missing name, unknown child clause shape, malformed `(defines ...)` clause). |
+| `E061` | Malformed `(foundation ...)` declaration (missing name, unknown child clause shape, malformed `(defines ...)` clause, malformed `(root ...)` / `(abit ...)` clause). |
 | `E062` | `(with-foundation <name> ...)` references a foundation that has not been registered. The diagnostic does not abort evaluation — forms after the bad scope still run. |
+| `E063` | Carrier violation under `(strict-carrier)` — a query result or probability assignment falls outside the active foundation's declared carrier. |
+| `E064` | Malformed `(check-proof ...)` form or proof-object replay failure (premise/conclusion mismatch). |
+| `E065` | Pure-links strict mode rejected a query that referenced a `host-primitive` / `host-derived` construct not on the `(allow-host-primitive ...)` list; also raised for malformed `(strict-foundation ...)` / `(allow-host-primitive ...)` forms. |
+| `E066` | MTC/anum encode/decode error (input outside the four-abit alphabet, unbalanced frame, leaf payload not byte-aligned, or non-Node value passed to `encodeAnum`). |
 
 ## 3. Foundations
 
@@ -119,10 +123,16 @@ Field reference:
 | Clause | Meaning |
 |--------|---------|
 | `(description <text>)` | Free-form summary; shown by `(foundation-report)`. |
-| `(numeric-domain <name>)` | Name of the numeric domain this foundation expects (data only — see §6 for the planned strict-checking mode). |
-| `(truth-domain <name>)` | Name of the truth domain (data only). |
+| `(numeric-domain <name>)` | Name of the numeric domain this foundation expects. |
+| `(truth-domain <name>)` | Name of the truth domain. |
 | `(extends <name>)` | Inherits fields from a previously registered foundation. |
 | `(defines <op> <aggregator>)` | Re-binds operator `<op>` to aggregator `<aggregator>` while the foundation is active. Repeats are allowed; each new `(defines ...)` replaces the binding for that operator. |
+| `(carrier <v1> <v2> ...)` | Declares the set of values the foundation considers legal. Symbolic constants (`true`, `false`, `unknown`) resolve through `env.symbol_prob` on activation; numeric literals stay literal. Informational unless `(strict-carrier)` is also present (see §6). |
+| `(strict-carrier)` | Opts the foundation into runtime carrier enforcement. Out-of-carrier query results and probability assignments raise `E063` instead of being silently clamped. |
+| `(truth-table <op> (in1 in2 -> out) ...)` | Rebinds `<op>` to a links-defined finite truth table for the duration of `(with-foundation ...)`. Partial tables are allowed — rows that don't match fall through to the previously installed op. Symbolic truth constants resolve through `env.symbol_prob` on activation. |
+| `(experimental)` | Flags the foundation as experimental so the trust audit prints an `[experimental]` tag next to its name. Carries no behavioural guarantees. |
+| `(root <symbol>)` | Records the foundation's root concept (e.g. `∞` for `mtc-anum`). Informational; surfaced on the report. |
+| `(abit <symbol> <meaning>)` | Records one atomic bit of the foundation's alphabet. Used by experimental profiles like `mtc-anum` to publish their four-abit (`[`, `]`, `0`, `1`) serialization alphabet. Informational; surfaced on the report. |
 
 ### The `default-rml` foundation
 
@@ -320,34 +330,167 @@ exercises both in one file and shows the default semantics being
 restored after each scope. A minimal single-operator showcase lives in
 [`examples/foundation-with-min.lino`](../examples/foundation-with-min.lino).
 
-## 6. Status of the broader programme
+## 6. Carrier enforcement: `(carrier ...)` and `(strict-carrier)`
 
-This document captures Phase 1 (inventory + reporting + scoped overrides)
-and the start of Phase 4 (links-defined finite logics — Boolean and
-Kleene). The roadmap from the issue thread continues:
+A foundation can declare which values it considers legal with
+`(carrier ...)`. By itself this is informational — the trust audit
+surfaces the carrier, but evaluation is not changed. Adding
+`(strict-carrier)` opts the foundation into runtime enforcement: a
+query result or probability assignment that falls outside the carrier
+emits an `E063` diagnostic rather than being silently clamped or
+returned.
 
-- **Phase 2 — equality and numeric-domain separation.** The registry
-  already names `structural-equality`, `numeric-equality`,
-  `assigned-equality`, and `definitional-equality` as four distinct
-  layers (see [`lib/self/foundations.lino`](../lib/self/foundations.lino)),
-  but the proof object does not yet record which layer fired for each
-  step. Future work will surface that in trace/proof output.
-- **Phase 3 — proof-object substrate.** Proof rules become first-class
-  links; replay consults the declared rule set rather than only the
-  host's classifier table.
-- **Phase 5 — links-defined type/proof kernel fragment.** A small
-  propositions-as-types fragment defined entirely in `.lino`, similar in
-  spirit to [Software Foundations'](https://softwarefoundations.cis.upenn.edu/sf-3.2/Logic.html)
-  `Logic.v`, with `Prop`, implication, conjunction, disjunction, equality.
-- **Phase 6 — pure-links checking mode.** A strict mode that rejects
-  proof steps depending on a construct whose status is still
-  `host-primitive`. Useful for measuring how much of the kernel has
-  actually moved into links.
+```lino
+(foundation bool-strict
+  (description "two-valued classical, enforced")
+  (carrier true false)
+  (strict-carrier)
+  (defines and min)
+  (defines or max))
+
+(a: a is a)
+((a = true) has probability 0.5)
+
+(with-foundation bool-strict
+  ; E063: 0.5 is not in {true=1.0, false=0.0}
+  (? (a = true)))
+```
+
+Symbolic carrier members (`true`, `false`, `unknown`) resolve through
+`env.symbol_prob` at activation time, so the same foundation works
+whether `true`/`false` are bound to `{0,1}` or `{0.0, 1.0}` or `{0, 0.5,
+1}`. Numeric literals stay literal.
+
+## 7. Truth tables: `(truth-table ...)`
+
+Operators can also be rebound to a finite truth table written in pure
+`.lino`. This is the simplest path to a "links-defined" operator — the
+rows are data, no host aggregator is consulted while the foundation is
+active.
+
+```lino
+(foundation xor3
+  (description "three-valued exclusive-or")
+  (carrier true false unknown)
+  (truth-table xor
+    (true  false   -> true)
+    (false true    -> true)
+    (true  true    -> false)
+    (false false   -> false)
+    (unknown _     -> unknown)
+    (_       unknown -> unknown)))
+
+(with-foundation xor3
+  (? (a xor b)))
+```
+
+Partial tables are allowed: rows that don't match fall through to the
+previously installed operator. The symbolic constants are resolved
+through `env.symbol_prob` on activation, just like `(carrier ...)`.
+
+## 8. Pure-links strict mode
+
+The `(strict-foundation pure-links)` form (paired with optional
+`(allow-host-primitive ...)` whitelists) is the strict checking mode
+described in the original roadmap. While active, any query that
+transitively depends on a `host-primitive` or `host-derived` construct
+not on the whitelist raises `E065`. The dependency graph in the trust
+audit drives the check — it is the transitive closure of `depends-on`
+links in the registry.
+
+```lino
+(strict-foundation pure-links)
+(allow-host-primitive + - lambda apply)
+
+; OK: uses only whitelisted primitives.
+(? (1 + 2))
+
+; E065: `min` is host-primitive and not whitelisted.
+(? (min 1 2))
+```
+
+The strict mode is *opt-in*; nothing about its presence in the host
+changes the behaviour of a file that does not use it. The dependency
+graph is also rendered in `formatFoundationReport` so the user can see,
+before flipping the strict switch, exactly which constructs would need
+to be whitelisted.
+
+## 9. Experimental profiles: `mtc-anum`
+
+A pre-seeded experimental foundation `mtc-anum` ships with both hosts.
+It is **never** activated implicitly — `default-rml` stays the active
+foundation on every fresh `Env`. The profile carries an `[experimental]`
+tag, a root symbol `∞`, and four "abits" (atomic bits): `[`, `]`, `0`,
+`1`. Together those four characters form a self-contained serialization
+alphabet for arbitrary `Node` values.
+
+```text
+mtc-anum [experimental] — minimal-trust-core experimental anum profile
+    root: ∞
+    abits: [=start-of-meaning, ]=end-of-meaning, 0=leaf-tag, 1=list-tag
+```
+
+The companion helpers `encodeAnum` / `decodeAnum` (JS) and
+`encode_anum` / `decode_anum` (Rust) round-trip `Node` values through
+that four-character alphabet:
+
+```js
+import { encodeAnum, decodeAnum, parseLino } from 'relative-meta-logic';
+
+const node = parseLino('(? (1 + 2))')[0];
+const wire = encodeAnum(node);
+// wire is a string drawn only from [ ] 0 1
+const back = decodeAnum(wire);
+// back deepStrictEqual node
+```
+
+Encoding rules:
+
+- Leaf: `[0` + UTF-8 bytes as MSB-first 8-bit groups + `]`
+- List: `[1` + concatenation of child encodings + `]`
+
+Decoding rejects characters outside the four-abit alphabet, unbalanced
+frames, and leaf payloads that are not byte-aligned, all with `E066`.
+
+## 10. Status of the broader programme
+
+The full multi-phase roadmap from issue #97 is now implemented on the
+backward-compatible side of the line:
+
+- **Phase 1 — inventory + reporting + scoped overrides.** Implemented.
+  See §2 (registry), §4 (`foundation-report`), §3 (`(with-foundation ...)`).
+- **Phase 2 — equality and numeric-domain separation.** Implemented as
+  registry descriptors: `structural-equality`, `numeric-equality`,
+  `assigned-equality`, `definitional-equality` are distinct entries
+  with their own `depends-on`. Proof-trace layering remains an open
+  follow-up.
+- **Phase 3 — proof-object substrate.** Implemented via `(check-proof
+  ...)` and the proof-object replay path. Diagnostic `E064` covers
+  malformed forms and premise/conclusion mismatches.
+- **Phase 4 — links-defined finite logics.** Implemented. See the
+  bundled `boolean-classical` / `kleene-three-valued` foundations
+  (§5), the `(truth-table ...)` clause (§7), and `(carrier ...)` +
+  `(strict-carrier)` (§6).
+- **Phase 5 — links-defined type/proof kernel fragment.** The
+  registry's `Prop`, `Pi`, `lambda`, `apply`, `beta-reduction`, and
+  equality layers are catalogued with `depends-on` links, and the
+  trust audit can walk them via the dependency graph.
+- **Phase 6 — pure-links checking mode.** Implemented. See §8.
+- **Phase 7 — dependency-graph traversal.** The trust audit now renders
+  the transitive closure of `depends-on` and is what powers strict-mode
+  enforcement.
+- **Phase 8 — bundled `(carrier ...)` / `(strict-carrier)` /
+  `(truth-table ...)`.** Implemented (§6, §7).
+- **Phase 9 — experimental profiles (`mtc-anum`).** Implemented (§9),
+  pre-seeded but opt-in, with `encodeAnum` / `decodeAnum` helpers and
+  the `(experimental)` / `(root ...)` / `(abit ...)` clauses.
 
 Everything in this document is the *backward-compatible* surface. The
-strict modes above are opt-in.
+strict modes (`(strict-carrier)`, `(strict-foundation pure-links)`) are
+opt-in; nothing about their existence changes the behaviour of files
+that do not use them.
 
-## 7. Relationship to other documents
+## 11. Relationship to other documents
 
 - [`CONFIGURABILITY.md`](./CONFIGURABILITY.md) — what is reconfigurable
   *inside* a single foundation (range, valence, aggregator selection,
@@ -360,7 +503,9 @@ strict modes above are opt-in.
   `substitution`, and `freshness` entries correspond one-to-one to the
   rules in that file.
 - [`DIAGNOSTICS.md`](./DIAGNOSTICS.md) — full error-code table,
-  including `E060`/`E061`/`E062` for foundation forms.
+  including `E060`–`E066` for foundation forms, carrier enforcement,
+  proof-object replay, pure-links strict mode, and MTC/anum
+  encode/decode.
 - [`tutorials/self-bootstrap.md`](./tutorials/self-bootstrap.md) — the
   capstone walkthrough; foundations slot in beside the encoded grammar,
   evaluator, types, operators, and metatheorem checker.

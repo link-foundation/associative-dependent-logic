@@ -33,9 +33,11 @@ fixed the contract:
 | 2025-10-08 | @netkeep80's "Additional clarification" adds the explicit acceptance contract — four conflated statuses, dependency-graph requirement, scoped overrides, layered equality, minimal milestone, four strict modes, relation to Software Foundations. |
 | 2026-05-15 | @konard's comment fixes backward-compatibility and CI/CD requirements. Issue-solver branch `issue-97-bbe597194dee` created; placeholder PR #174 opened. |
 | 2026-05-15 (this PR) | Root-construct registry + foundation scope implemented in both engines; JS and Rust unit/integration/e2e tests added; `examples/foundation-boolean-kleene.lino` + `examples/foundation-with-min.lino` added and replayed through both engines; self-evaluator parity test taught to recognise the new forms; `lib/self/foundations.lino` and `lib/self/evaluator.lino` extended; `docs/FOUNDATIONS.md` written; `docs/DIAGNOSTICS.md` extended with `E060`/`E061`/`E062`; this case study compiled. |
+| 2026-05-16 (Phases 2–9) | Phase 2 equality-layer separation, Phase 3 proof-object replay (`E064`), Phase 4 truth-tables, Phase 6 pure-links strict mode (`E065`), Phase 7 dependency-graph traversal, Phase 8 carrier enforcement (`E063`), and Phase 9 experimental `mtc-anum` profile with `encodeAnum`/`decodeAnum` helpers (`E066`) all landed on PR #175 with parallel JS/Rust tests and parity replay. `docs/FOUNDATIONS.md` rewritten to cover the full programme. |
 
 Raw data captured in `data/issue-97.json`, `data/issue-97-comments.json`,
-and `data/pr-174.json`. Code-level evidence in `evidence/foundation-surface.md`.
+`data/pr-174.json`, and `data/pr-175.json`. Code-level evidence in
+`evidence/foundation-surface.md`.
 
 ## 2. Requirements extracted from the issue
 
@@ -94,12 +96,14 @@ requirements:
     `docs/case-studies/issue-97/data/`, line-numbered code evidence
     under `evidence/`, and a deep analysis at `README.md`.
 
-The broader programme proposed in @netkeep80's two comments (Phases 2–6:
-equality-layer provenance, links-defined proof-object substrate,
-links-defined type kernel, pure-links strict mode) is intentionally
-*out of scope* for the first PR. The status-field machinery is laid
-down so those phases can be added incrementally without breaking the
-backward-compatibility guarantee.
+The broader programme proposed in @netkeep80's two comments (Phases
+2–9: equality-layer provenance, links-defined proof-object substrate,
+links-defined finite logics, links-defined type kernel, pure-links
+strict mode, dependency-graph traversal, carrier enforcement, and
+experimental `mtc-anum` profile) was originally framed as out of scope
+for the first PR; subsequent commits on PR #175 brought all of these
+in under the same backward-compatibility guarantee. See §10 for the
+phase-by-phase status.
 
 ## 3. Root-cause analysis
 
@@ -395,7 +399,71 @@ foundation-specific CI changes were needed for this PR — the existing
 `tests.yml` workflow already runs `npm test` and `cargo test` and
 therefore picks up the new tests automatically.
 
-## 9. Files in this case study
+## 9. Roadmap progress (Phases 1–9)
+
+The original issue thread laid out a six-phase programme; @netkeep80's
+follow-up comment widened it to eight; the experimental `mtc-anum`
+profile added a ninth. The status of each on PR #175:
+
+| Phase | Topic | Status | Where |
+|-------|-------|--------|-------|
+| 1 | Inventory + reporting + scoped overrides | done | §4.1–§4.3; `docs/FOUNDATIONS.md` §2–§4 |
+| 2 | Equality and numeric-domain separation | done (registry-level) | `lib/self/foundations.lino` equality entries; trace-layer follow-up tracked |
+| 3 | Proof-object substrate (`(check-proof …)`) | done | `E064`; `js/tests/check-proof.test.mjs` + `rust/tests/check_proof_tests.rs` |
+| 4 | Links-defined finite logics (Boolean, Kleene, truth-tables) | done | §4.4; `examples/foundation-boolean-kleene.lino`, `(truth-table …)` |
+| 5 | Links-defined type/proof kernel fragment | done (descriptor + dep-graph) | `lib/self/foundations.lino` typed-kernel entries |
+| 6 | Pure-links strict mode | done | `E065`; `(strict-foundation pure-links)` + `(allow-host-primitive …)` |
+| 7 | Dependency-graph traversal | done | Rendered in `formatFoundationReport`; powers strict mode |
+| 8 | Carrier enforcement | done | `E063`; `(carrier …)` + `(strict-carrier)` |
+| 9 | Experimental `mtc-anum` profile + `encodeAnum`/`decodeAnum` | done | `E066`; pre-seeded but opt-in; `(experimental)`, `(root …)`, `(abit …)` clauses |
+
+Every phase landed with **parallel JS and Rust tests** plus the
+existing self-evaluator parity replay (`lib/self/evaluator.lino` plus
+the test suites in `js/tests/self-evaluator.test.mjs` and
+`rust/tests/self_evaluator_tests.rs`), so the data-encoded evaluator
+recognises the new surface forms on both engines.
+
+### 9.1 Phase 3 — `(check-proof …)`
+
+`(check-proof <conclusion> <object>)` replays a previously emitted
+proof object against the active foundation. The replay verifies that
+every premise listed in the object holds under the current operator
+table and that the conclusion follows; mismatches raise `E064`.
+
+### 9.2 Phase 6 — pure-links strict mode
+
+`(strict-foundation pure-links)` flips a per-`Env` flag that causes any
+subsequent query referencing a `host-primitive` or `host-derived`
+construct to raise `E065`, unless the construct (or one of its
+ancestors in the dependency graph) is whitelisted by
+`(allow-host-primitive <name>...)`. The whitelist is additive across
+declarations; clearing requires exiting the strict-foundation scope.
+
+### 9.3 Phase 7 — dependency-graph traversal
+
+The trust audit (`formatFoundationReport`) renders the transitive
+closure of `depends-on` so users can see, before flipping the strict
+switch, exactly which constructs would need to be whitelisted. The
+traversal is also what powers Phase 6's enforcement check.
+
+### 9.4 Phase 8 — `(carrier …)` and `(strict-carrier)`
+
+A foundation can declare its carrier set (the values it considers
+legal) and opt into runtime enforcement. Out-of-carrier query results
+or probability assignments raise `E063`. Symbolic carrier members
+(`true`, `false`, `unknown`) resolve through `env.symbol_prob` at
+activation time. Numeric literals stay literal.
+
+### 9.5 Phase 9 — experimental `mtc-anum` profile
+
+A pre-seeded experimental foundation that is **never activated
+implicitly**. It carries an `[experimental]` tag, a root symbol `∞`,
+and four "abits" `[ ] 0 1` published on the trust report. Companion
+helpers `encodeAnum` / `decodeAnum` (JS) and `encode_anum` /
+`decode_anum` (Rust) round-trip arbitrary `Node` values through the
+four-abit alphabet. Errors raise `E066`.
+
+## 10. Files in this case study
 
 - `README.md` — this document.
 - `data/issue-97.json` — issue body, labels, author.
