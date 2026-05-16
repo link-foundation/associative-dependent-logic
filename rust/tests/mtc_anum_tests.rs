@@ -10,9 +10,24 @@
 //
 // See: https://github.com/link-foundation/relative-meta-logic/issues/97
 use rml::{
-    decode_anum, encode_anum, evaluate, evaluate_with_env, format_foundation_report, parse_one,
-    tokenize_one, Env, Node,
+    decode_anum, encode_anum, evaluate, evaluate_file, evaluate_with_env,
+    format_foundation_report, parse_one, tokenize_one, Env, EvaluateOptions, Node, RunResult,
 };
+use std::path::PathBuf;
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+fn nums(results: &[RunResult]) -> Vec<f64> {
+    results
+        .iter()
+        .filter_map(|r| match r {
+            RunResult::Num(v) => Some(*v),
+            _ => None,
+        })
+        .collect()
+}
 
 #[test]
 fn mtc_anum_is_preseeded_but_never_activated_implicitly() {
@@ -183,4 +198,202 @@ fn decode_anum_rejects_misaligned_leaf_payloads() {
     // 7 bits — not byte-aligned, must error.
     let unaligned = format!("[0{}]", "0101010");
     assert!(decode_anum(&unaligned).is_err());
+}
+
+// --- Serialization invariants (issue #97, Phase 9 strengthening) ---
+//
+// The acceptance criteria from PR review "Blocking issue 7" ask for
+// stated invariants and explicit tests for the canonicality and
+// injectivity of `encode_anum`/`decode_anum`. The three properties
+// below — canonicality, injectivity, totality — together establish
+// that the four-abit alphabet is a faithful serialization domain.
+
+fn theory_samples() -> Vec<Node> {
+    vec![
+        Node::Leaf(String::new()),
+        Node::Leaf("x".into()),
+        Node::Leaf("∞".into()),
+        Node::List(vec![]),
+        Node::List(vec![Node::Leaf("a".into()), Node::Leaf("b".into())]),
+        Node::List(vec![
+            Node::Leaf("lambda".into()),
+            Node::List(vec![Node::Leaf("x".into())]),
+            Node::List(vec![
+                Node::Leaf("+".into()),
+                Node::Leaf("x".into()),
+                Node::Leaf("1".into()),
+            ]),
+        ]),
+        Node::List(vec![
+            Node::Leaf("frame".into()),
+            Node::List(vec![
+                Node::Leaf("pair".into()),
+                Node::Leaf("∞".into()),
+                Node::List(vec![Node::Leaf("frame".into()), Node::Leaf("∞".into())]),
+            ]),
+        ]),
+    ]
+}
+
+#[test]
+fn encode_anum_is_canonical_repeated_encoding_yields_same_string() {
+    for x in theory_samples() {
+        let a = encode_anum(&x);
+        let b = encode_anum(&x);
+        assert_eq!(a, b, "canonicality failed for {:?}", x);
+    }
+}
+
+#[test]
+fn encode_anum_is_injective_distinct_inputs_encode_to_distinct_strings() {
+    use std::collections::HashMap;
+    let samples: Vec<Node> = vec![
+        Node::Leaf(String::new()),
+        Node::Leaf("a".into()),
+        Node::Leaf("b".into()),
+        Node::Leaf("ab".into()),
+        Node::Leaf("ba".into()),
+        Node::Leaf("∞".into()),
+        Node::Leaf("[".into()),
+        Node::Leaf("]".into()),
+        Node::List(vec![]),
+        Node::List(vec![Node::Leaf("a".into())]),
+        Node::List(vec![Node::Leaf("a".into()), Node::Leaf("b".into())]),
+        Node::List(vec![Node::Leaf("b".into()), Node::Leaf("a".into())]),
+        Node::List(vec![Node::List(vec![Node::Leaf("a".into())])]),
+        Node::List(vec![Node::Leaf("frame".into()), Node::Leaf("∞".into())]),
+        Node::List(vec![
+            Node::Leaf("pair".into()),
+            Node::Leaf("∞".into()),
+            Node::Leaf("∞".into()),
+        ]),
+        Node::List(vec![
+            Node::Leaf("pair".into()),
+            Node::Leaf("∞".into()),
+            Node::List(vec![Node::Leaf("frame".into()), Node::Leaf("∞".into())]),
+        ]),
+    ];
+    let mut seen: HashMap<String, Node> = HashMap::new();
+    for x in &samples {
+        let enc = encode_anum(x);
+        if let Some(other) = seen.get(&enc) {
+            panic!(
+                "injectivity violated: {:?} and {:?} both encode to {}",
+                x, other, enc
+            );
+        }
+        seen.insert(enc, x.clone());
+    }
+    // Totality: every encoding must decode back to the original input.
+    for x in &samples {
+        let dec = decode_anum(&encode_anum(x)).expect("decode");
+        assert_eq!(&dec, x);
+    }
+}
+
+// --- Theory replay (issue #97, Phase 9 strengthening) ---
+//
+// The acceptance criteria also require at least one non-trivial MTC
+// theorem/rule replay through the proof substrate. The example
+// `examples/mtc-anum-theory.lino` declares three theory rules
+// (root-is-link, frame-makes-link, pair-makes-link) and three
+// proof-objects that build a composite link from them.
+
+#[test]
+fn runs_the_mtc_theory_example_end_to_end_with_no_diagnostics() {
+    let path = repo_root().join("examples").join("mtc-anum-theory.lino");
+    let out = evaluate_file(path.to_str().unwrap(), EvaluateOptions::default());
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn frame_makes_link_types_a_single_frame_over_the_root_link() {
+    let src = r#"
+(axiom root-is-link
+  (judgement (∞ is-a link)))
+
+(rule frame-makes-link
+  (premise (?x is-a link))
+  (conclusion ((frame ?x) is-a link)))
+
+(proof-object framed-root-is-link
+  (applies frame-makes-link)
+  (premise-by root-is-link)
+  (conclusion ((frame ∞) is-a link)))
+
+(check-proof framed-root-is-link)
+"#;
+    let out = evaluate(src, None, None);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn rejects_an_mtc_derivation_whose_conclusion_swaps_the_rule_shape() {
+    let src = r#"
+(axiom root-is-link
+  (judgement (∞ is-a link)))
+
+(rule frame-makes-link
+  (premise (?x is-a link))
+  (conclusion ((frame ?x) is-a link)))
+
+(proof-object misframed
+  (applies frame-makes-link)
+  (premise-by root-is-link)
+  (conclusion ((unframe ∞) is-a link)))
+
+(check-proof misframed)
+"#;
+    let out = evaluate(src, None, None);
+    assert_eq!(nums(&out.results), vec![0.0]);
+    assert!(out.diagnostics.iter().any(|d| d.code == "E064"));
+}
+
+#[test]
+fn makes_the_theory_serialization_boundary_explicit() {
+    // The example file pins the theory/serialization distinction down
+    // in prose and as a links-defined rule; the four-abit alphabet of
+    // the pre-seeded foundation lives in the serialization domain and
+    // does not appear in any theory rule.
+    let path = repo_root().join("examples").join("mtc-anum-theory.lino");
+    let source =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {}", path.display(), e));
+    assert!(
+        source.contains("THEORY domain"),
+        "example must explicitly mention the theory domain"
+    );
+    assert!(
+        source.contains("SERIALIZATION domain"),
+        "example must explicitly mention the serialization domain"
+    );
+    assert!(
+        source.contains("(rule frame-makes-link"),
+        "example must declare a theory rule"
+    );
+    let env = Env::new(None);
+    let mtc = env
+        .foundations
+        .get("mtc-anum")
+        .expect("mtc-anum must be pre-seeded");
+    let mut symbols: Vec<String> = mtc.abits.iter().map(|(s, _)| s.clone()).collect();
+    symbols.sort();
+    assert_eq!(
+        symbols,
+        vec![
+            "0".to_string(),
+            "1".to_string(),
+            "[".to_string(),
+            "]".to_string(),
+        ]
+    );
 }

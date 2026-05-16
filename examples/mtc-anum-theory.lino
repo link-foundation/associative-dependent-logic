@@ -1,0 +1,80 @@
+# Links-defined MTC theory fragment (issue #97, Phase 9 — extension).
+#
+# The `mtc-anum` foundation pre-seeded by both engines is *two* things
+# at once, and this example exists to keep that distinction visible:
+#
+#   * THEORY domain — the Metatheory of Categories of links. The
+#     axioms and rules below speak about links themselves: the root
+#     link `∞`, frames `(frame x)` that wrap a link, and pairs
+#     `(pair x y)` that combine two links.
+#
+#   * SERIALIZATION domain — the four-abit alphabet `[`, `]`, `0`,
+#     `1` consumed by `encodeAnum`/`decodeAnum` (JS) and `encode_anum`
+#     / `decode_anum` (Rust). It is a representation, not a theory:
+#     `decodeAnum(encodeAnum(x)) == x` is a *serialization* invariant,
+#     not an MTC theorem.
+#
+# Phase 9's original deliverable only wired up the serialization
+# domain. Acceptance criterion 7 from the PR review asks the
+# foundation to also publish axioms/rules expressed as links and to
+# replay at least one non-trivial MTC theorem. This file supplies the
+# three rules and three proof-objects below; the companion tests
+# `js/tests/mtc-anum.test.mjs` and `rust/tests/mtc_anum_tests.rs`
+# additionally pin down the canonicality and injectivity invariants
+# of the serialization domain.
+#
+# `is-a` is a bare identifier in the proof substrate; the metavariable
+# pattern matcher treats it as a literal, so a judgement of the shape
+# `((frame ∞) is-a link)` is checked by structural unification against
+# the rule's conclusion.
+#
+# See: docs/case-studies/issue-97/README.md §9.7.
+
+
+# --- MTC theory: links, frames, and pairs ---
+
+(axiom root-is-link
+  (judgement (∞ is-a link)))
+
+(rule frame-makes-link
+  (premise (?x is-a link))
+  (conclusion ((frame ?x) is-a link)))
+
+(rule pair-makes-link
+  (premise (?x is-a link))
+  (premise (?y is-a link))
+  (conclusion ((pair ?x ?y) is-a link)))
+
+
+# --- Theorem 1: a single frame around the root is a link ---
+
+(proof-object framed-root-is-link
+  (applies frame-makes-link)
+  (premise-by root-is-link)
+  (conclusion ((frame ∞) is-a link)))
+
+
+# --- Theorem 2: a pair of two root links is a link ---
+
+(proof-object paired-roots-are-link
+  (applies pair-makes-link)
+  (premise-by root-is-link)
+  (premise-by root-is-link)
+  (conclusion ((pair ∞ ∞) is-a link)))
+
+
+# --- Theorem 3 (composite): pairing a root with a framed root is a link ---
+#
+# This proof reuses `framed-root-is-link` as a premise, exercising the
+# proof-substrate's recursive justification check.
+
+(proof-object root-with-frame-is-link
+  (applies pair-makes-link)
+  (premise-by root-is-link)
+  (premise-by framed-root-is-link)
+  (conclusion ((pair ∞ (frame ∞)) is-a link)))
+
+
+(check-proof framed-root-is-link)
+(check-proof paired-roots-are-link)
+(check-proof root-with-frame-is-link)
