@@ -743,7 +743,19 @@ class Env {
         .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
       strictPureLinks: this.strictPureLinks === true,
       allowedHostPrimitives: [...this.allowedHostPrimitives].sort(),
+      dependencyGraph: buildDependencyGraph(this),
     };
+  }
+
+  // Return the transitive closure of a construct's dependencies, breadth-first
+  // and deterministically sorted at every level. Unknown construct names
+  // return `null`. Missing intermediate deps are silently skipped so a
+  // foundation that references a construct it has not yet registered can
+  // still report cleanly.
+  dependencyClosure(name) {
+    if (typeof name !== 'string' || !name) return null;
+    if (!this.rootConstructs.has(name)) return null;
+    return closureFor(this, name);
   }
 
   // ---------- Proof-object substrate (issue #97, Phase 3) ----------
@@ -824,6 +836,48 @@ function mergeRootConstructDescriptors(previous, next) {
   if (next.plannedAs !== undefined && next.plannedAs !== null) base.plannedAs = next.plannedAs;
   if (next.foundation !== undefined && next.foundation !== null) base.foundation = next.foundation;
   return base;
+}
+
+// ---------- Dependency graph traversal (issue #97, Phase 7) ----------
+//
+// Compute the transitive closure of a single root-construct's dependencies,
+// breadth-first. Missing intermediate deps are silently skipped so a
+// foundation that names a construct it has not yet registered still reports
+// a clean closure for everything it has registered. Returns `null` if the
+// root itself is unknown.
+function closureFor(env, name) {
+  if (!env.rootConstructs.has(name)) return null;
+  const seen = new Set();
+  const order = [];
+  const queue = [name];
+  while (queue.length > 0) {
+    const next = queue.shift();
+    if (seen.has(next)) continue;
+    seen.add(next);
+    if (next !== name) order.push(next);
+    const rc = env.rootConstructs.get(next);
+    if (!rc) continue;
+    const deps = Array.isArray(rc.dependsOn) ? rc.dependsOn.slice().sort() : [];
+    for (const dep of deps) {
+      if (!seen.has(dep)) queue.push(dep);
+    }
+  }
+  return order.sort();
+}
+
+// Build a `{ <name>: [<dep>, ...] }` map covering every registered
+// root-construct in deterministic, sorted order at every level. Constructs
+// with no dependencies map to an empty array so the trust audit can still
+// see them in the closure (callers can ignore them or trust them at face
+// value). This is the global dependency view, complementing
+// `dependencyClosure(name)` which gives a per-construct slice.
+function buildDependencyGraph(env) {
+  const entries = [...env.rootConstructs.keys()].sort();
+  const out = {};
+  for (const name of entries) {
+    out[name] = closureFor(env, name) || [];
+  }
+  return out;
 }
 
 function mergeFoundationDescriptors(previous, next) {
@@ -1297,6 +1351,20 @@ function formatFoundationReport(report) {
     lines.push('pure-links strict mode: on');
     if (Array.isArray(report.allowedHostPrimitives) && report.allowedHostPrimitives.length > 0) {
       lines.push(`  allowed host primitives: ${report.allowedHostPrimitives.join(', ')}`);
+    }
+  }
+  if (report.dependencyGraph && typeof report.dependencyGraph === 'object') {
+    const names = Object.keys(report.dependencyGraph).sort();
+    const nonEmpty = names.filter(n => {
+      const deps = report.dependencyGraph[n];
+      return Array.isArray(deps) && deps.length > 0;
+    });
+    if (nonEmpty.length > 0) {
+      lines.push('');
+      lines.push('dependency graph (transitive):');
+      for (const name of nonEmpty) {
+        lines.push(`  - ${name} → ${report.dependencyGraph[name].join(', ')}`);
+      }
     }
   }
   return lines.join('\n');
@@ -7875,4 +7943,5 @@ export {
   parseStrictFoundationForm,
   parseAllowHostPrimitiveForm,
   scanPureLinksOffenders,
+  buildDependencyGraph,
 };

@@ -1055,6 +1055,11 @@ pub struct FoundationReport {
     /// every host primitive that was explicitly allow-listed.
     pub strict_pure_links: bool,
     pub allowed_host_primitives: Vec<String>,
+    /// Dependency-graph traversal (issue #97, Phase 7). For every registered
+    /// root-construct, the transitive closure of its `depends_on` chain,
+    /// sorted deterministically. Leaf constructs map to an empty vector.
+    /// Pairs are kept sorted by name so the report is reproducible.
+    pub dependency_graph: Vec<(String, Vec<String>)>,
 }
 
 /// A declared rule of inference. Premises and the conclusion are stored as
@@ -1570,6 +1575,7 @@ impl Env {
         proof_objects.sort_by(|a, b| a.name.cmp(&b.name));
         let mut allowed: Vec<String> = self.allowed_host_primitives.iter().cloned().collect();
         allowed.sort();
+        let dependency_graph = build_dependency_graph(self);
         FoundationReport {
             active_foundation: active,
             description: foundation.as_ref().and_then(|f| f.description.clone()),
@@ -1582,7 +1588,24 @@ impl Env {
             proof_objects,
             strict_pure_links: self.strict_pure_links,
             allowed_host_primitives: allowed,
+            dependency_graph,
         }
+    }
+
+    /// Return the transitive closure of a construct's dependencies,
+    /// breadth-first and deterministically sorted at every level.
+    /// Missing intermediate deps are silently retained (so a downstream
+    /// caller can detect dangling names by intersecting against
+    /// `root_constructs.keys()`). Returns `None` if the root itself is
+    /// unknown.
+    pub fn dependency_closure(&self, name: &str) -> Option<Vec<String>> {
+        if name.is_empty() {
+            return None;
+        }
+        if !self.root_constructs.contains_key(name) {
+            return None;
+        }
+        Some(closure_for(self, name))
     }
 
     /// Register a declared rule of inference. Data-only.
@@ -2607,6 +2630,57 @@ fn merge_foundation_descriptors(
         }
     }
     base
+}
+
+// ---------- Dependency graph traversal (issue #97, Phase 7) ----------
+//
+// Compute the transitive closure of a single root-construct's dependencies,
+// breadth-first. Missing intermediate deps are silently retained (so the
+// final closure can surface dangling names for downstream tools to detect
+// against the registry). The traversal uses a seen-set so the helper does
+// not loop forever in the presence of cycles. The result is sorted so two
+// invocations against the same registry yield byte-identical output.
+fn closure_for(env: &Env, name: &str) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    queue.push_back(name.to_string());
+    while let Some(next) = queue.pop_front() {
+        if seen.contains(&next) {
+            continue;
+        }
+        seen.insert(next.clone());
+        if next != name {
+            order.push(next.clone());
+        }
+        if let Some(rc) = env.root_constructs.get(&next) {
+            let mut deps = rc.depends_on.clone();
+            deps.sort();
+            for dep in deps {
+                if !seen.contains(&dep) {
+                    queue.push_back(dep);
+                }
+            }
+        }
+    }
+    order.sort();
+    order
+}
+
+/// Build a `[(name, [dep, ...]), ...]` listing covering every registered
+/// root-construct in deterministic, sorted order at every level.
+/// Constructs with no dependencies map to an empty vector so the trust
+/// audit can still see them. Complement of `Env::dependency_closure(name)`
+/// which gives a per-construct slice.
+pub fn build_dependency_graph(env: &Env) -> Vec<(String, Vec<String>)> {
+    let mut names: Vec<String> = env.root_constructs.keys().cloned().collect();
+    names.sort();
+    let mut out: Vec<(String, Vec<String>)> = Vec::with_capacity(names.len());
+    for name in names {
+        let closure = closure_for(env, &name);
+        out.push((name, closure));
+    }
+    out
 }
 
 /// Seed the registry with the built-in descriptors that describe what the
@@ -3653,6 +3727,20 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
                 "  allowed host primitives: {}",
                 report.allowed_host_primitives.join(", ")
             ));
+        }
+    }
+    if !report.dependency_graph.is_empty() {
+        let non_empty: Vec<&(String, Vec<String>)> = report
+            .dependency_graph
+            .iter()
+            .filter(|(_, deps)| !deps.is_empty())
+            .collect();
+        if !non_empty.is_empty() {
+            lines.push(String::new());
+            lines.push("dependency graph (transitive):".to_string());
+            for (name, deps) in non_empty {
+                lines.push(format!("  - {} → {}", name, deps.join(", ")));
+            }
         }
     }
     lines.join("\n")
