@@ -213,12 +213,12 @@ files to the same suite — no workflow changes required:
 
 | Phase | JS test file | Rust test file |
 |-------|--------------|----------------|
-| 2 — equality provenance | `js/tests/equality-layer.test.mjs` | `rust/tests/equality_layer_tests.rs` |
-| 3 — proof-object replay | `js/tests/check-proof.test.mjs` | `rust/tests/check_proof_tests.rs` |
-| 4 — links-defined truth tables | `js/tests/truth-table.test.mjs` | `rust/tests/truth_table_tests.rs` |
+| 2 — equality provenance | `js/tests/foundations.test.mjs` (extended) | `rust/tests/foundations_tests.rs` (extended) |
+| 3 — proof-object replay | `js/tests/proof-substrate.test.mjs` | `rust/tests/proof_substrate_tests.rs` |
+| 4 — links-defined truth tables | `js/tests/foundations.test.mjs` (extended) | `rust/tests/foundations_tests.rs` (extended) |
 | 6 — pure-links strict mode | `js/tests/pure-links-strict.test.mjs` | `rust/tests/pure_links_strict_tests.rs` |
 | 7 — dependency-graph traversal | `js/tests/dependency-graph.test.mjs` | `rust/tests/dependency_graph_tests.rs` |
-| 8 — carrier enforcement | `js/tests/carrier.test.mjs` | `rust/tests/carrier_tests.rs` |
+| 8 — carrier enforcement | `js/tests/foundations.test.mjs` (extended) | `rust/tests/foundations_tests.rs` (extended) |
 | 9 — `mtc-anum` experimental profile | `js/tests/mtc-anum.test.mjs` | `rust/tests/mtc_anum_tests.rs` |
 
 All of these are picked up automatically by `npm test` and

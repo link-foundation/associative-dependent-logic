@@ -409,7 +409,7 @@ profile added a ninth. The status of each on PR #175:
 |-------|-------|--------|-------|
 | 1 | Inventory + reporting + scoped overrides | done | §4.1–§4.3; `docs/FOUNDATIONS.md` §2–§4 |
 | 2 | Equality and numeric-domain separation | done (registry-level) | `lib/self/foundations.lino` equality entries; trace-layer follow-up tracked |
-| 3 | Proof-object substrate (`(check-proof …)`) | done | `E064`; `js/tests/check-proof.test.mjs` + `rust/tests/check_proof_tests.rs` |
+| 3 | Proof-object substrate (`(check-proof …)`) | done | `E064`; `js/tests/proof-substrate.test.mjs` + `rust/tests/proof_substrate_tests.rs` |
 | 4 | Links-defined finite logics (Boolean, Kleene, truth-tables) | done | §4.4; `examples/foundation-boolean-kleene.lino`, `(truth-table …)` |
 | 5 | Links-defined type/proof kernel fragment | done (descriptor + dep-graph) | `lib/self/foundations.lino` typed-kernel entries |
 | 6 | Pure-links strict mode | done | `E065`; `(strict-foundation pure-links)` + `(allow-host-primitive …)` |
