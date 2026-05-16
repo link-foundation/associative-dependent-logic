@@ -265,3 +265,135 @@ describe('equality-layer provenance', () => {
     assert.strictEqual(equalityEvents[0].detail, 'structural-equality');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Carrier enforcement (issue #97, Section 2 of netkeep80's punch-list).
+//
+// Foundations may now declare an explicit `(carrier ...)` of legal values
+// and opt into runtime enforcement with `(strict-carrier)`. The check is
+// active only inside a `(with-foundation ...)` whose descriptor carries
+// both clauses, so legacy programs and foundations that omit either clause
+// stay backward-compatible.
+//
+// Violations emit `E063` diagnostics; they never silently coerce values.
+// ---------------------------------------------------------------------------
+describe('foundation carrier enforcement', () => {
+  it('parses `(carrier ...)` and `(strict-carrier)` onto the descriptor', () => {
+    const env = new Env();
+    const out = evaluate(`
+(foundation two-valued
+  (carrier 0 1)
+  (strict-carrier)
+  (defines and min)
+  (defines or max))
+`, { env });
+    assert.deepStrictEqual(out.diagnostics, []);
+    const descriptor = env.foundations.get('two-valued');
+    assert.ok(descriptor, 'foundation should be registered');
+    assert.deepStrictEqual(descriptor.carrier, ['0', '1']);
+    assert.strictEqual(descriptor.strictCarrier, true);
+  });
+
+  it('keeps `(carrier ...)` informational when `(strict-carrier)` is absent', () => {
+    const out = evaluate(`
+(foundation lax-two-valued (carrier 0 1) (defines and min) (defines or max))
+(a: a is a)
+((a = true) has probability 0.4)
+(with-foundation lax-two-valued
+  (? ((a = true) and (a = true))))
+`);
+    // No (strict-carrier) → backward compatible, no E063.
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [0.4]);
+  });
+
+  it('flags an out-of-carrier query result with E063', () => {
+    const out = evaluate(`
+(foundation two-valued (carrier 0 1) (strict-carrier)
+  (defines and min) (defines or max))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 1)
+((b = true) has probability 1)
+(with-foundation two-valued
+  (? ((a = true) and (b = true)))
+  (? ((a = true) or (b = false))))
+`);
+    // min(1,1)=1 and max(1,0)=1 → both legal → no diagnostics
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1, 1]);
+
+    const bad = evaluate(`
+(foundation two-valued (carrier 0 1) (strict-carrier))
+(a: a is a)
+((a = true) has probability 0.5)
+(with-foundation two-valued
+  (? (a = true)))
+`);
+    // The probability assignment runs OUTSIDE the with-foundation body so
+    // it is allowed; the query inside returns 0.5 → E063.
+    assert.strictEqual(bad.diagnostics.length, 1);
+    assert.strictEqual(bad.diagnostics[0].code, 'E063');
+    assert.deepStrictEqual(bad.results, [0.5]);
+  });
+
+  it('flags an out-of-carrier probability assignment with E063', () => {
+    const out = evaluate(`
+(foundation two-valued (carrier 0 1) (strict-carrier))
+(a: a is a)
+(with-foundation two-valued
+  ((a = true) has probability 0.5)
+  (? (a = true)))
+`);
+    // The probability assignment inside the strict foundation violates the
+    // carrier; the diagnostic is E063 and the assignment is rejected so the
+    // query falls back to the default symbol probability (0.5 = mid range).
+    assert.ok(out.diagnostics.some(d => d.code === 'E063'),
+      `expected an E063 diagnostic, got ${JSON.stringify(out.diagnostics)}`);
+  });
+
+  it('restores prior carrier on `exitFoundation` (nested scopes)', () => {
+    const env = new Env();
+    evaluate(`
+(foundation outer (carrier 0 1) (strict-carrier))
+(foundation inner (carrier 0 0.5 1) (strict-carrier))
+`, { env });
+    env.enterFoundation('outer');
+    assert.strictEqual(env._strictCarrier, true);
+    assert.deepStrictEqual([...env._carrier].sort(), [0, 1]);
+    env.enterFoundation('inner');
+    assert.deepStrictEqual([...env._carrier].sort(), [0, 0.5, 1]);
+    env.exitFoundation();
+    // Back to outer carrier.
+    assert.deepStrictEqual([...env._carrier].sort(), [0, 1]);
+    env.exitFoundation();
+    // Back to default — no carrier enforcement.
+    assert.strictEqual(env._strictCarrier, false);
+    assert.strictEqual(env._carrier, null);
+  });
+
+  it('exposes carrier and strictCarrier on `(foundation-report)`', () => {
+    const env = new Env();
+    evaluate(`
+(foundation two-valued (carrier 0 1) (strict-carrier))
+`, { env });
+    const report = env.foundationReport();
+    const tv = report.foundations.find(f => f.name === 'two-valued');
+    assert.ok(tv, 'two-valued should be reported');
+    assert.deepStrictEqual(tv.carrier, ['0', '1']);
+    assert.strictEqual(tv.strictCarrier, true);
+  });
+
+  it('does not enforce carrier at the top level (only inside `with-foundation`)', () => {
+    const out = evaluate(`
+(foundation two-valued (carrier 0 1) (strict-carrier))
+(a: a is a)
+((a = true) has probability 0.5)
+(? (a = true))
+`);
+    // Carrier strictness lives inside the foundation; declaring the
+    // foundation alone must not break ordinary programs.
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [0.5]);
+  });
+});

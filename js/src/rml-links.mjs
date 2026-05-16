@@ -295,6 +295,12 @@ class Env {
     this.foundations = new Map();
     this.activeFoundation = 'default-rml';
     this._foundationStack = [];                 // for nested (with-foundation ...)
+    // Carrier enforcement state (issue #97, Section 2). Off by default so
+    // legacy programs are not constrained; flipped on by an enclosing
+    // `(with-foundation <name>)` whose descriptor includes `(strict-carrier)`.
+    this._strictCarrier = false;
+    this._carrier = null;
+    this._carrierLabel = null;
     this._registerDefaultFoundation();
     // Optional tracer: when set, key evaluation events (operator resolutions,
     // assignment lookups, top-level reductions) are pushed via `trace(kind, detail)`.
@@ -565,13 +571,41 @@ class Env {
         this.ops.set(opName, fn);
       }
     }
-    this._foundationStack.push({ name: this.activeFoundation, snapshot });
+    // Carrier snapshot for opt-in enforcement (issue #97, Section 2 of
+    // netkeep80's punch-list). `_strictCarrier` is what the evaluator hot
+    // path checks; `_carrier` is the resolved numeric set.
+    const carrierFrame = {
+      strictCarrier: this._strictCarrier === true,
+      carrier: this._carrier instanceof Set ? new Set(this._carrier) : null,
+      carrierLabel: this._carrierLabel || null,
+    };
+    if (foundation.strictCarrier === true && Array.isArray(foundation.carrier) && foundation.carrier.length > 0) {
+      this._strictCarrier = true;
+      this._carrier = new Set();
+      this._carrierLabel = foundation.carrier.join(' ');
+      for (const tok of foundation.carrier) {
+        const num = Number(tok);
+        if (Number.isFinite(num)) {
+          this._carrier.add(num);
+          continue;
+        }
+        // Symbolic carrier values (`true`, `false`, `unknown`, ...) resolve
+        // through `symbolProb` so user-defined truth constants flow in.
+        if (this.symbolProb.has(tok)) {
+          this._carrier.add(this.symbolProb.get(tok));
+        }
+      }
+    }
+    this._foundationStack.push({ name: this.activeFoundation, snapshot, carrierFrame });
     this.activeFoundation = name;
   }
 
   exitFoundation() {
     if (this._foundationStack.length === 0) {
       this.activeFoundation = 'default-rml';
+      this._strictCarrier = false;
+      this._carrier = null;
+      this._carrierLabel = null;
       return;
     }
     const frame = this._foundationStack.pop();
@@ -584,7 +618,29 @@ class Env {
         }
       }
     }
+    if (frame && frame.carrierFrame) {
+      this._strictCarrier = frame.carrierFrame.strictCarrier === true;
+      this._carrier = frame.carrierFrame.carrier instanceof Set ? frame.carrierFrame.carrier : null;
+      this._carrierLabel = frame.carrierFrame.carrierLabel || null;
+    } else {
+      this._strictCarrier = false;
+      this._carrier = null;
+      this._carrierLabel = null;
+    }
     this.activeFoundation = frame && typeof frame.name === 'string' ? frame.name : 'default-rml';
+  }
+
+  // Check `value` against the active foundation's carrier. Returns null when
+  // the carrier is inactive or the value is legal, or a human-readable
+  // message otherwise (consumed by the caller to build an E063 diagnostic).
+  checkCarrierValue(value) {
+    if (this._strictCarrier !== true || !(this._carrier instanceof Set) || this._carrier.size === 0) {
+      return null;
+    }
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    if (this._carrier.has(value)) return null;
+    const allowed = [...this._carrier].sort((a, b) => a - b).join(', ');
+    return `value ${formatTraceValue(value)} is not in active carrier {${allowed}}`;
   }
 
   // Build a structured trust / foundation report. The shape is intentionally
@@ -627,6 +683,8 @@ class Env {
         extends: f.extends || null,
         numericDomain: f.numericDomain || null,
         truthDomain: f.truthDomain || null,
+        carrier: Array.isArray(f.carrier) ? f.carrier.slice() : null,
+        strictCarrier: f.strictCarrier === true,
       })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
     };
   }
@@ -682,6 +740,8 @@ function mergeFoundationDescriptors(previous, next) {
     extends: previous.extends || null,
     numericDomain: previous.numericDomain || null,
     truthDomain: previous.truthDomain || null,
+    carrier: Array.isArray(previous.carrier) ? previous.carrier.slice() : null,
+    strictCarrier: previous.strictCarrier === true,
   } : {
     name: next.name,
     description: null,
@@ -690,6 +750,8 @@ function mergeFoundationDescriptors(previous, next) {
     extends: null,
     numericDomain: null,
     truthDomain: null,
+    carrier: null,
+    strictCarrier: false,
   };
   base.name = next.name;
   if (next.description) base.description = next.description;
@@ -705,6 +767,14 @@ function mergeFoundationDescriptors(previous, next) {
   if (next.extends) base.extends = next.extends;
   if (next.numericDomain) base.numericDomain = next.numericDomain;
   if (next.truthDomain) base.truthDomain = next.truthDomain;
+  // Carrier (issue #97): the explicit set of values legal inside the
+  // foundation; opt-in enforcement is controlled by `strictCarrier`. A
+  // later registration with the same name replaces the carrier list but
+  // only flips `strictCarrier` to true (never silently back off).
+  if (Array.isArray(next.carrier) && next.carrier.length > 0) {
+    base.carrier = next.carrier.slice();
+  }
+  if (next.strictCarrier === true) base.strictCarrier = true;
   return base;
 }
 
@@ -923,6 +993,23 @@ function parseFoundationForm(node) {
           throw new RmlError('E061', '(truth-domain ...) requires one name');
         }
         foundation.truthDomain = rest[0];
+        break;
+      case 'carrier':
+        // `(carrier <val1> <val2> ...)` — list the values that the active
+        // foundation considers legal. Each value is kept as a string so
+        // `enterFoundation` can resolve symbolic constants (`true`, `false`,
+        // `unknown`) through `env.symbolProb` at activation time. Numeric
+        // literals stay literal.
+        if (rest.length === 0) {
+          throw new RmlError('E061', '(carrier ...) requires at least one value');
+        }
+        foundation.carrier = rest.map(t => Array.isArray(t) ? keyOf(t) : String(t));
+        break;
+      case 'strict-carrier':
+        // `(strict-carrier)` opts the foundation into runtime enforcement.
+        // Without this clause, `(carrier ...)` is informational only and the
+        // evaluator stays backward-compatible.
+        foundation.strictCarrier = true;
         break;
       case 'description':
         foundation.description = rest.map(t => Array.isArray(t) ? keyOf(t) : String(t)).join(' ');
@@ -4423,6 +4510,17 @@ function evalNode(node, env){
   // Assignment: ((expr) has probability p)
   if (node.length === 4 && node[1] === 'has' && node[2] === 'probability' && isNum(node[3])) {
     const p = parseFloat(node[3]);
+    // Carrier enforcement (issue #97, Section 2): if an enclosing
+    // `(with-foundation ...)` declared a strict carrier, the assigned value
+    // must belong to that carrier. Violations surface as E063 instead of
+    // being silently clamped.
+    const carrierErr = env.checkCarrierValue(env.clamp(p));
+    if (carrierErr) {
+      throw new RmlError(
+        'E063',
+        `Probability assignment ${keyOf(node[0])} = ${formatTraceValue(env.clamp(p))} violates active foundation carrier: ${carrierErr}`,
+      );
+    }
     env.setExprProb(node[0], p);
     env.trace('assign', `${keyOf(node[0])} ← ${formatTraceValue(env.clamp(p))}`);
     return env.toNum(node[3]);
@@ -5659,6 +5757,14 @@ function evaluate(code, options) {
               results.push(res.value);
               if (proofs !== null) proofs.push(null);
               recordProvenance(expanded, span);
+              const carrierErr = env.checkCarrierValue(res.value);
+              if (carrierErr) {
+                diagnostics.push(new Diagnostic({
+                  code: 'E063',
+                  message: `Query result ${formatTraceValue(res.value)} violates active foundation carrier: ${carrierErr}`,
+                  span,
+                }));
+              }
             }
           }
         } catch (innerErr) {
@@ -5840,6 +5946,14 @@ function evaluate(code, options) {
           proofs.push(null);
         }
         recordProvenance(expandedForm, span);
+        const carrierErr = env.checkCarrierValue(res.value);
+        if (carrierErr) {
+          diagnostics.push(new Diagnostic({
+            code: 'E063',
+            message: `Query result ${formatTraceValue(res.value)} violates active foundation carrier: ${carrierErr}`,
+            span,
+          }));
+        }
       }
     } catch (err) {
       const diagSpan = (err && err.span) || span;
