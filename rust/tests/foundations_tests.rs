@@ -419,3 +419,210 @@ fn provenance_emits_equality_layer_trace_event_per_classified_query() {
     assert_eq!(equality_events.len(), 1);
     assert_eq!(equality_events[0].detail, "structural-equality");
 }
+
+// ---------------------------------------------------------------------------
+// Carrier enforcement (issue #97, Section 2 of netkeep80's punch-list).
+// Mirrors `js/tests/foundations.test.mjs > 'foundation carrier enforcement'`.
+//
+// A foundation may now declare `(carrier <v1> <v2> ...)` to list its legal
+// values and `(strict-carrier)` to opt into runtime enforcement. The check
+// is active only inside a `(with-foundation ...)` whose descriptor carries
+// both clauses; legacy programs and foundations that omit either clause stay
+// backward-compatible. Violations emit `E063` diagnostics; they never
+// silently coerce values.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn carrier_parses_carrier_and_strict_carrier_onto_descriptor() {
+    let mut env = Env::new(None);
+    let out = evaluate_with_env(
+        r#"
+(foundation two-valued
+  (carrier 0 1)
+  (strict-carrier)
+  (defines and min)
+  (defines or max))
+"#,
+        None,
+        &mut env,
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+    let descriptor = env
+        .get_foundation("two-valued")
+        .expect("foundation should be registered");
+    assert_eq!(descriptor.carrier, vec!["0".to_string(), "1".to_string()]);
+    assert!(descriptor.strict_carrier);
+}
+
+#[test]
+fn carrier_stays_informational_without_strict_carrier() {
+    let out = evaluate(
+        r#"
+(foundation lax-two-valued (carrier 0 1) (defines and min) (defines or max))
+(a: a is a)
+((a = true) has probability 0.4)
+(with-foundation lax-two-valued
+  (? ((a = true) and (a = true))))
+"#,
+        None,
+        None,
+    );
+    // No (strict-carrier) -> backward compatible, no E063.
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![0.4]);
+}
+
+#[test]
+fn carrier_flags_out_of_carrier_query_result_with_e063() {
+    let ok = evaluate(
+        r#"
+(foundation two-valued (carrier 0 1) (strict-carrier)
+  (defines and min) (defines or max))
+(a: a is a)
+(b: b is b)
+((a = true) has probability 1)
+((b = true) has probability 1)
+(with-foundation two-valued
+  (? ((a = true) and (b = true)))
+  (? ((a = true) or (b = false))))
+"#,
+        None,
+        None,
+    );
+    // min(1,1)=1 and max(1,0)=1 -> both legal -> no diagnostics.
+    assert!(
+        ok.diagnostics.is_empty(),
+        "unexpected diagnostics on in-carrier values: {:?}",
+        ok.diagnostics
+    );
+    assert_eq!(nums(&ok.results), vec![1.0, 1.0]);
+
+    let bad = evaluate(
+        r#"
+(foundation two-valued (carrier 0 1) (strict-carrier))
+(a: a is a)
+((a = true) has probability 0.5)
+(with-foundation two-valued
+  (? (a = true)))
+"#,
+        None,
+        None,
+    );
+    // The probability assignment runs OUTSIDE the with-foundation body so it
+    // is allowed; the query inside returns 0.5 -> E063.
+    let codes: Vec<&str> = bad.diagnostics.iter().map(|d| d.code.as_str()).collect();
+    assert!(
+        codes.contains(&"E063"),
+        "expected an E063 diagnostic, got {:?}",
+        bad.diagnostics
+    );
+    assert_eq!(nums(&bad.results), vec![0.5]);
+}
+
+#[test]
+fn carrier_flags_out_of_carrier_probability_assignment_with_e063() {
+    let out = evaluate(
+        r#"
+(foundation two-valued (carrier 0 1) (strict-carrier))
+(a: a is a)
+(with-foundation two-valued
+  ((a = true) has probability 0.5)
+  (? (a = true)))
+"#,
+        None,
+        None,
+    );
+    // The probability assignment inside the strict foundation violates the
+    // carrier; the diagnostic is E063 and the assignment is rejected so the
+    // query falls back to the default symbol probability.
+    let codes: Vec<&str> = out.diagnostics.iter().map(|d| d.code.as_str()).collect();
+    assert!(
+        codes.contains(&"E063"),
+        "expected an E063 diagnostic, got {:?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn carrier_is_restored_on_exit_foundation_for_nested_scopes() {
+    let mut env = Env::new(None);
+    let out = evaluate_with_env(
+        r#"
+(foundation outer (carrier 0 1) (strict-carrier))
+(foundation inner (carrier 0 0.5 1) (strict-carrier))
+"#,
+        None,
+        &mut env,
+    );
+    assert!(out.diagnostics.is_empty());
+    env.enter_foundation("outer").expect("enter outer");
+    assert!(env.strict_carrier);
+    let mut outer_carrier = env.carrier.clone().expect("carrier should be set");
+    outer_carrier.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(outer_carrier, vec![0.0, 1.0]);
+
+    env.enter_foundation("inner").expect("enter inner");
+    let mut inner_carrier = env.carrier.clone().expect("carrier should be set");
+    inner_carrier.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(inner_carrier, vec![0.0, 0.5, 1.0]);
+
+    env.exit_foundation();
+    let mut back_outer = env.carrier.clone().expect("carrier should be set");
+    back_outer.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(back_outer, vec![0.0, 1.0]);
+
+    env.exit_foundation();
+    assert!(!env.strict_carrier);
+    assert!(env.carrier.is_none());
+}
+
+#[test]
+fn carrier_is_exposed_on_foundation_report() {
+    let mut env = Env::new(None);
+    let out = evaluate_with_env(
+        r#"
+(foundation two-valued (carrier 0 1) (strict-carrier))
+"#,
+        None,
+        &mut env,
+    );
+    assert!(out.diagnostics.is_empty());
+    let report = env.foundation_report();
+    let tv = report
+        .foundations
+        .iter()
+        .find(|f| f.name == "two-valued")
+        .expect("two-valued should be reported");
+    assert_eq!(tv.carrier, vec!["0".to_string(), "1".to_string()]);
+    assert!(tv.strict_carrier);
+}
+
+#[test]
+fn carrier_is_not_enforced_at_the_top_level() {
+    let out = evaluate(
+        r#"
+(foundation two-valued (carrier 0 1) (strict-carrier))
+(a: a is a)
+((a = true) has probability 0.5)
+(? (a = true))
+"#,
+        None,
+        None,
+    );
+    // Carrier strictness lives inside the foundation; declaring the
+    // foundation alone must not break ordinary programs.
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics at top level: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![0.5]);
+}

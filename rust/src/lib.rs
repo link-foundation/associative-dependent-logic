@@ -898,17 +898,29 @@ pub struct Env {
     pub foundations: HashMap<String, FoundationDescriptor>,
     pub active_foundation: String,
     pub foundation_stack: Vec<FoundationFrame>,
+    /// Carrier enforcement state (issue #97, Section 2). Off by default so
+    /// legacy programs are not constrained; flipped on by an enclosing
+    /// `(with-foundation <name>)` whose descriptor includes both
+    /// `(carrier ...)` and `(strict-carrier)` clauses.
+    pub strict_carrier: bool,
+    pub carrier: Option<Vec<f64>>,
+    pub carrier_label: Option<String>,
 }
 
 /// Stack frame pushed when entering a foundation scope. Stores the previous
 /// active foundation name plus a snapshot of any operators the foundation
 /// rebinds, so `exit_foundation` can restore the prior semantics exactly.
 /// `snapshot` maps operator name -> previous Op (None if the op did not
-/// exist before).
+/// exist before). Carrier snapshot fields (issue #97 Section 2) preserve the
+/// strict-carrier state of the enclosing scope so nested `(with-foundation
+/// ...)` bodies roll back cleanly when their inner scope exits.
 #[derive(Debug, Clone)]
 pub struct FoundationFrame {
     pub previous_active: String,
     pub snapshot: Vec<(String, Option<Op>)>,
+    pub previous_strict_carrier: bool,
+    pub previous_carrier: Option<Vec<f64>>,
+    pub previous_carrier_label: Option<String>,
 }
 
 /// A root-construct descriptor. Stored on the `Env` for the foundation
@@ -942,6 +954,18 @@ pub struct FoundationDescriptor {
     pub extends: Option<String>,
     pub numeric_domain: Option<String>,
     pub truth_domain: Option<String>,
+    /// Carrier (issue #97, Section 2): the explicit set of values the
+    /// foundation considers legal for queries and probability assignments.
+    /// Each entry is stored as a string so `enter_foundation` can resolve
+    /// symbolic constants (`true`, `false`, `unknown`) through
+    /// `env.symbol_prob` at activation time. Numeric literals stay literal.
+    pub carrier: Vec<String>,
+    /// When true, the active `with-foundation` scope enforces the carrier
+    /// at runtime: out-of-carrier query results and probability
+    /// assignments raise an `E063` diagnostic instead of being silently
+    /// clamped. Defaults to `false` for backward compatibility — declaring
+    /// `(carrier ...)` alone is informational.
+    pub strict_carrier: bool,
 }
 
 /// Snapshot of the foundation/root-construct state for the trust report.
@@ -1105,6 +1129,9 @@ impl Env {
             foundations: HashMap::new(),
             active_foundation: "default-rml".to_string(),
             foundation_stack: Vec::new(),
+            strict_carrier: false,
+            carrier: None,
+            carrier_label: None,
         };
 
         // Initialize truth constants: true, false, unknown, undefined
@@ -1178,6 +1205,8 @@ impl Env {
             extends: None,
             numeric_domain: Some("decimal-12".to_string()),
             truth_domain: Some("default-truth".to_string()),
+            carrier: Vec::new(),
+            strict_carrier: false,
         };
         self.foundations.insert(default.name.clone(), default);
         seed_builtin_root_constructs(self);
@@ -1241,9 +1270,37 @@ impl Env {
                 self.ops.insert(op_name.clone(), Op::Agg(agg));
             }
         }
+        // Carrier snapshot for opt-in enforcement (issue #97, Section 2).
+        // `strict_carrier` is what the evaluator hot path checks; `carrier`
+        // is the resolved numeric set. Symbolic carrier values (`true`,
+        // `false`, `unknown`, ...) resolve through `symbol_prob` so
+        // user-defined truth constants flow in.
+        let previous_strict_carrier = self.strict_carrier;
+        let previous_carrier = self.carrier.clone();
+        let previous_carrier_label = self.carrier_label.clone();
+        if foundation.strict_carrier && !foundation.carrier.is_empty() {
+            let mut resolved: Vec<f64> = Vec::new();
+            for tok in &foundation.carrier {
+                if let Ok(num) = tok.parse::<f64>() {
+                    if num.is_finite() {
+                        resolved.push(num);
+                        continue;
+                    }
+                }
+                if let Some(p) = self.symbol_prob.get(tok) {
+                    resolved.push(*p);
+                }
+            }
+            self.strict_carrier = true;
+            self.carrier = Some(resolved);
+            self.carrier_label = Some(foundation.carrier.join(" "));
+        }
         let frame = FoundationFrame {
             previous_active: std::mem::take(&mut self.active_foundation),
             snapshot,
+            previous_strict_carrier,
+            previous_carrier,
+            previous_carrier_label,
         };
         self.foundation_stack.push(frame);
         self.active_foundation = name.to_string();
@@ -1263,9 +1320,43 @@ impl Env {
                 }
             }
             self.active_foundation = frame.previous_active;
+            self.strict_carrier = frame.previous_strict_carrier;
+            self.carrier = frame.previous_carrier;
+            self.carrier_label = frame.previous_carrier_label;
         } else {
             self.active_foundation = "default-rml".to_string();
+            self.strict_carrier = false;
+            self.carrier = None;
+            self.carrier_label = None;
         }
+    }
+
+    /// Check `value` against the active foundation's carrier. Returns `None`
+    /// when the carrier is inactive or the value is legal, or a
+    /// human-readable message otherwise (consumed by the caller to build an
+    /// `E063` diagnostic). Mirrors the JS `Env.checkCarrierValue` helper.
+    pub fn check_carrier_value(&self, value: f64) -> Option<String> {
+        if !self.strict_carrier {
+            return None;
+        }
+        let carrier = self.carrier.as_ref()?;
+        if carrier.is_empty() {
+            return None;
+        }
+        if !value.is_finite() {
+            return None;
+        }
+        if carrier.iter().any(|c| (*c - value).abs() < 1e-12) {
+            return None;
+        }
+        let mut sorted = carrier.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let allowed: Vec<String> = sorted.iter().map(|v| format_trace_value(*v)).collect();
+        Some(format!(
+            "value {} is not in active carrier {{{}}}",
+            format_trace_value(value),
+            allowed.join(", ")
+        ))
     }
 
     pub fn foundation_report(&self) -> FoundationReport {
@@ -2174,6 +2265,15 @@ fn merge_foundation_descriptors(
     if next.truth_domain.is_some() {
         base.truth_domain = next.truth_domain;
     }
+    // Carrier (issue #97 Section 2): a later registration with the same name
+    // replaces the carrier list but only flips `strict_carrier` to true
+    // (never silently back off).
+    if !next.carrier.is_empty() {
+        base.carrier = next.carrier;
+    }
+    if next.strict_carrier {
+        base.strict_carrier = true;
+    }
     base
 }
 
@@ -2420,28 +2520,26 @@ fn parse_foundation_form(node: &Node) -> Result<FoundationDescriptor, String> {
         ..Default::default()
     };
     for child in &children[2..] {
-        let clause = match child {
-            Node::List(items) => items,
+        // LiNo collapses single-element parenthesized clauses such as
+        // `(strict-carrier)` into a bare `Leaf("strict-carrier")` because
+        // `Link::to_string()` strips the parens around a single token.
+        // Treat a bare leaf as a zero-argument clause.
+        let (key, rest): (&str, Vec<&Node>) = match child {
+            Node::Leaf(s) if !s.is_empty() => (s.as_str(), Vec::new()),
+            Node::List(items) if !items.is_empty() => match &items[0] {
+                Node::Leaf(s) => (s.as_str(), items.iter().skip(1).collect()),
+                _ => {
+                    return Err(
+                        "foundation child clauses must be lists led by a keyword".to_string(),
+                    );
+                }
+            },
             _ => {
                 return Err(
                     "foundation child clauses must be lists led by a keyword".to_string(),
                 );
             }
         };
-        if clause.is_empty() {
-            return Err(
-                "foundation child clauses must be lists led by a keyword".to_string(),
-            );
-        }
-        let key = match &clause[0] {
-            Node::Leaf(s) => s.as_str(),
-            _ => {
-                return Err(
-                    "foundation child clauses must be lists led by a keyword".to_string(),
-                );
-            }
-        };
-        let rest: Vec<&Node> = clause.iter().skip(1).collect();
         match key {
             "uses" => {
                 for r in &rest {
@@ -2504,6 +2602,24 @@ fn parse_foundation_form(node: &Node) -> Result<FoundationDescriptor, String> {
                 } else {
                     return Err("(truth-domain …) requires one name".to_string());
                 }
+            }
+            "carrier" => {
+                // `(carrier <val1> <val2> ...)` — list the values the active
+                // foundation considers legal. Each value is kept as a string
+                // so `enter_foundation` can resolve symbolic constants
+                // (`true`, `false`, `unknown`) through `env.symbol_prob` at
+                // activation time. Numeric literals stay literal.
+                if rest.is_empty() {
+                    return Err("(carrier ...) requires at least one value".to_string());
+                }
+                foundation.carrier = rest.iter().map(|n| key_of(n)).collect();
+            }
+            "strict-carrier" => {
+                // `(strict-carrier)` opts the foundation into runtime
+                // enforcement. Without this clause, `(carrier ...)` is
+                // informational only and the evaluator stays
+                // backward-compatible.
+                foundation.strict_carrier = true;
             }
             "description" => {
                 foundation.description = Some(
@@ -7984,9 +8100,24 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 {
                     if w1 == "has" && w2 == "probability" && is_num(w3) {
                         let p: f64 = w3.parse().unwrap_or(0.0);
+                        // Carrier enforcement (issue #97, Section 2): if an
+                        // enclosing `(with-foundation ...)` declared a strict
+                        // carrier, the assigned value must belong to that
+                        // carrier. Violations surface as E063 instead of
+                        // being silently clamped. We panic with a
+                        // "Carrier violation:" prefix so the surrounding
+                        // catch_unwind translates it to a Diagnostic.
+                        let clamped = env.clamp(p);
+                        if let Some(msg) = env.check_carrier_value(clamped) {
+                            panic!(
+                                "Carrier violation: Probability assignment {} = {} violates active foundation carrier: {}",
+                                key_of(&children[0]),
+                                format_trace_value(clamped),
+                                msg
+                            );
+                        }
                         env.set_expr_prob(&children[0], p);
                         let key = key_of(&children[0]);
-                        let clamped = env.clamp(p);
                         env.trace(
                             "assign",
                             format!("{} ← {}", key, format_trace_value(clamped)),
@@ -10130,6 +10261,11 @@ fn eval_foundation_body_form(
         Ok((expanded, eval_res)) => {
             let was_query =
                 matches!(eval_res, EvalResult::Query(_) | EvalResult::TypeQuery(_));
+            let query_value = if let EvalResult::Query(v) = &eval_res {
+                Some(*v)
+            } else {
+                None
+            };
             match eval_res {
                 EvalResult::Query(v) => results.push(RunResult::Num(v)),
                 EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
@@ -10141,6 +10277,24 @@ fn eval_foundation_body_form(
                 }
                 let prov = equality_provenance_for_query(&expanded, env);
                 record_provenance(provenance, results.len(), prov, env, &expanded, span, options);
+                // Carrier enforcement (issue #97 Section 2): when the active
+                // foundation strict-carrier is on, a numeric query result
+                // outside the carrier produces an E063 diagnostic alongside
+                // the value, so the trace stays explainable without losing
+                // the result.
+                if let Some(v) = query_value {
+                    if let Some(msg) = env.check_carrier_value(v) {
+                        diagnostics.push(Diagnostic::new(
+                            "E063",
+                            format!(
+                                "Query result {} violates active foundation carrier: {}",
+                                format_trace_value(v),
+                                msg
+                            ),
+                            span.clone(),
+                        ));
+                    }
+                }
             }
         }
         Err(payload) => {
@@ -10544,6 +10698,11 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         .push(TraceEvent::new("eval", summary, span.clone()));
                 }
                 let was_query = matches!(eval_res, EvalResult::Query(_) | EvalResult::TypeQuery(_));
+                let query_value = if let EvalResult::Query(v) = &eval_res {
+                    Some(*v)
+                } else {
+                    None
+                };
                 match eval_res {
                     EvalResult::Query(v) => results.push(RunResult::Num(v)),
                     EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
@@ -10596,6 +10755,23 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         &span,
                         options,
                     );
+                    // Carrier enforcement (issue #97 Section 2): also surface
+                    // E063 at the top level so a `(with-foundation ...)` body
+                    // that returns into a top-level query path still flags
+                    // out-of-carrier results.
+                    if let Some(v) = query_value {
+                        if let Some(msg) = env.check_carrier_value(v) {
+                            diagnostics.push(Diagnostic::new(
+                                "E063",
+                                format!(
+                                    "Query result {} violates active foundation carrier: {}",
+                                    format_trace_value(v),
+                                    msg
+                                ),
+                                span.clone(),
+                            ));
+                        }
+                    }
                 }
             }
             Err(payload) => {
@@ -10728,6 +10904,11 @@ fn decode_panic_payload(payload: &Box<dyn std::any::Any + Send>) -> (String, Str
         (
             "E041".to_string(),
             raw_msg.replacen("Domain plugin error: ", "", 1),
+        )
+    } else if raw_msg.starts_with("Carrier violation:") {
+        (
+            "E063".to_string(),
+            raw_msg.replacen("Carrier violation: ", "", 1),
         )
     } else {
         ("E000".to_string(), raw_msg)
