@@ -58,3 +58,5 @@
 (self-reasoning.lino: 1 1 1 1 (type Logic) 0 0.5 0.5)
 
 (ternary-kleene.lino: 0.5 0 1 0.5 0.5 0.5)
+
+(typed-kernel-links.lino: 1 1 1 1)

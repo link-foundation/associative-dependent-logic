@@ -1,0 +1,106 @@
+# Links-defined typed-kernel fragment (issue #97, Phase 5).
+#
+# This example demonstrates that the typing rules of a dependent kernel
+# (Pi-formation, lambda-introduction, application-elimination, and
+# beta-conversion) can be expressed as proof-substrate rules whose
+# verification is performed by the host's structural pattern matcher
+# rather than by the host's typed kernel.
+#
+# `has-type` and `turnstile` are bare identifiers — the proof substrate
+# treats them as literals while matching the surrounding metavariables.
+# `(empty turnstile (term has-type T))` therefore plays the role of the
+# usual `Γ ⊢ t : T` judgement.
+#
+# The derivation below builds a typed-identity instance and reduces an
+# application of it to `zero` through `beta-conversion`, exactly the
+# kind of object-level derivation Phase 5 of the foundations programme
+# asks for, but driven by links-defined rules instead of the host
+# typed kernel.
+#
+# The companion foundation entry `(foundation typed-kernel-links ...)`
+# in `lib/self/foundations.lino` documents that these four rules
+# replace host-derived typed-kernel forms; this example exercises the
+# substrate directly so each `(check-proof ...)` returns `1`.
+#
+# See: docs/case-studies/issue-97/README.md §9.6.
+
+
+# --- Typing rules ---
+
+(rule pi-formation
+  (premise (?Gamma turnstile (?A has-type Type0)))
+  (premise ((?Gamma comma (?x has-type ?A)) turnstile (?B has-type Type0)))
+  (conclusion (?Gamma turnstile ((Pi (?x has-type ?A) ?B) has-type Type0))))
+
+(rule lambda-introduction
+  (premise ((?Gamma comma (?x has-type ?A)) turnstile (?body has-type ?B)))
+  (conclusion (?Gamma turnstile ((lambda (?x has-type ?A) ?body) has-type (Pi (?x has-type ?A) ?B)))))
+
+(rule application-elimination
+  (premise (?Gamma turnstile (?f has-type (Pi (?x has-type ?A) ?B))))
+  (premise (?Gamma turnstile (?arg has-type ?A)))
+  (conclusion (?Gamma turnstile ((apply ?f ?arg) has-type (subst ?B ?x ?arg)))))
+
+(rule beta-conversion
+  (premise (?Gamma turnstile (?redex has-type ?B)))
+  (premise (?redex beta-reduces-to ?reduct))
+  (conclusion (?Gamma turnstile (?reduct has-type ?B))))
+
+
+# --- Axiomatic context: Nat as an inhabited type ---
+
+(axiom nat-is-type
+  (judgement (empty turnstile (Nat has-type Type0))))
+
+(axiom nat-is-type-under-x
+  (judgement ((empty comma (x has-type Nat)) turnstile (Nat has-type Type0))))
+
+(axiom x-is-nat
+  (judgement ((empty comma (x has-type Nat)) turnstile (x has-type Nat))))
+
+(axiom zero-is-nat
+  (judgement (empty turnstile (zero has-type Nat))))
+
+(axiom beta-id-zero
+  (judgement ((apply (lambda (x has-type Nat) x) zero) beta-reduces-to zero)))
+
+
+# --- The Pi-type `(Pi (x : Nat) Nat)` is well-formed ---
+
+(proof-object pi-nat-nat-formed
+  (applies pi-formation)
+  (premise-by nat-is-type)
+  (premise-by nat-is-type-under-x)
+  (conclusion (empty turnstile ((Pi (x has-type Nat) Nat) has-type Type0))))
+
+
+# --- The identity function on Nat is well-typed ---
+
+(proof-object id-on-nat-typed
+  (applies lambda-introduction)
+  (premise-by x-is-nat)
+  (conclusion (empty turnstile ((lambda (x has-type Nat) x) has-type (Pi (x has-type Nat) Nat)))))
+
+
+# --- Applying the identity function to `zero` keeps the typing ---
+
+(proof-object app-id-zero-typed
+  (applies application-elimination)
+  (premise-by id-on-nat-typed)
+  (premise-by zero-is-nat)
+  (conclusion (empty turnstile ((apply (lambda (x has-type Nat) x) zero) has-type (subst Nat x zero)))))
+
+
+# --- Beta-reducing the application yields `zero` at the same type ---
+
+(proof-object app-id-zero-after-beta
+  (applies beta-conversion)
+  (premise-by app-id-zero-typed)
+  (premise-by beta-id-zero)
+  (conclusion (empty turnstile (zero has-type (subst Nat x zero)))))
+
+
+(check-proof pi-nat-nat-formed)
+(check-proof id-on-nat-typed)
+(check-proof app-id-zero-typed)
+(check-proof app-id-zero-after-beta)

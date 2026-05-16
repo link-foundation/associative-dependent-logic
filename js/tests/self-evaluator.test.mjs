@@ -11,6 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import {
+  checkProofObject,
   decRound,
   evaluateFile,
   isNum,
@@ -19,6 +20,9 @@ import {
   parseBinding,
   parseLino,
   parseOne,
+  parseProofAssumptionForm,
+  parseProofObjectForm,
+  parseRuleForm,
   quantize,
   run,
   subst,
@@ -163,6 +167,16 @@ function desugarHoas(node) {
   return mapped;
 }
 
+function isProofRuleShape(node) {
+  return Array.isArray(node) &&
+    node[0] === 'rule' &&
+    typeof node[1] === 'string' &&
+    node[1] &&
+    node.length >= 3 &&
+    node.slice(2).every(c => Array.isArray(c) && (c[0] === 'premise' || c[0] === 'conclusion')) &&
+    node.slice(2).some(c => c[0] === 'conclusion');
+}
+
 class EncodedEvaluator {
   constructor(rulePatterns) {
     this.rulePatterns = rulePatterns;
@@ -182,8 +196,23 @@ class EncodedEvaluator {
     this.foundations = new Map();
     this.foundationStack = [];
     this.activeFoundation = 'default-rml';
+    this.proofRules = new Map();
+    this.proofAssumptions = new Map();
+    this.proofObjects = new Map();
     this.reinitOps();
     this.registerBuiltinFoundations();
+  }
+
+  getProofRule(name) {
+    return this.proofRules.get(name) || null;
+  }
+
+  getProofAssumption(name) {
+    return this.proofAssumptions.get(name) || null;
+  }
+
+  getProofObject(name) {
+    return this.proofObjects.get(name) || null;
   }
 
   requireRule(pattern) {
@@ -320,16 +349,55 @@ class EncodedEvaluator {
       this.requireRule('(eval (allow-host-primitive names))');
       return;
     }
+    if (Array.isArray(form) && form[0] === 'rule' && isProofRuleShape(form)) {
+      try {
+        const rule = parseRuleForm(form);
+        this.proofRules.set(rule.name, {
+          name: rule.name,
+          premises: rule.premises ? rule.premises.slice() : [],
+          conclusion: rule.conclusion,
+        });
+      } catch {
+        // Ignore malformed declarations; host evaluator emits diagnostics
+        // separately and we only care about parity for `(check-proof ...)`.
+      }
+      return;
+    }
     if (Array.isArray(form) && (form[0] === 'assumption' || form[0] === 'axiom')) {
       this.requireRule(`(eval (${form[0]} name (judgement judgement)))`);
+      try {
+        const assumption = parseProofAssumptionForm(form);
+        this.proofAssumptions.set(assumption.name, {
+          name: assumption.name,
+          kind: assumption.kind || 'assumption',
+          judgement: assumption.judgement,
+        });
+      } catch {
+        // Same rationale as `(rule ...)` above.
+      }
       return;
     }
     if (Array.isArray(form) && form[0] === 'proof-object') {
       this.requireRule('(eval (proof-object name clauses))');
+      try {
+        const po = parseProofObjectForm(form);
+        this.proofObjects.set(po.name, {
+          name: po.name,
+          rule: po.rule,
+          premises: po.premises ? po.premises.slice() : [],
+          premiseRefs: po.premiseRefs ? po.premiseRefs.slice() : [],
+          conclusion: po.conclusion,
+        });
+      } catch {
+        // Same rationale as `(rule ...)` above.
+      }
       return;
     }
     if (Array.isArray(form) && form[0] === 'check-proof') {
       this.requireRule('(eval (check-proof name))');
+      if (form.length !== 2 || typeof form[1] !== 'string') return;
+      const verdict = checkProofObject(this, form[1]);
+      results.push(verdict.ok ? 1 : 0);
       return;
     }
     if (Array.isArray(form) && (form[0] === 'encodeAnum' || form[0] === 'decodeAnum')) {

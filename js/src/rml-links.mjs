@@ -595,6 +595,33 @@ class Env {
       root: null,
       abits: null,
     });
+    // Pre-seed the links-defined typed-kernel foundation (issue #97, Phase 5).
+    // Selecting it via `(with-foundation typed-kernel-links ...)` records the
+    // proof-substrate rules `pi-formation`, `lambda-introduction`,
+    // `application-elimination`, and `beta-conversion` as the canonical
+    // links-defined replacements for the host kernel's typing judgements.
+    // The host kernel still runs evaluation; the foundation is selected so
+    // the trust audit can list the four rules as the active derivations.
+    this.foundations.set('typed-kernel-links', {
+      name: 'typed-kernel-links',
+      description: 'links-defined typed-kernel fragment (Pi/lambda/apply/beta as proof rules)',
+      uses: [
+        'pi-formation',
+        'lambda-introduction',
+        'application-elimination',
+        'beta-conversion',
+      ],
+      defines: new Map(),
+      extends: 'default-rml',
+      numericDomain: 'decimal-12',
+      truthDomain: 'default-truth',
+      carrier: null,
+      strictCarrier: false,
+      truthTables: null,
+      experimental: false,
+      root: null,
+      abits: null,
+    });
     seedBuiltinRootConstructs(this);
   }
 

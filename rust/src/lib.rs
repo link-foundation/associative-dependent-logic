@@ -1491,6 +1491,40 @@ impl Env {
         };
         self.foundations
             .insert(boolean_links.name.clone(), boolean_links);
+        // Pre-seed the links-defined typed-kernel foundation (issue #97,
+        // Phase 5). Selecting it via
+        // `(with-foundation typed-kernel-links ...)` records the proof
+        // substrate rules `pi-formation`, `lambda-introduction`,
+        // `application-elimination`, and `beta-conversion` as the
+        // canonical links-defined replacements for the host kernel's
+        // typing judgements. Evaluation still runs through the host kernel;
+        // the foundation is selected so the trust audit can list the four
+        // rules as the active derivations.
+        let typed_kernel_links = FoundationDescriptor {
+            name: "typed-kernel-links".to_string(),
+            description: Some(
+                "links-defined typed-kernel fragment (Pi/lambda/apply/beta as proof rules)"
+                    .to_string(),
+            ),
+            uses: vec![
+                "pi-formation".to_string(),
+                "lambda-introduction".to_string(),
+                "application-elimination".to_string(),
+                "beta-conversion".to_string(),
+            ],
+            defines: Vec::new(),
+            extends: Some("default-rml".to_string()),
+            numeric_domain: Some("decimal-12".to_string()),
+            truth_domain: Some("default-truth".to_string()),
+            carrier: Vec::new(),
+            strict_carrier: false,
+            truth_tables: Vec::new(),
+            experimental: false,
+            root: None,
+            abits: Vec::new(),
+        };
+        self.foundations
+            .insert(typed_kernel_links.name.clone(), typed_kernel_links);
         seed_builtin_root_constructs(self);
     }
 
