@@ -295,6 +295,16 @@ class Env {
     this.foundations = new Map();
     this.activeFoundation = 'default-rml';
     this._foundationStack = [];                 // for nested (with-foundation ...)
+    // Proof-object substrate (issue #97, Phase 3 of netkeep80's punch-list).
+    // `proofRules` maps a declared rule name to its pattern (an array of
+    // premise nodes + a conclusion node, with `?meta` leaves as
+    // metavariables). `proofObjects` maps a derivation name to the rule it
+    // applies and the concrete premise/conclusion judgements. Both are
+    // data-only: declaring a rule never changes evaluator behaviour. They
+    // are consumed by `(check-proof <name>)` and surfaced on
+    // `foundationReport()` so the trust audit can inspect them.
+    this.proofRules = new Map();
+    this.proofObjects = new Map();
     // Carrier enforcement state (issue #97, Section 2). Off by default so
     // legacy programs are not constrained; flipped on by an enclosing
     // `(with-foundation <name>)` whose descriptor includes `(strict-carrier)`.
@@ -708,7 +718,60 @@ class Env {
               .sort((a, b) => a.op < b.op ? -1 : a.op > b.op ? 1 : 0)
           : null,
       })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      proofRules: [...this.proofRules.entries()]
+        .map(([name, r]) => ({
+          name,
+          premises: r.premises.map(p => keyOf(p)),
+          conclusion: keyOf(r.conclusion),
+        }))
+        .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      proofObjects: [...this.proofObjects.entries()]
+        .map(([name, po]) => ({
+          name,
+          rule: po.rule,
+          premises: po.premises.map(p => keyOf(p)),
+          conclusion: keyOf(po.conclusion),
+        }))
+        .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
     };
+  }
+
+  // ---------- Proof-object substrate (issue #97, Phase 3) ----------
+
+  registerProofRule(rule) {
+    if (!rule || typeof rule.name !== 'string' || !rule.name) {
+      throw new RmlError('E064', 'rule declaration requires a name');
+    }
+    this.proofRules.set(rule.name, {
+      name: rule.name,
+      premises: rule.premises ? rule.premises.slice() : [],
+      conclusion: rule.conclusion,
+    });
+    return this.proofRules.get(rule.name);
+  }
+
+  getProofRule(name) {
+    return this.proofRules.get(name) || null;
+  }
+
+  registerProofObject(po) {
+    if (!po || typeof po.name !== 'string' || !po.name) {
+      throw new RmlError('E064', 'proof-object declaration requires a name');
+    }
+    if (typeof po.rule !== 'string' || !po.rule) {
+      throw new RmlError('E064', `proof-object ${po.name} must include (applies <rule>)`);
+    }
+    this.proofObjects.set(po.name, {
+      name: po.name,
+      rule: po.rule,
+      premises: po.premises ? po.premises.slice() : [],
+      conclusion: po.conclusion,
+    });
+    return this.proofObjects.get(po.name);
+  }
+
+  getProofObject(name) {
+    return this.proofObjects.get(name) || null;
   }
 }
 
@@ -1205,7 +1268,162 @@ function formatFoundationReport(report) {
       }
     }
   }
+  if (Array.isArray(report.proofRules) && report.proofRules.length > 0) {
+    lines.push('');
+    lines.push('proof rules:');
+    for (const r of report.proofRules) {
+      lines.push(`  - ${r.name} (${r.premises.length} premises → ${r.conclusion})`);
+    }
+  }
+  if (Array.isArray(report.proofObjects) && report.proofObjects.length > 0) {
+    lines.push('');
+    lines.push('proof objects:');
+    for (const po of report.proofObjects) {
+      lines.push(`  - ${po.name} : applies ${po.rule} (${po.premises.length} premises → ${po.conclusion})`);
+    }
+  }
   return lines.join('\n');
+}
+
+// ---------- Proof-object substrate parsers (issue #97, Phase 3) ----------
+//
+// Parse a `(rule <name> (premise <pat>)... (conclusion <pat>))` declaration.
+// Patterns are plain link nodes; leaves whose token starts with `?` are
+// metavariables and bind during `(check-proof <name>)` matching. Repeated
+// metavariables inside a pattern must structurally match. Any other leaf is
+// a literal that must equal the candidate node exactly.
+function parseRuleForm(node) {
+  if (!Array.isArray(node) || node[0] !== 'rule' || node.length < 2) {
+    throw new RmlError('E064', 'rule form must be `(rule <name> (premise <pat>)... (conclusion <pat>))`');
+  }
+  if (typeof node[1] !== 'string' || !node[1]) {
+    throw new RmlError('E064', 'rule name must be a non-empty identifier');
+  }
+  const rule = { name: node[1], premises: [], conclusion: null };
+  for (const child of node.slice(2)) {
+    if (!Array.isArray(child) || child.length < 1 || typeof child[0] !== 'string') {
+      throw new RmlError('E064', `rule ${rule.name}: clauses must be lists led by a keyword`);
+    }
+    const key = child[0];
+    if (key === 'premise') {
+      if (child.length !== 2) {
+        throw new RmlError('E064', `rule ${rule.name}: (premise <pat>) requires exactly one pattern`);
+      }
+      rule.premises.push(child[1]);
+    } else if (key === 'conclusion') {
+      if (child.length !== 2) {
+        throw new RmlError('E064', `rule ${rule.name}: (conclusion <pat>) requires exactly one pattern`);
+      }
+      if (rule.conclusion !== null) {
+        throw new RmlError('E064', `rule ${rule.name}: only one (conclusion ...) clause is allowed`);
+      }
+      rule.conclusion = child[1];
+    } else {
+      throw new RmlError('E064', `rule ${rule.name}: unknown clause keyword ${key}`);
+    }
+  }
+  if (rule.conclusion === null) {
+    throw new RmlError('E064', `rule ${rule.name}: at least one (conclusion <pat>) clause is required`);
+  }
+  return rule;
+}
+
+// Parse a `(proof-object <name> (applies <rule>) (premise <judgement>)...
+// (conclusion <judgement>))` declaration into a descriptor stored on the env.
+function parseProofObjectForm(node) {
+  if (!Array.isArray(node) || node[0] !== 'proof-object' || node.length < 2) {
+    throw new RmlError('E064', 'proof-object form must be `(proof-object <name> (applies <rule>) ...)`');
+  }
+  if (typeof node[1] !== 'string' || !node[1]) {
+    throw new RmlError('E064', 'proof-object name must be a non-empty identifier');
+  }
+  const po = { name: node[1], rule: null, premises: [], conclusion: null };
+  for (const child of node.slice(2)) {
+    if (!Array.isArray(child) || child.length < 1 || typeof child[0] !== 'string') {
+      throw new RmlError('E064', `proof-object ${po.name}: clauses must be lists led by a keyword`);
+    }
+    const key = child[0];
+    if (key === 'applies') {
+      if (child.length !== 2 || typeof child[1] !== 'string') {
+        throw new RmlError('E064', `proof-object ${po.name}: (applies <rule>) requires a rule name`);
+      }
+      po.rule = child[1];
+    } else if (key === 'premise') {
+      if (child.length !== 2) {
+        throw new RmlError('E064', `proof-object ${po.name}: (premise <judgement>) requires one argument`);
+      }
+      po.premises.push(child[1]);
+    } else if (key === 'conclusion') {
+      if (child.length !== 2) {
+        throw new RmlError('E064', `proof-object ${po.name}: (conclusion <judgement>) requires one argument`);
+      }
+      if (po.conclusion !== null) {
+        throw new RmlError('E064', `proof-object ${po.name}: only one (conclusion ...) clause is allowed`);
+      }
+      po.conclusion = child[1];
+    } else {
+      throw new RmlError('E064', `proof-object ${po.name}: unknown clause keyword ${key}`);
+    }
+  }
+  if (po.rule === null) {
+    throw new RmlError('E064', `proof-object ${po.name}: (applies <rule>) clause is required`);
+  }
+  if (po.conclusion === null) {
+    throw new RmlError('E064', `proof-object ${po.name}: (conclusion <judgement>) clause is required`);
+  }
+  return po;
+}
+
+// Structural matcher: walks `pattern` against `candidate` in parallel. Leaves
+// whose token starts with `?` are metavariables and bind into `subs`. Repeated
+// metavariables must structurally match. Lists must have equal length and
+// match pair-wise. Returns true on success and mutates `subs` in place.
+function matchProofPattern(pattern, candidate, subs) {
+  if (typeof pattern === 'string') {
+    if (pattern.startsWith('?')) {
+      if (Object.prototype.hasOwnProperty.call(subs, pattern)) {
+        return keyOf(subs[pattern]) === keyOf(candidate);
+      }
+      subs[pattern] = candidate;
+      return true;
+    }
+    return typeof candidate === 'string' && candidate === pattern;
+  }
+  if (!Array.isArray(pattern) || !Array.isArray(candidate)) return false;
+  if (pattern.length !== candidate.length) return false;
+  for (let i = 0; i < pattern.length; i++) {
+    if (!matchProofPattern(pattern[i], candidate[i], subs)) return false;
+  }
+  return true;
+}
+
+// Validate a `(proof-object <name>)` against its declared rule. Returns
+// `{ ok: true }` on success or `{ ok: false, error: '...' }` on failure so the
+// caller can decide whether to emit E064 or surface the result differently.
+function checkProofObject(env, name) {
+  const po = env.getProofObject(name);
+  if (!po) return { ok: false, error: `unknown proof-object ${name}` };
+  const rule = env.getProofRule(po.rule);
+  if (!rule) return { ok: false, error: `proof-object ${name} references unknown rule ${po.rule}` };
+  if (po.premises.length !== rule.premises.length) {
+    return {
+      ok: false,
+      error: `proof-object ${name}: expected ${rule.premises.length} premise(s) for rule ${po.rule}, got ${po.premises.length}`,
+    };
+  }
+  const subs = {};
+  for (let i = 0; i < rule.premises.length; i++) {
+    if (!matchProofPattern(rule.premises[i], po.premises[i], subs)) {
+      return {
+        ok: false,
+        error: `proof-object ${name}: premise ${i + 1} does not match rule ${po.rule}`,
+      };
+    }
+  }
+  if (!matchProofPattern(rule.conclusion, po.conclusion, subs)) {
+    return { ok: false, error: `proof-object ${name}: conclusion does not match rule ${po.rule}` };
+  }
+  return { ok: true, substitution: subs };
 }
 
 // ---------- HOAS desugarer ----------
@@ -6032,6 +6250,85 @@ function evaluate(code, options) {
       }
       continue;
     }
+    // Proof-object substrate (issue #97, Phase 3). Rules and proof objects
+    // are registered as data; `(check-proof <name>)` looks the proof up,
+    // matches it structurally against the rule's pattern with `?metavar`
+    // unification, and returns 1.0 on success or 0.0 on failure (emitting
+    // an E064 diagnostic so callers can surface the mismatch reason).
+    // The proof-substrate form is `(rule <leaf-name> (premise ...)... (conclusion ...))`.
+    // Existing self-bootstrap grammar files declare `(rule <leaf-name> (sequence
+    // ...) ...)` data-only forms that we must not hijack, so we route to the
+    // proof substrate only when every clause uses the `premise`/`conclusion`
+    // keywords and at least one `conclusion` clause is present. Other shapes
+    // fall through to the legacy data path unchanged.
+    if (
+      Array.isArray(form) &&
+      form[0] === 'rule' &&
+      typeof form[1] === 'string' &&
+      form[1] &&
+      form.length >= 3 &&
+      form.slice(2).every(c => Array.isArray(c) && (c[0] === 'premise' || c[0] === 'conclusion')) &&
+      form.slice(2).some(c => c[0] === 'conclusion')
+    ) {
+      try {
+        const rule = parseRuleForm(form);
+        env.registerProofRule(rule);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: 'rule', detail: rule.name, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: (err && err.code) || 'E064',
+          message: err && err.message ? err.message : String(err),
+          span: (err && err.span) || span,
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === 'proof-object') {
+      try {
+        const po = parseProofObjectForm(form);
+        env.registerProofObject(po);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: 'proof-object', detail: po.name, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: (err && err.code) || 'E064',
+          message: err && err.message ? err.message : String(err),
+          span: (err && err.span) || span,
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === 'check-proof') {
+      if (form.length !== 2 || typeof form[1] !== 'string') {
+        diagnostics.push(new Diagnostic({
+          code: 'E064',
+          message: '(check-proof <name>) requires a proof-object name',
+          span,
+        }));
+        continue;
+      }
+      const verdict = checkProofObject(env, form[1]);
+      results.push(verdict.ok ? 1 : 0);
+      if (proofs !== null) proofs.push(null);
+      if (!verdict.ok) {
+        diagnostics.push(new Diagnostic({
+          code: 'E064',
+          message: verdict.error,
+          span,
+        }));
+      }
+      if (traceEnabled && trace) {
+        trace.push(new TraceEvent({
+          kind: 'check-proof',
+          detail: `${form[1]} → ${verdict.ok ? 'ok' : 'fail'}`,
+          span,
+        }));
+      }
+      continue;
+    }
 
     try {
       const expandedForm = expandTemplates(form, env);
@@ -7384,4 +7681,8 @@ export {
   parseRootConstructForm,
   parseFoundationForm,
   formatFoundationReport,
+  parseRuleForm,
+  parseProofObjectForm,
+  matchProofPattern,
+  checkProofObject,
 };

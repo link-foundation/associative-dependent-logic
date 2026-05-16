@@ -938,6 +938,14 @@ pub struct Env {
     pub strict_carrier: bool,
     pub carrier: Option<Vec<f64>>,
     pub carrier_label: Option<String>,
+    /// Proof-object substrate (issue #97, Phase 3 of netkeep80's punch-list).
+    /// `proof_rules` maps a declared rule name to its premise patterns and
+    /// conclusion pattern (with `?meta` leaves as metavariables). The map
+    /// `proof_objects` records concrete derivations consumed by
+    /// `(check-proof <name>)`. Both are data-only: declaring a rule never
+    /// alters evaluator behaviour. The CLI's foundation report surfaces them.
+    pub proof_rules: HashMap<String, ProofRule>,
+    pub proof_objects: HashMap<String, ProofObject>,
 }
 
 /// Stack frame pushed when entering a foundation scope. Stores the previous
@@ -1029,6 +1037,53 @@ pub struct FoundationReport {
     pub root_constructs: Vec<RootConstructDescriptor>,
     pub by_status: Vec<(String, Vec<String>)>,
     pub foundations: Vec<FoundationDescriptor>,
+    /// Proof-object substrate (issue #97, Phase 3). Surfaced on the report so
+    /// the trust audit can list every declared rule and concrete derivation.
+    /// Names are kept sorted for stable output across runs.
+    pub proof_rules: Vec<ProofRuleSnapshot>,
+    pub proof_objects: Vec<ProofObjectSnapshot>,
+}
+
+/// A declared rule of inference. Premises and the conclusion are stored as
+/// AST nodes; leaves whose token starts with `?` are metavariables that
+/// bind during `check_proof_object`. Repeated metavariables must
+/// structurally match.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofRule {
+    pub name: String,
+    pub premises: Vec<Node>,
+    pub conclusion: Node,
+}
+
+/// A concrete derivation that claims to be an instance of a rule. Stored
+/// alongside the rule so `(check-proof <name>)` can re-validate it on
+/// demand without re-parsing the source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofObject {
+    pub name: String,
+    pub rule: String,
+    pub premises: Vec<Node>,
+    pub conclusion: Node,
+}
+
+/// Printed view of a `ProofRule` for `foundation_report()`. Patterns are
+/// stringified via `key_of` so consumers can pretty-print without owning
+/// the AST representation.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProofRuleSnapshot {
+    pub name: String,
+    pub premises: Vec<String>,
+    pub conclusion: String,
+}
+
+/// Printed view of a `ProofObject` for `foundation_report()`. Mirrors
+/// `ProofRuleSnapshot` and additionally records the referenced rule.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProofObjectSnapshot {
+    pub name: String,
+    pub rule: String,
+    pub premises: Vec<String>,
+    pub conclusion: String,
 }
 
 /// One constructor of an inductive datatype.
@@ -1183,6 +1238,8 @@ impl Env {
             strict_carrier: false,
             carrier: None,
             carrier_label: None,
+            proof_rules: HashMap::new(),
+            proof_objects: HashMap::new(),
         };
 
         // Initialize truth constants: true, false, unknown, undefined
@@ -1475,6 +1532,27 @@ impl Env {
         let mut foundations: Vec<FoundationDescriptor> =
             self.foundations.values().cloned().collect();
         foundations.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut proof_rules: Vec<ProofRuleSnapshot> = self
+            .proof_rules
+            .values()
+            .map(|r| ProofRuleSnapshot {
+                name: r.name.clone(),
+                premises: r.premises.iter().map(key_of).collect(),
+                conclusion: key_of(&r.conclusion),
+            })
+            .collect();
+        proof_rules.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut proof_objects: Vec<ProofObjectSnapshot> = self
+            .proof_objects
+            .values()
+            .map(|po| ProofObjectSnapshot {
+                name: po.name.clone(),
+                rule: po.rule.clone(),
+                premises: po.premises.iter().map(key_of).collect(),
+                conclusion: key_of(&po.conclusion),
+            })
+            .collect();
+        proof_objects.sort_by(|a, b| a.name.cmp(&b.name));
         FoundationReport {
             active_foundation: active,
             description: foundation.as_ref().and_then(|f| f.description.clone()),
@@ -1483,7 +1561,28 @@ impl Env {
             root_constructs: constructs,
             by_status,
             foundations,
+            proof_rules,
+            proof_objects,
         }
+    }
+
+    /// Register a declared rule of inference. Data-only.
+    pub fn register_proof_rule(&mut self, rule: ProofRule) {
+        self.proof_rules.insert(rule.name.clone(), rule);
+    }
+
+    /// Register a concrete derivation. Data-only; verification runs lazily
+    /// when `(check-proof <name>)` evaluates.
+    pub fn register_proof_object(&mut self, po: ProofObject) {
+        self.proof_objects.insert(po.name.clone(), po);
+    }
+
+    pub fn get_proof_rule(&self, name: &str) -> Option<&ProofRule> {
+        self.proof_rules.get(name)
+    }
+
+    pub fn get_proof_object(&self, name: &str) -> Option<&ProofObject> {
+        self.proof_objects.get(name)
     }
 
     pub fn get_op(&self, name: &str) -> Option<&Op> {
@@ -2910,6 +3009,334 @@ fn parse_foundation_form(node: &Node) -> Result<FoundationDescriptor, String> {
     Ok(foundation)
 }
 
+// ---------- Proof-object substrate (issue #97, Phase 3) ----------
+
+/// Returns true when the `(rule ...)` form looks like a proof-substrate
+/// rule (every non-name child is `(premise ...)` or `(conclusion ...)`, and
+/// at least one `conclusion` is present). Data-only `(rule <name>
+/// (sequence ...) ...)` forms used by self-bootstrap grammar files fall
+/// through to the legacy data path because they do not pass this guard.
+fn is_proof_rule_shape(children: &[Node]) -> bool {
+    if children.len() < 3 {
+        return false;
+    }
+    if !matches!(&children[1], Node::Leaf(s) if !s.is_empty()) {
+        return false;
+    }
+    let mut saw_conclusion = false;
+    for c in &children[2..] {
+        let clause = match c {
+            Node::List(items) => items,
+            _ => return false,
+        };
+        let key = match clause.first() {
+            Some(Node::Leaf(k)) => k.as_str(),
+            _ => return false,
+        };
+        match key {
+            "premise" => {}
+            "conclusion" => {
+                saw_conclusion = true;
+            }
+            _ => return false,
+        }
+    }
+    saw_conclusion
+}
+
+//
+// Parse `(rule <name> (premise <pat>)... (conclusion <pat>))`. Patterns are
+// plain `Node`s; leaves beginning with `?` are metavariables and bind during
+// `check_proof_object` matching. The form's clauses must be lists led by
+// `premise`/`conclusion`; this distinguishes the proof-substrate shape from
+// the data-only `(rule <name> (sequence ...) ...)` forms used by the
+// self-bootstrap grammar files, which fall through to the legacy data path.
+pub fn parse_rule_form(node: &Node) -> Result<ProofRule, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => {
+            return Err(
+                "rule form must be `(rule <name> (premise <pat>)... (conclusion <pat>))`".to_string(),
+            );
+        }
+    };
+    if children.len() < 3 || !matches!(children.first(), Some(Node::Leaf(h)) if h == "rule") {
+        return Err(
+            "rule form must be `(rule <name> (premise <pat>)... (conclusion <pat>))`".to_string(),
+        );
+    }
+    let name = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err("rule name must be a non-empty identifier".to_string()),
+    };
+    let mut premises: Vec<Node> = Vec::new();
+    let mut conclusion: Option<Node> = None;
+    for child in &children[2..] {
+        let clause = match child {
+            Node::List(c) => c,
+            _ => {
+                return Err(format!(
+                    "rule {}: clauses must be lists led by a keyword",
+                    name
+                ));
+            }
+        };
+        let key = match clause.first() {
+            Some(Node::Leaf(k)) => k.as_str(),
+            _ => {
+                return Err(format!(
+                    "rule {}: clauses must be lists led by a keyword",
+                    name
+                ));
+            }
+        };
+        match key {
+            "premise" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "rule {}: (premise <pat>) requires exactly one pattern",
+                        name
+                    ));
+                }
+                premises.push(clause[1].clone());
+            }
+            "conclusion" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "rule {}: (conclusion <pat>) requires exactly one pattern",
+                        name
+                    ));
+                }
+                if conclusion.is_some() {
+                    return Err(format!(
+                        "rule {}: only one (conclusion ...) clause is allowed",
+                        name
+                    ));
+                }
+                conclusion = Some(clause[1].clone());
+            }
+            other => {
+                return Err(format!(
+                    "rule {}: unknown clause keyword {}",
+                    name, other
+                ));
+            }
+        }
+    }
+    let conclusion = conclusion.ok_or_else(|| {
+        format!(
+            "rule {}: at least one (conclusion <pat>) clause is required",
+            name
+        )
+    })?;
+    Ok(ProofRule {
+        name,
+        premises,
+        conclusion,
+    })
+}
+
+// Parse `(proof-object <name> (applies <rule>) (premise <judgement>)...
+// (conclusion <judgement>))` into a descriptor stored on the env.
+pub fn parse_proof_object_form(node: &Node) -> Result<ProofObject, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => {
+            return Err(
+                "proof-object form must be `(proof-object <name> (applies <rule>) ...)`".to_string(),
+            );
+        }
+    };
+    if children.len() < 2
+        || !matches!(children.first(), Some(Node::Leaf(h)) if h == "proof-object")
+    {
+        return Err(
+            "proof-object form must be `(proof-object <name> (applies <rule>) ...)`".to_string(),
+        );
+    }
+    let name = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err("proof-object name must be a non-empty identifier".to_string()),
+    };
+    let mut rule: Option<String> = None;
+    let mut premises: Vec<Node> = Vec::new();
+    let mut conclusion: Option<Node> = None;
+    for child in &children[2..] {
+        let clause = match child {
+            Node::List(c) => c,
+            _ => {
+                return Err(format!(
+                    "proof-object {}: clauses must be lists led by a keyword",
+                    name
+                ));
+            }
+        };
+        let key = match clause.first() {
+            Some(Node::Leaf(k)) => k.as_str(),
+            _ => {
+                return Err(format!(
+                    "proof-object {}: clauses must be lists led by a keyword",
+                    name
+                ));
+            }
+        };
+        match key {
+            "applies" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "proof-object {}: (applies <rule>) requires a rule name",
+                        name
+                    ));
+                }
+                rule = match &clause[1] {
+                    Node::Leaf(s) if !s.is_empty() => Some(s.clone()),
+                    _ => {
+                        return Err(format!(
+                            "proof-object {}: (applies <rule>) requires a rule name",
+                            name
+                        ));
+                    }
+                };
+            }
+            "premise" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "proof-object {}: (premise <judgement>) requires one argument",
+                        name
+                    ));
+                }
+                premises.push(clause[1].clone());
+            }
+            "conclusion" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "proof-object {}: (conclusion <judgement>) requires one argument",
+                        name
+                    ));
+                }
+                if conclusion.is_some() {
+                    return Err(format!(
+                        "proof-object {}: only one (conclusion ...) clause is allowed",
+                        name
+                    ));
+                }
+                conclusion = Some(clause[1].clone());
+            }
+            other => {
+                return Err(format!(
+                    "proof-object {}: unknown clause keyword {}",
+                    name, other
+                ));
+            }
+        }
+    }
+    let rule = rule.ok_or_else(|| {
+        format!(
+            "proof-object {}: (applies <rule>) clause is required",
+            name
+        )
+    })?;
+    let conclusion = conclusion.ok_or_else(|| {
+        format!(
+            "proof-object {}: (conclusion <judgement>) clause is required",
+            name
+        )
+    })?;
+    Ok(ProofObject {
+        name,
+        rule,
+        premises,
+        conclusion,
+    })
+}
+
+// Structural matcher mirroring the JS `matchProofPattern`. `?meta` leaves
+// bind into `subs`; repeated metavariables must structurally match via
+// `key_of`. Lists must have equal length and match pair-wise. Returns true
+// on success and mutates `subs` in place.
+pub fn match_proof_pattern(
+    pattern: &Node,
+    candidate: &Node,
+    subs: &mut HashMap<String, Node>,
+) -> bool {
+    match pattern {
+        Node::Leaf(token) if token.starts_with('?') => {
+            if let Some(prev) = subs.get(token) {
+                key_of(prev) == key_of(candidate)
+            } else {
+                subs.insert(token.clone(), candidate.clone());
+                true
+            }
+        }
+        Node::Leaf(token) => matches!(candidate, Node::Leaf(c) if c == token),
+        Node::List(pat_children) => match candidate {
+            Node::List(cand_children) => {
+                if pat_children.len() != cand_children.len() {
+                    return false;
+                }
+                for (p, c) in pat_children.iter().zip(cand_children.iter()) {
+                    if !match_proof_pattern(p, c, subs) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+    }
+}
+
+/// Result of validating a proof-object against its declared rule. On success
+/// the substitution map records each metavariable's witness; on failure the
+/// error string is suitable for surfacing as an E064 diagnostic.
+pub enum CheckProofVerdict {
+    Ok(HashMap<String, Node>),
+    Err(String),
+}
+
+pub fn check_proof_object(env: &Env, name: &str) -> CheckProofVerdict {
+    let po = match env.get_proof_object(name) {
+        Some(po) => po,
+        None => return CheckProofVerdict::Err(format!("unknown proof-object {}", name)),
+    };
+    let rule = match env.get_proof_rule(&po.rule) {
+        Some(r) => r,
+        None => {
+            return CheckProofVerdict::Err(format!(
+                "proof-object {} references unknown rule {}",
+                name, po.rule
+            ));
+        }
+    };
+    if po.premises.len() != rule.premises.len() {
+        return CheckProofVerdict::Err(format!(
+            "proof-object {}: expected {} premise(s) for rule {}, got {}",
+            name,
+            rule.premises.len(),
+            po.rule,
+            po.premises.len()
+        ));
+    }
+    let mut subs: HashMap<String, Node> = HashMap::new();
+    for (i, (pat, cand)) in rule.premises.iter().zip(po.premises.iter()).enumerate() {
+        if !match_proof_pattern(pat, cand, &mut subs) {
+            return CheckProofVerdict::Err(format!(
+                "proof-object {}: premise {} does not match rule {}",
+                name,
+                i + 1,
+                po.rule
+            ));
+        }
+    }
+    if !match_proof_pattern(&rule.conclusion, &po.conclusion, &mut subs) {
+        return CheckProofVerdict::Err(format!(
+            "proof-object {}: conclusion does not match rule {}",
+            name, po.rule
+        ));
+    }
+    CheckProofVerdict::Ok(subs)
+}
+
 /// Render the foundation report as a human-readable text block. Mirrors
 /// the JS `formatFoundationReport` helper.
 pub fn format_foundation_report(report: &FoundationReport) -> String {
@@ -2956,6 +3383,31 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
         lines.push(format!("{}:", status));
         for n in names {
             lines.push(format!("  - {}", n));
+        }
+    }
+    if !report.proof_rules.is_empty() {
+        lines.push(String::new());
+        lines.push("proof rules:".to_string());
+        for r in &report.proof_rules {
+            lines.push(format!(
+                "  - {} ({} premises → {})",
+                r.name,
+                r.premises.len(),
+                r.conclusion
+            ));
+        }
+    }
+    if !report.proof_objects.is_empty() {
+        lines.push(String::new());
+        lines.push("proof objects:".to_string());
+        for po in &report.proof_objects {
+            lines.push(format!(
+                "  - {} : applies {} ({} premises → {})",
+                po.name,
+                po.rule,
+                po.premises.len(),
+                po.conclusion
+            ));
         }
     }
     if !report.foundations.is_empty() {
@@ -10946,6 +11398,99 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                     }
                     if let Some(pv) = provenance.as_mut() {
                         pv.push(None);
+                    }
+                    continue;
+                }
+                // Proof-object substrate (issue #97, Phase 3). The
+                // `(rule <name> (premise ...)... (conclusion ...))` shape is
+                // routed here only when every clause uses the
+                // `premise`/`conclusion` keywords and at least one
+                // `conclusion` is present, so existing self-bootstrap
+                // grammars that use `(rule <name> (sequence ...) ...)` fall
+                // through to the legacy data path unchanged.
+                if head == "rule" && is_proof_rule_shape(children) {
+                    match parse_rule_form(&form) {
+                        Ok(rule) => {
+                            let name = rule.name.clone();
+                            env.register_proof_rule(rule);
+                            if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "rule",
+                                    name,
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "proof-object" {
+                    match parse_proof_object_form(&form) {
+                        Ok(po) => {
+                            let name = po.name.clone();
+                            env.register_proof_object(po);
+                            if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "proof-object",
+                                    name,
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "check-proof" {
+                    if children.len() != 2 {
+                        diagnostics.push(Diagnostic::new(
+                            "E064",
+                            "(check-proof <name>) requires a proof-object name",
+                            span.clone(),
+                        ));
+                        continue;
+                    }
+                    let target = match &children[1] {
+                        Node::Leaf(s) if !s.is_empty() => s.clone(),
+                        _ => {
+                            diagnostics.push(Diagnostic::new(
+                                "E064",
+                                "(check-proof <name>) requires a proof-object name",
+                                span.clone(),
+                            ));
+                            continue;
+                        }
+                    };
+                    let verdict = check_proof_object(env, &target);
+                    let (value, error) = match verdict {
+                        CheckProofVerdict::Ok(_) => (1.0_f64, None),
+                        CheckProofVerdict::Err(msg) => (0.0_f64, Some(msg)),
+                    };
+                    results.push(RunResult::Num(value));
+                    if let Some(p) = proofs.as_mut() {
+                        p.push(None);
+                    }
+                    if let Some(pv) = provenance.as_mut() {
+                        pv.push(None);
+                    }
+                    if let Some(msg) = error {
+                        diagnostics.push(Diagnostic::new("E064", msg, span.clone()));
+                    }
+                    if options.trace {
+                        env.trace_events.push(TraceEvent::new(
+                            "check-proof",
+                            format!(
+                                "{} → {}",
+                                target,
+                                if value == 1.0 { "ok" } else { "fail" }
+                            ),
+                            span.clone(),
+                        ));
                     }
                     continue;
                 }
