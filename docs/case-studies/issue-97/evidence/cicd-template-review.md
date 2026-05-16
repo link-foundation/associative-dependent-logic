@@ -216,10 +216,11 @@ files to the same suite — no workflow changes required:
 | 2 — equality provenance | `js/tests/foundations.test.mjs` (extended) | `rust/tests/foundations_tests.rs` (extended) |
 | 3 — proof-object replay | `js/tests/proof-substrate.test.mjs` | `rust/tests/proof_substrate_tests.rs` |
 | 4 — links-defined truth tables | `js/tests/foundations.test.mjs` (extended) | `rust/tests/foundations_tests.rs` (extended) |
+| 5 — links-defined typed-kernel fragment | `js/tests/typed-kernel-links.test.mjs` | `rust/tests/typed_kernel_links_tests.rs` |
 | 6 — pure-links strict mode | `js/tests/pure-links-strict.test.mjs` | `rust/tests/pure_links_strict_tests.rs` |
 | 7 — dependency-graph traversal | `js/tests/dependency-graph.test.mjs` | `rust/tests/dependency_graph_tests.rs` |
 | 8 — carrier enforcement | `js/tests/foundations.test.mjs` (extended) | `rust/tests/foundations_tests.rs` (extended) |
-| 9 — `mtc-anum` experimental profile | `js/tests/mtc-anum.test.mjs` | `rust/tests/mtc_anum_tests.rs` |
+| 9 — `mtc-anum` experimental profile + MTC theory fragment + serialization invariants | `js/tests/mtc-anum.test.mjs` (extended) | `rust/tests/mtc_anum_tests.rs` (extended) |
 
 All of these are picked up automatically by `npm test` and
 `cargo test --all-targets`, which the existing `tests.yml` workflow

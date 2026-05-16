@@ -33,7 +33,7 @@ fixed the contract:
 | 2025-10-08 | @netkeep80's "Additional clarification" adds the explicit acceptance contract — four conflated statuses, dependency-graph requirement, scoped overrides, layered equality, minimal milestone, four strict modes, relation to Software Foundations. |
 | 2026-05-15 | @konard's comment fixes backward-compatibility and CI/CD requirements. Issue-solver branch `issue-97-bbe597194dee` created; placeholder PR #174 opened. |
 | 2026-05-15 (this PR) | Root-construct registry + foundation scope implemented in both engines; JS and Rust unit/integration/e2e tests added; `examples/foundation-boolean-kleene.lino` + `examples/foundation-with-min.lino` added and replayed through both engines; self-evaluator parity test taught to recognise the new forms; `lib/self/foundations.lino` and `lib/self/evaluator.lino` extended; `docs/FOUNDATIONS.md` written; `docs/DIAGNOSTICS.md` extended with `E060`/`E061`/`E062`; this case study compiled. |
-| 2026-05-16 (Phases 2–9) | Phase 2 equality-layer separation, Phase 3 proof-object replay (`E064`), Phase 4 truth-tables, Phase 6 pure-links strict mode (`E065`), Phase 7 dependency-graph traversal, Phase 8 carrier enforcement (`E063`), and Phase 9 experimental `mtc-anum` profile with `encodeAnum`/`decodeAnum` helpers (`E066`) advanced on PR #175 with parallel JS/Rust tests and parity replay. Phase 5 remains descriptor/dependency coverage, not a links-defined type/proof kernel. |
+| 2026-05-16 (Phases 2–9) | Phase 2 equality-layer separation, Phase 3 proof-object replay (`E064`), Phase 4 truth-tables, Phase 5 links-defined typed-kernel fragment (`pi-formation`, `lambda-introduction`, `application-elimination`, `beta-conversion` replayed through `(check-proof …)` from `examples/typed-kernel-links.lino`), Phase 6 pure-links strict mode (`E065`), Phase 7 dependency-graph traversal, Phase 8 carrier enforcement (`E063`), and Phase 9 experimental `mtc-anum` profile with `encodeAnum`/`decodeAnum` helpers (`E066`) advanced on PR #175 with parallel JS/Rust tests and parity replay. |
 
 Raw data captured in `data/issue-97.json`, `data/issue-97-comments.json`,
 `data/pr-174.json`, and `data/pr-175.json`. Code-level evidence in
@@ -440,11 +440,11 @@ profile added a ninth. The status of each on PR #175:
 | 2 | Equality and numeric-domain separation | done (registry-level) | `lib/self/foundations.lino` equality entries; trace-layer follow-up tracked |
 | 3 | Proof-object substrate (`(check-proof …)`) | done | `E064`; `js/tests/proof-substrate.test.mjs` + `rust/tests/proof_substrate_tests.rs` |
 | 4 | Links-defined finite logics (Boolean, truth-tables) | done for finite truth tables | §4.4; `boolean-links`, `examples/foundation-boolean-kleene.lino`, `(truth-table …)` |
-| 5 | Links-defined type/proof kernel fragment | partial (descriptor + dep-graph only) | `lib/self/foundations.lino` typed-kernel entries |
+| 5 | Links-defined type/proof kernel fragment | done | §9.6; `examples/typed-kernel-links.lino`; `js/tests/typed-kernel-links.test.mjs` + `rust/tests/typed_kernel_links_tests.rs`; `lib/self/foundations.lino` typed-kernel entries |
 | 6 | Pure-links strict mode | done | `E065`; `(strict-foundation pure-links)` + `(allow-host-primitive …)` |
 | 7 | Dependency-graph traversal | done | Rendered in `formatFoundationReport`; powers strict-mode paths |
 | 8 | Carrier enforcement | done | `E063`; `(carrier …)` + `(strict-carrier)` |
-| 9 | Experimental `mtc-anum` profile + `encodeAnum`/`decodeAnum` | done as a serialization profile | `E066`; pre-seeded but opt-in; `(experimental)`, `(root …)`, `(abit …)` clauses |
+| 9 | Experimental `mtc-anum` profile + `encodeAnum`/`decodeAnum` | done as a serialization profile **and** as a links-defined MTC theory fragment | §9.7; `E066`; pre-seeded but opt-in; `(experimental)`, `(root …)`, `(abit …)` clauses; `examples/mtc-anum-theory.lino`; canonicality/injectivity tests in both engines |
 
 Every implemented or partially implemented phase has **parallel JS and
 Rust tests** plus the existing self-evaluator parity replay
@@ -497,9 +497,79 @@ implicitly**. It carries an `[experimental]` tag, a root symbol `∞`,
 and four "abits" `[ ] 0 1` published on the trust report. Companion
 helpers `encodeAnum` / `decodeAnum` (JS) and `encode_anum` /
 `decode_anum` (Rust) round-trip arbitrary `Node` values through the
-four-abit alphabet. Errors raise `E066`. This is not an executable
-minimal trusted core; it is a descriptive foundation profile and
-serialization helper pair.
+four-abit alphabet. Errors raise `E066`. The profile remains
+descriptive and serialization-only at the host level; the companion
+*theory* fragment expressed as links-defined rules is documented in
+§9.7 below.
+
+### 9.6 Phase 5 — links-defined typed-kernel fragment
+
+The four typing rules of a dependent kernel (`pi-formation`,
+`lambda-introduction`, `application-elimination`, `beta-conversion`)
+are expressed as proof-substrate rules in
+`examples/typed-kernel-links.lino`. They use `has-type` and
+`turnstile` as literal identifiers, so `(empty turnstile (term has-type
+T))` plays the role of the usual `Γ ⊢ t : T` judgement and matches
+against `?metavariables` exactly like any other Phase 3 proof rule.
+
+The example derives `(Pi (x : Nat) Nat)` from `Nat : Type0`, types the
+identity function on `Nat` via `lambda-introduction`, applies it to
+`zero` via `application-elimination`, and uses `beta-conversion` to
+move the resulting redex back to `zero` at the substituted type. All
+four `(check-proof …)` calls return `1` and the host engine emits no
+diagnostics; the matching entry in `examples/expected.lino`
+(`(typed-kernel-links.lino: 1 1 1 1)`) is checked by both the JS and
+Rust expected-output harnesses. The companion `(foundation
+typed-kernel-links …)` registration in `lib/self/foundations.lino`
+records the four rules as `(root-construct … links-defined …)` so the
+trust report and `foundation-report` API stay consistent with the
+substrate.
+
+Each rule is also pinned down individually by
+`js/tests/typed-kernel-links.test.mjs` (8 tests) and
+`rust/tests/typed_kernel_links_tests.rs` (8 tests), including a
+negative case where swapping the domain of the conclusion's Pi type
+makes `(check-proof …)` return `0` and raises `E064`. The
+self-bootstrap evaluator (`EncodedEvaluator` in
+`js/tests/self-evaluator.test.mjs`) replays the same example through
+the data-encoded rules, completing the parity loop required for every
+phase.
+
+### 9.7 Phase 9 — MTC theory fragment and serialization invariants
+
+The pre-seeded `mtc-anum` foundation was originally a serialization
+skeleton: `encodeAnum`/`decodeAnum` round-trip arbitrary `Node` values
+through a four-abit alphabet (`[`, `]`, `0`, `1`). The PR review
+("Blocking issue 7") asked the foundation to also publish axioms and
+rules expressed as links and to replay at least one non-trivial MTC
+theorem. `examples/mtc-anum-theory.lino` supplies that fragment: three
+theory rules (`root-is-link`, `frame-makes-link`, `pair-makes-link`)
+plus three proof-objects that build a composite link from the root
+`∞`. All three `(check-proof …)` calls return `1` and the expected
+output is pinned in `examples/expected.lino` so both engines replay
+the fragment in their shared-examples test suite.
+
+The example also makes the **theory / serialization boundary**
+explicit in prose: the rules speak about links themselves (the theory
+domain), while the abits `[`, `]`, `0`, `1` are the alphabet of the
+serialization domain. `decodeAnum(encodeAnum(x)) == x` is a
+serialization invariant, not an MTC theorem.
+
+`js/tests/mtc-anum.test.mjs` and `rust/tests/mtc_anum_tests.rs` pin
+down three serialization invariants:
+
+- **canonicality** — calling `encodeAnum`/`encode_anum` on the same
+  input twice produces the same string.
+- **injectivity** — distinct inputs encode to distinct strings (no
+  collisions across a representative sample).
+- **totality** — every encoding round-trips: `decodeAnum(encodeAnum(x))
+  == x` for the same sample.
+
+Both test files additionally cover the theory fragment: an end-to-end
+example replay, an individual `frame-makes-link` derivation, a
+negative case where swapping the conclusion's head raises `E064`, and
+a structural check that the example file documents the theory /
+serialization boundary.
 
 ## 10. Files in this case study
 
