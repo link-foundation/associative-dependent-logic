@@ -1025,6 +1025,15 @@ pub struct FoundationDescriptor {
     /// previously installed op so partial tables remain backward-
     /// compatible.
     pub truth_tables: Vec<(String, Vec<TruthTableRow>)>,
+    /// Experimental MTC/anum foundation profile metadata (issue #97,
+    /// Phase 9). When `experimental` is true the trust audit prints an
+    /// `[experimental]` tag next to the foundation name so consumers can
+    /// see it carries no stability guarantees. `root` is the foundation's
+    /// root symbol (e.g. `∞` for mtc-anum) and `abits` lists its
+    /// foundational alphabet pairs (symbol → meaning).
+    pub experimental: bool,
+    pub root: Option<String>,
+    pub abits: Vec<(String, String)>,
 }
 
 /// One row of a `(truth-table <op> ...)` declaration: a sequence of input
@@ -1336,8 +1345,38 @@ impl Env {
             carrier: Vec::new(),
             strict_carrier: false,
             truth_tables: Vec::new(),
+            experimental: false,
+            root: None,
+            abits: Vec::new(),
         };
         self.foundations.insert(default.name.clone(), default);
+        // Pre-seed the experimental MTC/anum foundation (issue #97, Phase
+        // 9). Opt-in only — never activated implicitly. Selecting it via
+        // `(with-foundation mtc-anum ...)` does NOT rewire host arithmetic;
+        // it is descriptive metadata plus a serialization alphabet.
+        let mtc_anum = FoundationDescriptor {
+            name: "mtc-anum".to_string(),
+            description: Some(
+                "experimental metatheory-of-links foundation (anum serialization)".to_string(),
+            ),
+            uses: Vec::new(),
+            defines: Vec::new(),
+            extends: None,
+            numeric_domain: None,
+            truth_domain: Some("mtc-abits".to_string()),
+            carrier: Vec::new(),
+            strict_carrier: false,
+            truth_tables: Vec::new(),
+            experimental: true,
+            root: Some("∞".to_string()),
+            abits: vec![
+                ("[".to_string(), "start-of-meaning".to_string()),
+                ("]".to_string(), "end-of-meaning".to_string()),
+                ("1".to_string(), "unit-of-meaning".to_string()),
+                ("0".to_string(), "zero-of-meaning".to_string()),
+            ],
+        };
+        self.foundations.insert(mtc_anum.name.clone(), mtc_anum);
         seed_builtin_root_constructs(self);
     }
 
@@ -2629,6 +2668,25 @@ fn merge_foundation_descriptors(
             base.truth_tables.push((op_name, rows));
         }
     }
+    // Experimental foundation profile metadata (issue #97, Phase 9). A later
+    // registration can flip `experimental` to true (never silently back to
+    // false), set or replace the root symbol, and append additional abits.
+    if next.experimental {
+        base.experimental = true;
+    }
+    if next.root.is_some() {
+        base.root = next.root;
+    }
+    if !next.abits.is_empty() {
+        let mut seen: std::collections::HashSet<String> =
+            base.abits.iter().map(|(s, _)| s.clone()).collect();
+        for (symbol, meaning) in next.abits {
+            if !seen.contains(&symbol) {
+                seen.insert(symbol.clone());
+                base.abits.push((symbol, meaning));
+            }
+        }
+    }
     base
 }
 
@@ -2681,6 +2739,133 @@ pub fn build_dependency_graph(env: &Env) -> Vec<(String, Vec<String>)> {
         out.push((name, closure));
     }
     out
+}
+
+// ---------- MTC/anum serialization (issue #97, Phase 9) ----------
+//
+// Encode a link expression into a string using only the four abits of the
+// experimental `mtc-anum` foundation: `[`, `]`, `0`, `1`. Each Node is
+// wrapped in `[ ... ]`; the first character after `[` is a tag — `0` for a
+// leaf, `1` for a list. A leaf's payload is its UTF-8 bytes encoded
+// most-significant-bit-first, 8 bits per byte. A list's payload is the
+// concatenated encoding of its children. Round-trippable via `decode_anum`.
+pub fn encode_anum(node: &Node) -> String {
+    let mut out = String::new();
+    encode_anum_into(node, &mut out);
+    out
+}
+
+fn encode_anum_into(node: &Node, out: &mut String) {
+    match node {
+        Node::Leaf(s) => {
+            out.push('[');
+            out.push('0');
+            for byte in s.as_bytes() {
+                for shift in (0..8).rev() {
+                    out.push(if (byte >> shift) & 1 == 1 { '1' } else { '0' });
+                }
+            }
+            out.push(']');
+        }
+        Node::List(children) => {
+            out.push('[');
+            out.push('1');
+            for child in children {
+                encode_anum_into(child, out);
+            }
+            out.push(']');
+        }
+    }
+}
+
+/// Decode an anum-encoded string into a Node. Strictly enforces the
+/// `[tag payload]` shape; any character outside the four-abit alphabet
+/// raises an error. Returns the decoded Node; errors if trailing content
+/// remains after the top-level frame.
+pub fn decode_anum(s: &str) -> Result<Node, String> {
+    let bytes = s.as_bytes();
+    let (node, pos) = decode_anum_at(bytes, 0)?;
+    if pos != bytes.len() {
+        return Err(format!("anum-decode: trailing data at position {}", pos));
+    }
+    Ok(node)
+}
+
+fn decode_anum_at(bytes: &[u8], mut pos: usize) -> Result<(Node, usize), String> {
+    if pos >= bytes.len() || bytes[pos] != b'[' {
+        return Err(format!("anum-decode: expected '[' at position {}", pos));
+    }
+    pos += 1;
+    if pos >= bytes.len() {
+        return Err("anum-decode: truncated input after '['".to_string());
+    }
+    let tag = bytes[pos];
+    if tag == b'0' {
+        pos += 1;
+        let mut bits = String::new();
+        while pos < bytes.len() && bytes[pos] != b']' {
+            let b = bytes[pos];
+            if b != b'0' && b != b'1' {
+                return Err(format!(
+                    "anum-decode: leaf payload may only contain '0' or '1' (got '{}' at {})",
+                    b as char, pos
+                ));
+            }
+            bits.push(b as char);
+            pos += 1;
+        }
+        if pos >= bytes.len() || bytes[pos] != b']' {
+            return Err(format!(
+                "anum-decode: unterminated leaf starting before position {}",
+                pos
+            ));
+        }
+        pos += 1;
+        if bits.len() % 8 != 0 {
+            return Err(format!(
+                "anum-decode: leaf bit-count {} is not byte-aligned",
+                bits.len()
+            ));
+        }
+        let mut payload: Vec<u8> = Vec::with_capacity(bits.len() / 8);
+        for chunk in bits.as_bytes().chunks(8) {
+            let mut byte: u8 = 0;
+            for &c in chunk {
+                byte = (byte << 1) | (if c == b'1' { 1 } else { 0 });
+            }
+            payload.push(byte);
+        }
+        let s = String::from_utf8(payload)
+            .map_err(|e| format!("anum-decode: invalid UTF-8 in leaf ({})", e))?;
+        Ok((Node::Leaf(s), pos))
+    } else if tag == b'1' {
+        pos += 1;
+        let mut items: Vec<Node> = Vec::new();
+        while pos < bytes.len() && bytes[pos] != b']' {
+            if bytes[pos] != b'[' {
+                return Err(format!(
+                    "anum-decode: list child must start with '[' (got '{}' at {})",
+                    bytes[pos] as char, pos
+                ));
+            }
+            let (child, next) = decode_anum_at(bytes, pos)?;
+            items.push(child);
+            pos = next;
+        }
+        if pos >= bytes.len() || bytes[pos] != b']' {
+            return Err(format!(
+                "anum-decode: unterminated list starting before position {}",
+                pos
+            ));
+        }
+        pos += 1;
+        Ok((Node::List(items), pos))
+    } else {
+        Err(format!(
+            "anum-decode: expected tag '0' or '1' after '[' at position {}",
+            pos
+        ))
+    }
 }
 
 /// Seed the registry with the built-in descriptors that describe what the
@@ -3093,6 +3278,38 @@ fn parse_foundation_form(node: &Node) -> Result<FoundationDescriptor, String> {
                         .collect::<Vec<_>>()
                         .join(" "),
                 );
+            }
+            "experimental" => {
+                // `(experimental)` flags the foundation as experimental so
+                // the trust audit can call it out (issue #97, Phase 9).
+                // Data-only.
+                foundation.experimental = true;
+            }
+            "root" => {
+                // `(root <symbol>)` records the foundation's root concept
+                // (e.g. `∞` for mtc-anum). Informational; surfaced on the
+                // report.
+                if rest.len() != 1 {
+                    return Err("(root <symbol>) requires exactly one value".to_string());
+                }
+                foundation.root = Some(key_of(rest[0]));
+            }
+            "abit" => {
+                // `(abit <symbol> <meaning...>)` records one atomic bit of
+                // the foundation's alphabet. The mtc-anum profile lists
+                // four abits: `[`, `]`, `1`, `0`. Informational; surfaced
+                // on the report.
+                if rest.is_empty() {
+                    return Err("(abit <symbol> <meaning>) requires a symbol".to_string());
+                }
+                let symbol = key_of(rest[0]);
+                let meaning = rest
+                    .iter()
+                    .skip(1)
+                    .map(|n| key_of(n))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                foundation.abits.push((symbol, meaning));
             }
             _ => {
                 // Unknown clauses are accepted for forward compatibility.
@@ -3690,12 +3907,24 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
                 .as_ref()
                 .map(|d| format!(" — {}", d))
                 .unwrap_or_default();
-            lines.push(format!("  - {}{}", f.name, suffix));
+            let tag = if f.experimental { " [experimental]" } else { "" };
+            lines.push(format!("  - {}{}{}", f.name, tag, suffix));
             if let Some(n) = &f.numeric_domain {
                 lines.push(format!("      numeric domain: {}", n));
             }
             if let Some(t) = &f.truth_domain {
                 lines.push(format!("      truth domain: {}", t));
+            }
+            if let Some(r) = &f.root {
+                lines.push(format!("      root: {}", r));
+            }
+            if !f.abits.is_empty() {
+                let parts: Vec<String> = f
+                    .abits
+                    .iter()
+                    .map(|(s, m)| format!("{}={}", s, m))
+                    .collect();
+                lines.push(format!("      abits: {}", parts.join(", ")));
             }
             if !f.uses.is_empty() {
                 lines.push(format!("      uses: {}", f.uses.join(", ")));

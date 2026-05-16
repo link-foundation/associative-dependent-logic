@@ -535,6 +535,32 @@ class Env {
       numericDomain: 'decimal-12',
       truthDomain: 'default-truth',
     });
+    // Pre-seed the experimental MTC/anum foundation (issue #97, Phase 9).
+    // Opt-in only — never activated implicitly. Selecting it via
+    // `(with-foundation mtc-anum ...)` does NOT rewire host arithmetic; the
+    // profile is descriptive metadata plus a serialization alphabet. Its
+    // four abits (`[`, `]`, `0`, `1`) are exposed through `foundationReport`
+    // so the trust audit can show what the experimental profile carries.
+    this.foundations.set('mtc-anum', {
+      name: 'mtc-anum',
+      description: 'experimental metatheory-of-links foundation (anum serialization)',
+      uses: [],
+      defines: new Map(),
+      extends: null,
+      numericDomain: null,
+      truthDomain: 'mtc-abits',
+      carrier: null,
+      strictCarrier: false,
+      truthTables: null,
+      experimental: true,
+      root: '∞',
+      abits: [
+        { symbol: '[', meaning: 'start-of-meaning' },
+        { symbol: ']', meaning: 'end-of-meaning' },
+        { symbol: '1', meaning: 'unit-of-meaning' },
+        { symbol: '0', meaning: 'zero-of-meaning' },
+      ],
+    });
     seedBuiltinRootConstructs(this);
   }
 
@@ -725,6 +751,11 @@ class Env {
               }))
               .sort((a, b) => a.op < b.op ? -1 : a.op > b.op ? 1 : 0)
           : null,
+        experimental: f.experimental === true,
+        root: f.root || null,
+        abits: Array.isArray(f.abits) && f.abits.length > 0
+          ? f.abits.map(a => ({ symbol: a.symbol, meaning: a.meaning }))
+          : null,
       })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
       proofRules: [...this.proofRules.entries()]
         .map(([name, r]) => ({
@@ -880,6 +911,116 @@ function buildDependencyGraph(env) {
   return out;
 }
 
+// ---------- MTC/anum serialization (issue #97, Phase 9) ----------
+//
+// Encode a link expression into a string using only the four abits of the
+// experimental `mtc-anum` foundation: `[`, `]`, `0`, `1`. Each Node is
+// wrapped in `[ ... ]`; the first character after `[` is a tag — `0` for a
+// leaf, `1` for a list. A leaf's payload is its UTF-8 bytes encoded
+// most-significant-bit-first, 8 bits per byte. A list's payload is the
+// concatenated encoding of its children. Round-trippable via `decodeAnum`.
+function encodeAnum(node) {
+  if (Array.isArray(node)) {
+    let out = '[1';
+    for (const child of node) out += encodeAnum(child);
+    return out + ']';
+  }
+  if (typeof node === 'string') {
+    return '[0' + stringToBitstring(node) + ']';
+  }
+  if (typeof node === 'number') {
+    return '[0' + stringToBitstring(String(node)) + ']';
+  }
+  throw new RmlError('E066', `cannot anum-encode value of type ${typeof node}`);
+}
+
+function stringToBitstring(s) {
+  const bytes = new TextEncoder().encode(s);
+  let bits = '';
+  for (const byte of bytes) bits += byte.toString(2).padStart(8, '0');
+  return bits;
+}
+
+function bitstringToString(bits) {
+  if (bits.length % 8 !== 0) {
+    throw new RmlError(
+      'E066',
+      `anum-decode: leaf bit-count ${bits.length} is not byte-aligned`,
+    );
+  }
+  const bytes = new Uint8Array(bits.length / 8);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(bits.substring(i * 8, i * 8 + 8), 2);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+// Decode an anum-encoded string into a Node. Strictly enforces the
+// `[tag payload]` shape; any character outside the four-abit alphabet
+// raises an E066 diagnostic. Returns the decoded Node; throws if trailing
+// content remains after the top-level frame.
+function decodeAnum(s) {
+  if (typeof s !== 'string') {
+    throw new RmlError('E066', 'anum-decode requires a string input');
+  }
+  const { node, pos } = decodeAnumAt(s, 0);
+  if (pos !== s.length) {
+    throw new RmlError('E066', `anum-decode: trailing data at position ${pos}`);
+  }
+  return node;
+}
+
+function decodeAnumAt(s, pos) {
+  if (s[pos] !== '[') {
+    throw new RmlError('E066', `anum-decode: expected '[' at position ${pos}`);
+  }
+  pos++;
+  const tag = s[pos];
+  if (tag === '0') {
+    pos++;
+    let bits = '';
+    while (pos < s.length && s[pos] !== ']') {
+      if (s[pos] !== '0' && s[pos] !== '1') {
+        throw new RmlError(
+          'E066',
+          `anum-decode: leaf payload may only contain '0' or '1' (got '${s[pos]}' at ${pos})`,
+        );
+      }
+      bits += s[pos];
+      pos++;
+    }
+    if (s[pos] !== ']') {
+      throw new RmlError('E066', `anum-decode: unterminated leaf starting before position ${pos}`);
+    }
+    pos++;
+    return { node: bitstringToString(bits), pos };
+  }
+  if (tag === '1') {
+    pos++;
+    const items = [];
+    while (pos < s.length && s[pos] !== ']') {
+      if (s[pos] !== '[') {
+        throw new RmlError(
+          'E066',
+          `anum-decode: list child must start with '[' (got '${s[pos]}' at ${pos})`,
+        );
+      }
+      const { node, pos: next } = decodeAnumAt(s, pos);
+      items.push(node);
+      pos = next;
+    }
+    if (s[pos] !== ']') {
+      throw new RmlError('E066', `anum-decode: unterminated list starting before position ${pos}`);
+    }
+    pos++;
+    return { node: items, pos };
+  }
+  throw new RmlError(
+    'E066',
+    `anum-decode: expected tag '0' or '1' after '[' at position ${pos}`,
+  );
+}
+
 function mergeFoundationDescriptors(previous, next) {
   const base = previous ? {
     name: previous.name,
@@ -894,6 +1035,11 @@ function mergeFoundationDescriptors(previous, next) {
     truthTables: previous.truthTables instanceof Map
       ? new Map([...previous.truthTables.entries()].map(([k, rows]) => [k, rows.map(r => ({ inputs: r.inputs.slice(), output: r.output }))]))
       : null,
+    experimental: previous.experimental === true,
+    root: previous.root || null,
+    abits: Array.isArray(previous.abits)
+      ? previous.abits.map(a => ({ symbol: a.symbol, meaning: a.meaning }))
+      : null,
   } : {
     name: next.name,
     description: null,
@@ -905,6 +1051,9 @@ function mergeFoundationDescriptors(previous, next) {
     carrier: null,
     strictCarrier: false,
     truthTables: null,
+    experimental: false,
+    root: null,
+    abits: null,
   };
   base.name = next.name;
   if (next.description) base.description = next.description;
@@ -935,6 +1084,21 @@ function mergeFoundationDescriptors(previous, next) {
     if (!(base.truthTables instanceof Map)) base.truthTables = new Map();
     for (const [k, rows] of next.truthTables.entries()) {
       base.truthTables.set(k, rows.map(r => ({ inputs: r.inputs.slice(), output: r.output })));
+    }
+  }
+  // Experimental foundation profile metadata (issue #97, Phase 9). A later
+  // registration can flip `experimental` to true (never silently back to
+  // false), set or replace the root symbol, and append additional abits.
+  if (next.experimental === true) base.experimental = true;
+  if (next.root) base.root = next.root;
+  if (Array.isArray(next.abits) && next.abits.length > 0) {
+    if (!Array.isArray(base.abits)) base.abits = [];
+    const seen = new Set(base.abits.map(a => a.symbol));
+    for (const a of next.abits) {
+      if (!seen.has(a.symbol)) {
+        seen.add(a.symbol);
+        base.abits.push({ symbol: a.symbol, meaning: a.meaning });
+      }
     }
   }
   return base;
@@ -1264,6 +1428,32 @@ function parseFoundationForm(node) {
       case 'description':
         foundation.description = rest.map(t => Array.isArray(t) ? keyOf(t) : String(t)).join(' ');
         break;
+      case 'experimental':
+        // `(experimental)` flags the foundation as experimental so the trust
+        // audit can call it out (issue #97, Phase 9). Data-only.
+        foundation.experimental = true;
+        break;
+      case 'root':
+        // `(root <symbol>)` records the foundation's root concept (e.g. `∞`
+        // for mtc-anum). Informational; surfaced on the report.
+        if (rest.length !== 1) {
+          throw new RmlError('E061', '(root <symbol>) requires exactly one value');
+        }
+        foundation.root = Array.isArray(rest[0]) ? keyOf(rest[0]) : String(rest[0]);
+        break;
+      case 'abit': {
+        // `(abit <symbol> <meaning...>)` records one atomic bit of the
+        // foundation's alphabet. The mtc-anum profile lists four abits:
+        // `[`, `]`, `1`, `0`. Informational; surfaced on the report.
+        if (rest.length < 1) {
+          throw new RmlError('E061', '(abit <symbol> <meaning>) requires a symbol');
+        }
+        const symbol = Array.isArray(rest[0]) ? keyOf(rest[0]) : String(rest[0]);
+        const meaning = rest.slice(1).map(t => Array.isArray(t) ? keyOf(t) : String(t)).join(' ');
+        if (!Array.isArray(foundation.abits)) foundation.abits = [];
+        foundation.abits.push({ symbol, meaning });
+        break;
+      }
       default:
         break;
     }
@@ -1318,9 +1508,15 @@ function formatFoundationReport(report) {
     lines.push('');
     lines.push('foundations:');
     for (const f of report.foundations) {
-      lines.push(`  - ${f.name}${f.description ? ` — ${f.description}` : ''}`);
+      const tag = f.experimental === true ? ' [experimental]' : '';
+      lines.push(`  - ${f.name}${tag}${f.description ? ` — ${f.description}` : ''}`);
       if (f.numericDomain) lines.push(`      numeric domain: ${f.numericDomain}`);
       if (f.truthDomain) lines.push(`      truth domain: ${f.truthDomain}`);
+      if (f.root) lines.push(`      root: ${f.root}`);
+      if (Array.isArray(f.abits) && f.abits.length > 0) {
+        const abitStrs = f.abits.map(a => `${a.symbol}=${a.meaning}`);
+        lines.push(`      abits: ${abitStrs.join(', ')}`);
+      }
       if (f.uses && f.uses.length) lines.push(`      uses: ${f.uses.join(', ')}`);
       if (f.defines && f.defines.length) {
         const defStrs = f.defines.map(d => `${d.construct}=${d.implementation}`);
@@ -7944,4 +8140,6 @@ export {
   parseAllowHostPrimitiveForm,
   scanPureLinksOffenders,
   buildDependencyGraph,
+  encodeAnum,
+  decodeAnum,
 };
