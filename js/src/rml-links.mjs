@@ -950,6 +950,110 @@ class Env {
     };
   }
 
+  // Build a per-proof report (issue #97, Phase 13). The shape mirrors the
+  // foundation report so a CLI or test can stringify or assert against it.
+  // Reported fields:
+  //   - kind: 'proof-report'
+  //   - name, rule, conclusion, premises, premiseRefs
+  //   - verdict { ok, error? }
+  //   - dependencies: transitive list of (proof-object | axiom | assumption)
+  //     names with their kinds, in topological order
+  //   - rules: rule names that this proof transitively applies
+  //   - rootConstructsUsed: registered root-construct names that appear as
+  //     leaf operators in the proof's premises/conclusion/rule patterns
+  //   - bySemanticStatus: rootConstructsUsed bucketed by semantic-status
+  //   - byTrustStatus: rootConstructsUsed bucketed by trust status
+  //   - activeFoundation
+  //   - strictPureLinks
+  proofReport(name) {
+    if (typeof name !== 'string' || !name) {
+      return { kind: 'proof-report', name: null, verdict: { ok: false, error: 'proof name required' } };
+    }
+    const po = this.getProofObject(name);
+    if (!po) {
+      return {
+        kind: 'proof-report',
+        name,
+        verdict: { ok: false, error: `unknown proof-object ${name}` },
+      };
+    }
+    const verdict = checkProofObject(this, name);
+    const dependencies = [];
+    const seen = new Set();
+    const rules = new Set();
+    const walk = (refName) => {
+      if (seen.has(refName)) return;
+      seen.add(refName);
+      const ax = this.getProofAssumption(refName);
+      if (ax) {
+        dependencies.push({ name: ax.name, kind: ax.kind, judgement: keyOf(ax.judgement) });
+        return;
+      }
+      const dep = this.getProofObject(refName);
+      if (!dep) {
+        dependencies.push({ name: refName, kind: 'unknown', judgement: null });
+        return;
+      }
+      for (const sub of dep.premiseRefs || []) walk(sub);
+      if (dep.rule) rules.add(dep.rule);
+      dependencies.push({
+        name: dep.name,
+        kind: 'proof-object',
+        rule: dep.rule,
+        judgement: keyOf(dep.conclusion),
+      });
+    };
+    for (const ref of po.premiseRefs || []) walk(ref);
+    if (po.rule) rules.add(po.rule);
+    const rootNames = new Set();
+    const collectFromTerm = (term) => {
+      if (!Array.isArray(term)) {
+        if (typeof term === 'string' && this.rootConstructs.has(term)) rootNames.add(term);
+        return;
+      }
+      for (const t of term) collectFromTerm(t);
+    };
+    collectFromTerm(po.conclusion);
+    for (const p of po.premises || []) collectFromTerm(p);
+    for (const ruleName of rules) {
+      const rule = this.getProofRule(ruleName);
+      if (!rule) continue;
+      collectFromTerm(rule.conclusion);
+      for (const prem of rule.premises || []) collectFromTerm(prem);
+    }
+    const rootConstructsUsed = [...rootNames].sort();
+    const bySemanticStatus = {};
+    const byTrustStatus = {};
+    for (const rcName of rootConstructsUsed) {
+      const rc = this.rootConstructs.get(rcName);
+      if (!rc) continue;
+      const semantic = semanticStatusForDescriptor(rc) || 'unknown';
+      const trust = rc.status || 'unknown';
+      if (!bySemanticStatus[semantic]) bySemanticStatus[semantic] = [];
+      bySemanticStatus[semantic].push(rcName);
+      if (!byTrustStatus[trust]) byTrustStatus[trust] = [];
+      byTrustStatus[trust].push(rcName);
+    }
+    for (const key of Object.keys(bySemanticStatus)) bySemanticStatus[key].sort();
+    for (const key of Object.keys(byTrustStatus)) byTrustStatus[key].sort();
+    return {
+      kind: 'proof-report',
+      name,
+      rule: po.rule,
+      conclusion: keyOf(po.conclusion),
+      premises: (po.premises || []).map(keyOf),
+      premiseRefs: (po.premiseRefs || []).slice(),
+      verdict: verdict.ok ? { ok: true } : { ok: false, error: verdict.error },
+      dependencies,
+      rules: [...rules].sort(),
+      rootConstructsUsed,
+      bySemanticStatus,
+      byTrustStatus,
+      activeFoundation: this.activeFoundation || 'default-rml',
+      strictPureLinks: this.strictPureLinks === true,
+    };
+  }
+
   // Return the transitive closure of a construct's dependencies, breadth-first
   // and deterministically sorted at every level. Unknown construct names
   // return `null`. Missing intermediate deps are silently skipped so a
@@ -2213,7 +2317,7 @@ const PURE_LINKS_SCANNER_IGNORED = new Set([
   'is', 'a', 'an',
   'sequence', 'normalizes-to',
   'applies', 'premise', 'premise-by', 'conclusion', 'uses', 'judgement',
-  'assumption', 'axiom', 'rule', 'proof-object', 'check-proof',
+  'assumption', 'axiom', 'rule', 'proof-object', 'check-proof', 'proof-report',
   'foundation', 'with-foundation', 'foundation-report', 'foundation-report?',
   'root-construct', 'strict-carrier', 'truth-table',
   'strict-foundation', 'allow-host-primitive',
@@ -6995,6 +7099,18 @@ function evaluate(code, options) {
             if (traceEnabled && trace) {
               trace.push(new TraceEvent({ kind: 'check-proof', detail: `${target} -> ${verdict.ok ? 'ok' : 'fail'}`, span }));
             }
+          } else if (Array.isArray(body) && body[0] === 'proof-report') {
+            if (body.length !== 2 || typeof body[1] !== 'string' || !body[1]) {
+              throw new RmlError('E064', '(proof-report <name>) requires a proof-object name');
+            }
+            const target = body[1];
+            const report = env.proofReport(target);
+            results.push(report);
+            if (proofs !== null) proofs.push(null);
+            if (provenance !== null) provenance.push(null);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: 'proof-report', detail: target, span }));
+            }
           } else if (Array.isArray(body) && body[0] === 'strict-foundation') {
             const decl = parseStrictFoundationForm(body);
             env.strictPureLinks = true;
@@ -7292,6 +7408,27 @@ function evaluate(code, options) {
         trace.push(new TraceEvent({
           kind: 'check-proof',
           detail: `${form[1]} → ${verdict.ok ? 'ok' : 'fail'}`,
+          span,
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === 'proof-report') {
+      if (form.length !== 2 || typeof form[1] !== 'string' || !form[1]) {
+        diagnostics.push(new Diagnostic({
+          code: 'E064',
+          message: '(proof-report <name>) requires a proof-object name',
+          span,
+        }));
+        continue;
+      }
+      const report = env.proofReport(form[1]);
+      results.push(report);
+      if (proofs !== null) proofs.push(null);
+      if (traceEnabled && trace) {
+        trace.push(new TraceEvent({
+          kind: 'proof-report',
+          detail: form[1],
           span,
         }));
       }

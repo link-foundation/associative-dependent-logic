@@ -247,30 +247,30 @@
 # derivations; the labels are first-class proof objects so
 # `(check-proof <thm>)` confirms each one without rebuilding the chain.
 #
-# `plus_O_zero`: `0 + 0 = 0`. Coq spelling: `plus_O_n` with `n := 0`.
+# `plus-O-zero`: `0 + 0 = 0`. Coq spelling: `plus_O_n` with `n := 0`.
 
-(proof-object plus_O_zero
+(proof-object plus-O-zero
   (applies nat-add-zero)
   (premise-by zero-is-nat)
   (conclusion ((add zero zero) nat-equals zero)))
 
-# `plus_O_one`: `0 + 1 = 1`. Coq spelling: `plus_O_n` with `n := (succ zero)`.
+# `plus-O-one`: `0 + 1 = 1`. Coq spelling: `plus_O_n` with `n := (succ zero)`.
 
-(proof-object plus_O_one
+(proof-object plus-O-one
   (applies nat-add-zero)
   (premise-by one-is-nat)
   (conclusion ((add zero (succ zero)) nat-equals (succ zero))))
 
-# `plus_O_two`: `0 + 2 = 2`. Coq spelling: `plus_O_n` with `n := (succ (succ zero))`.
+# `plus-O-two`: `0 + 2 = 2`. Coq spelling: `plus_O_n` with `n := (succ (succ zero))`.
 
-(proof-object plus_O_two
+(proof-object plus-O-two
   (applies nat-add-zero)
   (premise-by two-is-nat)
   (conclusion ((add zero (succ (succ zero))) nat-equals (succ (succ zero)))))
 
-# `plus_one_O`: `1 + 0 = 1`. Coq spelling: `plus_n_O` with `n := (succ zero)`.
+# `plus-one-O`: `1 + 0 = 1`. Coq spelling: `plus_n_O` with `n := (succ zero)`.
 
-(proof-object plus_one_O
+(proof-object plus-one-O
   (applies nat-add-succ)
   (premise-by zero-plus-zero)
   (conclusion ((add (succ zero) zero) nat-equals (succ zero))))
@@ -315,9 +315,9 @@
 (check-proof zero-mul-one)
 (check-proof one-mul-zero)
 (check-proof one-mul-one)
-(check-proof plus_O_zero)
-(check-proof plus_O_one)
-(check-proof plus_O_two)
-(check-proof plus_one_O)
+(check-proof plus-O-zero)
+(check-proof plus-O-one)
+(check-proof plus-O-two)
+(check-proof plus-one-O)
 (check-proof rec-id-at-zero)
 (check-proof rec-id-at-one)

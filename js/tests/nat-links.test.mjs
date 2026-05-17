@@ -488,6 +488,86 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     assert.ok(out.diagnostics.some(d => d.code === 'E064'));
   });
 
+  it('(proof-report <name>) returns a per-proof dependency/trust summary', () => {
+    // Phase 13 (issue #97): `(proof-report ...)` walks the proof-object
+    // tree and reports the dependencies, rules, and root constructs the
+    // proof touches — together with their semantic and trust statuses,
+    // so the trust audit can be done per-proof instead of only
+    // globally. We register `Nat`, `zero`, `succ` as links-defined root
+    // constructs first so the report can cite them.
+    const out = evaluate(`
+(root-construct Nat
+  (kind inductive-type)
+  (status links-defined)
+  (semantic-status links-checked))
+
+(root-construct zero
+  (kind constructor)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
+(root-construct succ
+  (kind constructor)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
+(rule nat-zero-formation
+  (conclusion (zero has-type Nat)))
+
+(rule nat-succ-formation
+  (premise (?n has-type Nat))
+  (conclusion ((succ ?n) has-type Nat)))
+
+(proof-object zero-is-nat
+  (applies nat-zero-formation)
+  (conclusion (zero has-type Nat)))
+
+(proof-object one-is-nat
+  (applies nat-succ-formation)
+  (premise-by zero-is-nat)
+  (conclusion ((succ zero) has-type Nat)))
+
+(proof-report one-is-nat)
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.strictEqual(out.results.length, 1);
+    const report = out.results[0];
+    assert.strictEqual(report.kind, 'proof-report');
+    assert.strictEqual(report.name, 'one-is-nat');
+    assert.strictEqual(report.rule, 'nat-succ-formation');
+    assert.strictEqual(report.verdict.ok, true);
+    assert.deepStrictEqual(report.premiseRefs, ['zero-is-nat']);
+    assert.deepStrictEqual(report.rules.slice().sort(), [
+      'nat-succ-formation',
+      'nat-zero-formation',
+    ]);
+    const depNames = report.dependencies.map(d => d.name);
+    assert.ok(depNames.includes('zero-is-nat'));
+    assert.ok(report.rootConstructsUsed.includes('Nat'));
+    assert.ok(report.rootConstructsUsed.includes('succ'));
+    assert.ok(report.rootConstructsUsed.includes('zero'));
+    assert.deepStrictEqual(
+      report.bySemanticStatus['links-checked'].slice().sort(),
+      ['Nat', 'succ', 'zero'],
+    );
+    assert.deepStrictEqual(
+      report.byTrustStatus['links-defined'].slice().sort(),
+      ['Nat', 'succ', 'zero'],
+    );
+  });
+
+  it('(proof-report <unknown>) reports a failing verdict instead of throwing', () => {
+    const out = evaluate(`(proof-report no-such-proof)`);
+    assert.strictEqual(out.results.length, 1);
+    const report = out.results[0];
+    assert.strictEqual(report.kind, 'proof-report');
+    assert.strictEqual(report.name, 'no-such-proof');
+    assert.strictEqual(report.verdict.ok, false);
+    assert.match(report.verdict.error, /unknown proof-object/);
+  });
+
   it('runs the full Phase 12/13 example end-to-end with no diagnostics', () => {
     const out = evaluateFile(examplePath);
     assert.deepStrictEqual(out.diagnostics, []);

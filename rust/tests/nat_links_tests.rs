@@ -596,6 +596,131 @@ fn rejects_a_nat_rec_succ_derivation_that_drops_the_succ_wrapper_on_the_scrutine
 }
 
 #[test]
+fn proof_report_returns_per_proof_dependency_and_trust_summary() {
+    // Phase 13 (issue #97): `(proof-report ...)` walks the proof-object
+    // tree and reports the dependencies, rules, and root constructs the
+    // proof touches — together with their semantic and trust statuses,
+    // so the trust audit can be done per-proof instead of only globally
+    // through `(foundation-report)`. We register `Nat`, `zero`, `succ`
+    // as links-defined root constructs first so the report can cite them.
+    let src = r#"
+(root-construct Nat
+  (kind inductive-type)
+  (status links-defined)
+  (semantic-status links-checked))
+
+(root-construct zero
+  (kind constructor)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
+(root-construct succ
+  (kind constructor)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
+(rule nat-zero-formation
+  (conclusion (zero has-type Nat)))
+
+(rule nat-succ-formation
+  (premise (?n has-type Nat))
+  (conclusion ((succ ?n) has-type Nat)))
+
+(proof-object zero-is-nat
+  (applies nat-zero-formation)
+  (conclusion (zero has-type Nat)))
+
+(proof-object one-is-nat
+  (applies nat-succ-formation)
+  (premise-by zero-is-nat)
+  (conclusion ((succ zero) has-type Nat)))
+
+(proof-report one-is-nat)
+"#;
+    let out = run(src);
+    assert!(out.diagnostics.is_empty(), "diagnostics: {:?}", out.diagnostics);
+    assert_eq!(out.results.len(), 1);
+    let report = match &out.results[0] {
+        RunResult::Proof(r) => r.clone(),
+        other => panic!("expected RunResult::Proof, got {:?}", other),
+    };
+    assert_eq!(report.name, "one-is-nat");
+    assert_eq!(report.rule.as_deref(), Some("nat-succ-formation"));
+    assert!(report.verdict.ok);
+    assert_eq!(report.premise_refs, vec!["zero-is-nat".to_string()]);
+    let mut rules = report.rules.clone();
+    rules.sort();
+    assert_eq!(
+        rules,
+        vec![
+            "nat-succ-formation".to_string(),
+            "nat-zero-formation".to_string(),
+        ]
+    );
+    let dep_names: Vec<String> = report.dependencies.iter().map(|d| d.name.clone()).collect();
+    assert!(
+        dep_names.iter().any(|n| n == "zero-is-nat"),
+        "dependencies should include zero-is-nat, got {:?}",
+        dep_names
+    );
+    assert!(report.root_constructs_used.contains(&"Nat".to_string()));
+    assert!(report.root_constructs_used.contains(&"succ".to_string()));
+    assert!(report.root_constructs_used.contains(&"zero".to_string()));
+    let semantic = report
+        .by_semantic_status
+        .iter()
+        .find(|(s, _)| s == "links-checked")
+        .map(|(_, names)| {
+            let mut v = names.clone();
+            v.sort();
+            v
+        })
+        .expect("links-checked bucket must exist");
+    assert_eq!(
+        semantic,
+        vec!["Nat".to_string(), "succ".to_string(), "zero".to_string()]
+    );
+    let trust = report
+        .by_trust_status
+        .iter()
+        .find(|(s, _)| s == "links-defined")
+        .map(|(_, names)| {
+            let mut v = names.clone();
+            v.sort();
+            v
+        })
+        .expect("links-defined bucket must exist");
+    assert_eq!(
+        trust,
+        vec!["Nat".to_string(), "succ".to_string(), "zero".to_string()]
+    );
+}
+
+#[test]
+fn proof_report_of_unknown_proof_returns_failing_verdict() {
+    let out = run("(proof-report no-such-proof)");
+    assert_eq!(out.results.len(), 1);
+    let report = match &out.results[0] {
+        RunResult::Proof(r) => r.clone(),
+        other => panic!("expected RunResult::Proof, got {:?}", other),
+    };
+    assert_eq!(report.name, "no-such-proof");
+    assert!(!report.verdict.ok);
+    let err = report
+        .verdict
+        .error
+        .as_deref()
+        .expect("unknown proof should record an error");
+    assert!(
+        err.contains("unknown proof-object"),
+        "expected error to mention unknown proof-object, got {:?}",
+        err
+    );
+}
+
+#[test]
 fn runs_the_full_phase_12_example_end_to_end_with_no_diagnostics() {
     let path = repo_root().join("examples").join("nat-links.lino");
     let out = evaluate_file(path.to_str().unwrap(), EvaluateOptions::default());

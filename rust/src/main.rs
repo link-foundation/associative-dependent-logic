@@ -2,7 +2,8 @@
 use rml::repl::run_repl;
 use rml::{
     evaluate_with_options, export_lean, extract_program, format_diagnostic, format_foundation_report,
-    format_trace_event, rocq::export_rocq, EnvOptions, EvaluateOptions, ExtractTarget, RunResult,
+    format_proof_report, format_trace_event, rocq::export_rocq, EnvOptions, EvaluateOptions,
+    ExtractTarget, RunResult,
 };
 use std::env;
 use std::fs;
@@ -85,6 +86,9 @@ fn main() -> ExitCode {
             RunResult::Type(s) => println!("{}", s),
             RunResult::Foundation(report) => {
                 println!("{}", format_foundation_report(&report));
+            }
+            RunResult::Proof(report) => {
+                println!("{}", format_proof_report(&report));
             }
         }
     }

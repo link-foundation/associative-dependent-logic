@@ -1259,6 +1259,46 @@ pub struct ProofObjectSnapshot {
     pub conclusion: String,
 }
 
+/// Verdict for `(proof-report <name>)`. Mirrors `CheckProofVerdict` shape
+/// without the substitution table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofReportVerdict {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// One entry of the transitive dependency walk inside a `ProofReport`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofReportDependency {
+    pub name: String,
+    pub kind: String,
+    /// Rule referenced by a proof-object dependency (empty for axioms/assumptions).
+    pub rule: Option<String>,
+    /// Stringified judgement, when known.
+    pub judgement: Option<String>,
+}
+
+/// Per-proof dependency/trust report (issue #97, Phase 13). Built by
+/// `Env::proof_report` and surfaced as `RunResult::Proof` so the
+/// trust audit can be performed for an individual proof object instead
+/// of only globally via `foundation-report`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofReport {
+    pub name: String,
+    pub rule: Option<String>,
+    pub conclusion: Option<String>,
+    pub premises: Vec<String>,
+    pub premise_refs: Vec<String>,
+    pub verdict: ProofReportVerdict,
+    pub dependencies: Vec<ProofReportDependency>,
+    pub rules: Vec<String>,
+    pub root_constructs_used: Vec<String>,
+    pub by_semantic_status: Vec<(String, Vec<String>)>,
+    pub by_trust_status: Vec<(String, Vec<String>)>,
+    pub active_foundation: String,
+    pub strict_pure_links: bool,
+}
+
 /// One constructor of an inductive datatype.
 #[derive(Debug, Clone)]
 pub struct ConstructorDecl {
@@ -2034,6 +2074,190 @@ impl Env {
             strict_pure_links: self.strict_pure_links,
             allowed_host_primitives: allowed,
             dependency_graph,
+        }
+    }
+
+    /// Build a per-proof report (issue #97, Phase 13). Walks the proof
+    /// object tree starting at `name`, collects the transitive
+    /// dependencies (proof-objects, axioms, assumptions) and the
+    /// registered root constructs that appear as leaf operators in the
+    /// proof's premises/conclusion and in the rule patterns it
+    /// transitively applies. Returns the report in all cases — when the
+    /// proof object is missing, `verdict.ok` is `false`.
+    pub fn proof_report(&self, name: &str) -> ProofReport {
+        let active = if self.active_foundation.is_empty() {
+            "default-rml".to_string()
+        } else {
+            self.active_foundation.clone()
+        };
+        if name.is_empty() {
+            return ProofReport {
+                name: String::new(),
+                rule: None,
+                conclusion: None,
+                premises: Vec::new(),
+                premise_refs: Vec::new(),
+                verdict: ProofReportVerdict {
+                    ok: false,
+                    error: Some("proof name required".to_string()),
+                },
+                dependencies: Vec::new(),
+                rules: Vec::new(),
+                root_constructs_used: Vec::new(),
+                by_semantic_status: Vec::new(),
+                by_trust_status: Vec::new(),
+                active_foundation: active,
+                strict_pure_links: self.strict_pure_links,
+            };
+        }
+        let po = match self.get_proof_object(name) {
+            Some(po) => po.clone(),
+            None => {
+                return ProofReport {
+                    name: name.to_string(),
+                    rule: None,
+                    conclusion: None,
+                    premises: Vec::new(),
+                    premise_refs: Vec::new(),
+                    verdict: ProofReportVerdict {
+                        ok: false,
+                        error: Some(format!("unknown proof-object {}", name)),
+                    },
+                    dependencies: Vec::new(),
+                    rules: Vec::new(),
+                    root_constructs_used: Vec::new(),
+                    by_semantic_status: Vec::new(),
+                    by_trust_status: Vec::new(),
+                    active_foundation: active,
+                    strict_pure_links: self.strict_pure_links,
+                };
+            }
+        };
+        let verdict = check_proof_object(self, name);
+        let verdict = match verdict {
+            CheckProofVerdict::Ok(_) => ProofReportVerdict {
+                ok: true,
+                error: None,
+            },
+            CheckProofVerdict::Err(msg) => ProofReportVerdict {
+                ok: false,
+                error: Some(msg),
+            },
+        };
+        let mut dependencies: Vec<ProofReportDependency> = Vec::new();
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut rules: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut stack: Vec<String> = po.premise_refs.iter().cloned().rev().collect();
+        while let Some(refname) = stack.pop() {
+            if seen.contains(&refname) {
+                continue;
+            }
+            seen.insert(refname.clone());
+            if let Some(ax) = self.get_proof_assumption(&refname) {
+                dependencies.push(ProofReportDependency {
+                    name: ax.name.clone(),
+                    kind: ax.kind.clone(),
+                    rule: None,
+                    judgement: Some(key_of(&ax.judgement)),
+                });
+                continue;
+            }
+            if let Some(dep) = self.get_proof_object(&refname) {
+                for sub in dep.premise_refs.iter().rev() {
+                    stack.push(sub.clone());
+                }
+                if !dep.rule.is_empty() {
+                    rules.insert(dep.rule.clone());
+                }
+                dependencies.push(ProofReportDependency {
+                    name: dep.name.clone(),
+                    kind: "proof-object".to_string(),
+                    rule: Some(dep.rule.clone()),
+                    judgement: Some(key_of(&dep.conclusion)),
+                });
+                continue;
+            }
+            dependencies.push(ProofReportDependency {
+                name: refname.clone(),
+                kind: "unknown".to_string(),
+                rule: None,
+                judgement: None,
+            });
+        }
+        if !po.rule.is_empty() {
+            rules.insert(po.rule.clone());
+        }
+        let mut root_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        fn collect_terms(
+            node: &Node,
+            registry: &std::collections::HashMap<String, RootConstructDescriptor>,
+            into: &mut std::collections::BTreeSet<String>,
+        ) {
+            match node {
+                Node::Leaf(s) => {
+                    if registry.contains_key(s) {
+                        into.insert(s.clone());
+                    }
+                }
+                Node::List(children) => {
+                    for child in children {
+                        collect_terms(child, registry, into);
+                    }
+                }
+            }
+        }
+        collect_terms(&po.conclusion, &self.root_constructs, &mut root_names);
+        for prem in &po.premises {
+            collect_terms(prem, &self.root_constructs, &mut root_names);
+        }
+        for rule_name in &rules {
+            if let Some(rule) = self.get_proof_rule(rule_name) {
+                collect_terms(&rule.conclusion, &self.root_constructs, &mut root_names);
+                for prem in &rule.premises {
+                    collect_terms(prem, &self.root_constructs, &mut root_names);
+                }
+            }
+        }
+        let root_constructs_used: Vec<String> = root_names.into_iter().collect();
+        let mut by_semantic_status_map: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        let mut by_trust_status_map: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for rc_name in &root_constructs_used {
+            if let Some(rc) = self.root_constructs.get(rc_name) {
+                let semantic =
+                    semantic_status_for_descriptor(rc).unwrap_or_else(|| "unknown".to_string());
+                let trust = rc.status.clone().unwrap_or_else(|| "unknown".to_string());
+                by_semantic_status_map
+                    .entry(semantic)
+                    .or_default()
+                    .push(rc_name.clone());
+                by_trust_status_map
+                    .entry(trust)
+                    .or_default()
+                    .push(rc_name.clone());
+            }
+        }
+        for v in by_semantic_status_map.values_mut() {
+            v.sort();
+        }
+        for v in by_trust_status_map.values_mut() {
+            v.sort();
+        }
+        ProofReport {
+            name: name.to_string(),
+            rule: Some(po.rule.clone()),
+            conclusion: Some(key_of(&po.conclusion)),
+            premises: po.premises.iter().map(key_of).collect(),
+            premise_refs: po.premise_refs.clone(),
+            verdict,
+            dependencies,
+            rules: rules.into_iter().collect(),
+            root_constructs_used,
+            by_semantic_status: by_semantic_status_map.into_iter().collect(),
+            by_trust_status: by_trust_status_map.into_iter().collect(),
+            active_foundation: active,
+            strict_pure_links: self.strict_pure_links,
         }
     }
 
@@ -4398,6 +4622,7 @@ fn pure_links_scanner_ignored(name: &str) -> bool {
             | "rule"
             | "proof-object"
             | "check-proof"
+            | "proof-report"
             | "foundation"
             | "with-foundation"
             | "foundation-report"
@@ -4727,6 +4952,99 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
                 lines.push(format!("  - {} → {}", name, deps.join(", ")));
             }
         }
+    }
+    lines.join("\n")
+}
+
+/// Pretty-print a [`ProofReport`] for the REPL / CLI. Mirrors the JS
+/// `formatProofReport` shape so transcripts agree across runtimes.
+pub fn format_proof_report(report: &ProofReport) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("Proof report for {}:", report.name));
+    lines.push(format!(
+        "  verdict: {}",
+        if report.verdict.ok { "ok" } else { "error" }
+    ));
+    if let Some(err) = &report.verdict.error {
+        lines.push(format!("  error: {}", err));
+    }
+    if let Some(rule) = &report.rule {
+        lines.push(format!("  rule: {}", rule));
+    }
+    if let Some(conc) = &report.conclusion {
+        lines.push(format!("  conclusion: {}", conc));
+    }
+    if !report.premises.is_empty() {
+        lines.push(format!("  premises: {}", report.premises.join(", ")));
+    }
+    if !report.premise_refs.is_empty() {
+        lines.push(format!(
+            "  premise refs: {}",
+            report.premise_refs.join(", ")
+        ));
+    }
+    if !report.dependencies.is_empty() {
+        lines.push(String::new());
+        lines.push("dependencies (transitive):".to_string());
+        for d in &report.dependencies {
+            let extra = match (&d.rule, &d.judgement) {
+                (Some(r), Some(j)) => format!(" — applies {} → {}", r, j),
+                (Some(r), None) => format!(" — applies {}", r),
+                (None, Some(j)) => format!(" — {}", j),
+                (None, None) => String::new(),
+            };
+            lines.push(format!("  - {} [{}]{}", d.name, d.kind, extra));
+        }
+    }
+    if !report.rules.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("rules applied: {}", report.rules.join(", ")));
+    }
+    if !report.root_constructs_used.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "root constructs used: {}",
+            report.root_constructs_used.join(", ")
+        ));
+    }
+    if !report.by_semantic_status.is_empty() {
+        lines.push(String::new());
+        lines.push("semantic statuses:".to_string());
+        let mut seen: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for status in SEMANTIC_STATUS_ORDER.iter() {
+            if let Some((_, names)) = report
+                .by_semantic_status
+                .iter()
+                .find(|(s, _)| s == status)
+            {
+                if !names.is_empty() {
+                    lines.push(format!("  {}: {}", status, names.join(", ")));
+                    seen.insert((*status).to_string());
+                }
+            }
+        }
+        for (status, names) in &report.by_semantic_status {
+            if seen.contains(status) || names.is_empty() {
+                continue;
+            }
+            lines.push(format!("  {}: {}", status, names.join(", ")));
+        }
+    }
+    if !report.by_trust_status.is_empty() {
+        lines.push(String::new());
+        lines.push("trust statuses:".to_string());
+        for (status, names) in &report.by_trust_status {
+            if names.is_empty() {
+                continue;
+            }
+            lines.push(format!("  {}: {}", status, names.join(", ")));
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!("  active foundation: {}", report.active_foundation));
+    if report.strict_pure_links {
+        lines.push("  pure-links strict mode: on".to_string());
     }
     lines.join("\n")
 }
@@ -11807,13 +12125,14 @@ pub fn extract_program(text: &str, target: ExtractTarget) -> Result<String, Stri
 
 // ========== Runner ==========
 
-/// A result from running a query: a numeric value, a type string, or a
-/// foundation report (issue #97).
+/// A result from running a query: a numeric value, a type string, a
+/// foundation report, or a per-proof report (issue #97).
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunResult {
     Num(f64),
     Type(String),
     Foundation(FoundationReport),
+    Proof(ProofReport),
 }
 
 /// Evaluate a complete LiNo knowledge base and return both results and any
@@ -12360,6 +12679,43 @@ fn eval_foundation_body_form(
                     env.trace_events.push(TraceEvent::new(
                         "check-proof",
                         format!("{} → {}", target, if value == 1.0 { "ok" } else { "fail" }),
+                        span.clone(),
+                    ));
+                }
+                return;
+            }
+            if head == "proof-report" {
+                if children.len() != 2 {
+                    diagnostics.push(Diagnostic::new(
+                        "E064",
+                        "(proof-report <name>) requires a proof-object name",
+                        span.clone(),
+                    ));
+                    return;
+                }
+                let target = match &children[1] {
+                    Node::Leaf(s) if !s.is_empty() => s.clone(),
+                    _ => {
+                        diagnostics.push(Diagnostic::new(
+                            "E064",
+                            "(proof-report <name>) requires a proof-object name",
+                            span.clone(),
+                        ));
+                        return;
+                    }
+                };
+                let report = env.proof_report(&target);
+                results.push(RunResult::Proof(report));
+                if let Some(p) = proofs.as_mut() {
+                    p.push(None);
+                }
+                if let Some(pv) = provenance.as_mut() {
+                    pv.push(None);
+                }
+                if options.trace {
+                    env.trace_events.push(TraceEvent::new(
+                        "proof-report",
+                        target,
                         span.clone(),
                     ));
                 }
@@ -12971,6 +13327,43 @@ fn evaluate_inner(
                     }
                     continue;
                 }
+                if head == "proof-report" {
+                    if children.len() != 2 {
+                        diagnostics.push(Diagnostic::new(
+                            "E064",
+                            "(proof-report <name>) requires a proof-object name",
+                            span.clone(),
+                        ));
+                        continue;
+                    }
+                    let target = match &children[1] {
+                        Node::Leaf(s) if !s.is_empty() => s.clone(),
+                        _ => {
+                            diagnostics.push(Diagnostic::new(
+                                "E064",
+                                "(proof-report <name>) requires a proof-object name",
+                                span.clone(),
+                            ));
+                            continue;
+                        }
+                    };
+                    let report = env.proof_report(&target);
+                    results.push(RunResult::Proof(report));
+                    if let Some(p) = proofs.as_mut() {
+                        p.push(None);
+                    }
+                    if let Some(pv) = provenance.as_mut() {
+                        pv.push(None);
+                    }
+                    if options.trace {
+                        env.trace_events.push(TraceEvent::new(
+                            "proof-report",
+                            target,
+                            span.clone(),
+                        ));
+                    }
+                    continue;
+                }
                 // Pure-links strict mode (issue #97, Phase 6).
                 if head == "strict-foundation" {
                     match parse_strict_foundation_form(&form) {
@@ -13301,6 +13694,7 @@ pub fn run(text: &str, options: Option<EnvOptions>) -> Vec<f64> {
             RunResult::Num(v) => Some(v),
             RunResult::Type(_) => None,
             RunResult::Foundation(_) => None,
+            RunResult::Proof(_) => None,
         })
         .collect()
 }
