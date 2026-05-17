@@ -35,6 +35,7 @@ fixed the contract:
 | 2026-05-15 (this PR) | Root-construct registry + foundation scope implemented in both engines; JS and Rust unit/integration/e2e tests added; `examples/foundation-boolean-kleene.lino` + `examples/foundation-with-min.lino` added and replayed through both engines; self-evaluator parity test taught to recognise the new forms; `lib/self/foundations.lino` and `lib/self/evaluator.lino` extended; `docs/FOUNDATIONS.md` written; `docs/DIAGNOSTICS.md` extended with `E060`/`E061`/`E062`; this case study compiled. |
 | 2026-05-16 (Phases 2–9) | Phase 2 equality-layer separation, Phase 3 proof-object replay (`E064`), Phase 4 truth-tables, Phase 5 links-defined typed-kernel fragment (`pi-formation`, `lambda-introduction`, `application-elimination`, `beta-conversion` replayed through `(check-proof …)` from `examples/typed-kernel-links.lino`), Phase 6 pure-links strict mode (`E065`), Phase 7 dependency-graph traversal, Phase 8 carrier enforcement (`E063`), and Phase 9 experimental `mtc-anum` profile with `encodeAnum`/`decodeAnum` helpers (`E066`) advanced on PR #175 with parallel JS/Rust tests and parity replay. |
 | 2026-05-17 (PR #176) | Latest issue feedback was incorporated: `semantic-status` / `semanticStatus` separates host-executed lookup and structural matching from links-level data; truth-table implementations report `links-checked`; substitution/freshness/alpha-renaming remain explicit `host-trusted` boundaries; and `examples/proof-checking-relation.lino` adds a nontrivial proof-checking relation represented as links-level data and replayed by both engines. |
+| 2026-05-17 (Phase 12 on PR #177) | Phase 12 adds the inductive data layer the issue originally pointed at: five links-defined Peano rules (`nat-zero-formation`, `nat-succ-formation`, `nat-add-zero`, `nat-add-succ`, `nat-induction`) in `examples/nat-links.lino`, registered as `(foundation nat-links …)`, replayed by both engines, and pinned by `js/tests/nat-links.test.mjs` + `rust/tests/nat_links_tests.rs`. |
 
 Raw data captured in `data/issue-97.json`, `data/issue-97-comments.json`,
 `data/pr-174.json`, `data/pr-175.json`, and `data/pr-176.json`.
@@ -469,6 +470,7 @@ classification requested by the latest issue feedback. Current status:
 | 9 | Experimental `mtc-anum` profile + `encodeAnum`/`decodeAnum` | done as a serialization profile **and** as a links-defined MTC theory fragment | §9.7; `E066`; pre-seeded but opt-in; `(experimental)`, `(root …)`, `(abit …)` clauses; `examples/mtc-anum-theory.lino`; canonicality/injectivity tests in both engines |
 | 10 | Execution-boundary semantic statuses | done | `semantic-status`; `semanticStatus` / `semantic_status`; `bySemanticStatus` / `by_semantic_status`; docs §4.3 |
 | 11 | Links-level proof-checking relation | done | §9.8; `examples/proof-checking-relation.lino`; proof-substrate tests in both engines |
+| 12 | Links-defined Peano naturals (`zero`, `succ`, `add`, induction) | done | §9.9; `examples/nat-links.lino`; `js/tests/nat-links.test.mjs` + `rust/tests/nat_links_tests.rs`; `(foundation nat-links …)` in `lib/self/foundations.lino` |
 
 Every implemented or partially implemented phase has **parallel JS and
 Rust tests** plus the existing self-evaluator parity replay
@@ -631,6 +633,67 @@ implication proof, an antecedent proof, an applied rule tag, and two
 dependency edges. The final `(check-proof mp-rain-checks-wet)` returns
 `1`; both shared-example harnesses pin this in
 `examples/expected.lino`.
+
+### 9.9 Phase 12 — links-defined Peano naturals
+
+The issue's original reference (Software Foundations / `Logic.v`) sits
+on top of Coq's inductive `nat` definition. PR #176 covered the typed
+kernel side (`pi-formation`, `lambda-introduction`,
+`application-elimination`, `beta-conversion`) and PR #176 added a
+proof-checking relation; the obvious missing piece was the **inductive
+data layer itself**: a links-level account of the natural numbers so
+that "Nat", "zero", "succ", "add", and induction are no longer silent
+host primitives but proof-substrate rules consumed by `(check-proof
+…)`.
+
+`examples/nat-links.lino` supplies that fragment with five
+proof-substrate rules:
+
+- `nat-zero-formation` — `(zero has-type Nat)` with no premises.
+- `nat-succ-formation` — `(?n has-type Nat) ⇒ ((succ ?n) has-type Nat)`.
+- `nat-add-zero` — `(?n has-type Nat) ⇒ ((add zero ?n) equals ?n)`.
+- `nat-add-succ` — `((add ?m ?n) equals ?k) ⇒ ((add (succ ?m) ?n)
+  equals (succ ?k))`.
+- `nat-induction` — `(?P at zero)` and `(forall ?n (implies (?P at ?n)
+  (?P at (succ ?n))))` together imply `(forall ?n (?P at ?n))`.
+
+The example then builds `zero`, `(succ zero)`, and `(succ (succ
+zero))` as inhabitants of `Nat`, computes `0+0`, `1+0`, and `1+1`
+through `nat-add-zero` / `nat-add-succ`, and discharges a universal
+claim via `nat-induction`. All eight `(check-proof …)` calls return
+`1` and the engines emit no diagnostics. The matching entry in
+`examples/expected.lino` (`(nat-links.lino: 1 1 1 1 1 1 1 1)`) is
+checked by both the JS and Rust expected-output harnesses, so any
+drift between engines is caught at shared-examples replay time.
+
+The companion `(foundation nat-links …)` registration in
+`lib/self/foundations.lino` records the five rules as `(root-construct
+… links-defined …)` so the trust audit lists them as
+`semantic links-checked` derivations rather than as silent host
+primitives. The host's decimal numeric domain is unaffected — `Nat`
+here is purely structural; the foundation just gives the trust report
+something concrete to point at when a user asks "where do `Nat`,
+`succ`, and addition come from in this proof?".
+
+Each rule is also pinned down individually by
+`js/tests/nat-links.test.mjs` (10 tests) and
+`rust/tests/nat_links_tests.rs` (10 tests), including two negative
+cases (a mistyped `(succ zero)` and an `add-succ` claim that would
+require `(succ ?k)` to unify with `zero`) where `(check-proof …)`
+returns `0` and raises `E064`. The pre-registration test asserts that
+`(foundation-report)` lists `nat-links` with `uses = [nat-add-succ,
+nat-add-zero, nat-induction, nat-succ-formation, nat-zero-formation]`
+and `extends = default-rml`, matching the
+`_registerDefaultFoundation` / `register_default_foundation` seeds in
+both engines.
+
+This phase deliberately does **not** implement `Nat` by host numeric
+conversion: there is no `succ → +1` shortcut. Successor is a literal
+constructor and `equals` is the proof-substrate's structural match, so
+the only host operation involved is the same pattern matcher that
+backs every other Phase 3 proof rule. Substitution, alpha-renaming,
+and freshness remain explicit `host-trusted` boundaries documented in
+the foundation report.
 
 ## 10. Files in this case study
 

@@ -1,0 +1,138 @@
+# Links-defined natural-number foundation (issue #97, Phase 12).
+#
+# Peano arithmetic encoded entirely as proof-substrate rules. The five
+# rules `nat-zero-formation`, `nat-succ-formation`, `nat-add-zero`,
+# `nat-add-succ`, and `nat-induction` make `Nat`, `zero`, `succ`,
+# addition, and structural induction available as links-level constructs
+# whose derivations are checked by the host's structural pattern matcher
+# rather than by the host's decimal numeric domain.
+#
+# `has-type`, `equals`, `at`, `forall`, and `implies` are bare
+# identifiers — the proof substrate treats them as literals while
+# matching the surrounding `?` metavariables. `(zero has-type Nat)`
+# therefore plays the role of `0 : Nat`, and
+# `((add (succ zero) (succ zero)) equals (succ (succ zero)))` plays the
+# role of `1 + 1 = 2`.
+#
+# The derivation below builds `zero`, `(succ zero)`, and
+# `(succ (succ zero))` as inhabitants of `Nat`, computes three small
+# additions by recursion on the left argument, and uses
+# `nat-induction` to derive a trivially-true universally quantified
+# property. Every step is mechanically replayed by `(check-proof ...)`
+# so the host emits no diagnostics and each query returns `1`.
+#
+# This example mirrors the construction laid out in Software
+# Foundations' `Basics.v` / `Induction.v` but runs on the links
+# substrate instead of Coq's typed kernel. The companion foundation
+# entry `(foundation nat-links ...)` in `lib/self/foundations.lino`
+# documents the five rules as an alternative Peano-natural-number
+# foundation; the host's `decimal-12-arithmetic` is unaffected.
+#
+# See: docs/case-studies/issue-97/README.md §9.9.
+
+
+# --- Typing rules: Nat formation ---
+
+(rule nat-zero-formation
+  (conclusion (zero has-type Nat)))
+
+(rule nat-succ-formation
+  (premise (?n has-type Nat))
+  (conclusion ((succ ?n) has-type Nat)))
+
+
+# --- Computation rules: addition by recursion on the left argument ---
+
+(rule nat-add-zero
+  (premise (?n has-type Nat))
+  (conclusion ((add zero ?n) equals ?n)))
+
+(rule nat-add-succ
+  (premise ((add ?m ?n) equals ?k))
+  (conclusion ((add (succ ?m) ?n) equals (succ ?k))))
+
+
+# --- Proof principle: structural induction over Nat ---
+
+(rule nat-induction
+  (premise (?P at zero))
+  (premise (forall ?n (implies (?P at ?n) (?P at (succ ?n)))))
+  (conclusion (forall ?n (?P at ?n))))
+
+
+# --- Building 0, 1, 2 as inhabitants of Nat ---
+
+(proof-object zero-is-nat
+  (applies nat-zero-formation)
+  (conclusion (zero has-type Nat)))
+
+(proof-object one-is-nat
+  (applies nat-succ-formation)
+  (premise-by zero-is-nat)
+  (conclusion ((succ zero) has-type Nat)))
+
+(proof-object two-is-nat
+  (applies nat-succ-formation)
+  (premise-by one-is-nat)
+  (conclusion ((succ (succ zero)) has-type Nat)))
+
+
+# --- Computing small additions step by step ---
+# 0 + 0 = 0 via nat-add-zero applied with n := zero.
+
+(proof-object zero-plus-zero
+  (applies nat-add-zero)
+  (premise-by zero-is-nat)
+  (conclusion ((add zero zero) equals zero)))
+
+# 1 + 0 = 1 via nat-add-succ on top of (0 + 0 = 0).
+
+(proof-object one-plus-zero
+  (applies nat-add-succ)
+  (premise-by zero-plus-zero)
+  (conclusion ((add (succ zero) zero) equals (succ zero))))
+
+# 0 + 1 = 1 via nat-add-zero applied with n := (succ zero).
+
+(proof-object zero-plus-one
+  (applies nat-add-zero)
+  (premise-by one-is-nat)
+  (conclusion ((add zero (succ zero)) equals (succ zero))))
+
+# 1 + 1 = 2 via nat-add-succ on top of (0 + 1 = 1).
+
+(proof-object one-plus-one
+  (applies nat-add-succ)
+  (premise-by zero-plus-one)
+  (conclusion ((add (succ zero) (succ zero)) equals (succ (succ zero)))))
+
+
+# --- Using induction: every Nat satisfies the trivial property `is-nat` ---
+#
+# The base case and the inductive step are taken as axioms here so the
+# example demonstrates the shape of an inductive proof without dragging
+# in the meta-theory needed to derive them. The schematic rule
+# `nat-induction` then folds them into a universally quantified
+# conclusion that `(check-proof ...)` replays structurally.
+
+(axiom is-nat-at-zero
+  (judgement (is-nat at zero)))
+
+(axiom is-nat-step
+  (judgement (forall n (implies (is-nat at n) (is-nat at (succ n))))))
+
+(proof-object every-nat-is-nat
+  (applies nat-induction)
+  (premise-by is-nat-at-zero)
+  (premise-by is-nat-step)
+  (conclusion (forall n (is-nat at n))))
+
+
+(check-proof zero-is-nat)
+(check-proof one-is-nat)
+(check-proof two-is-nat)
+(check-proof zero-plus-zero)
+(check-proof one-plus-zero)
+(check-proof zero-plus-one)
+(check-proof one-plus-one)
+(check-proof every-nat-is-nat)

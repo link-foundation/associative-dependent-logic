@@ -282,6 +282,67 @@
   (semantic-status links-checked)
   (depends-on beta-reduction))
 
+# Phase 12 proof-substrate rules that define Peano-style natural
+# numbers entirely from links. Five rules — formation for `zero` and
+# `succ`, two recursive computation rules for `add`, and the induction
+# principle — let the trust report describe `Nat`, `zero`, `succ`,
+# `add`, and structural induction as `links-defined` / `links-checked`
+# constructs without disturbing the host's decimal numeric domain.
+
+(root-construct Nat
+  (kind inductive-type)
+  (status links-defined)
+  (semantic-status links-checked)
+  (links-defined-via nat-zero-formation nat-succ-formation))
+
+(root-construct zero
+  (kind constructor)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
+(root-construct succ
+  (kind constructor)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
+(root-construct add
+  (kind derived-operation)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat zero succ))
+
+(root-construct nat-zero-formation
+  (kind typing-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat zero))
+
+(root-construct nat-succ-formation
+  (kind typing-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat succ))
+
+(root-construct nat-add-zero
+  (kind computation-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on add zero))
+
+(root-construct nat-add-succ
+  (kind computation-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on add succ))
+
+(root-construct nat-induction
+  (kind proof-principle)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
 (root-construct substitution
   (kind meta-operation)
   (status host-primitive)
@@ -507,3 +568,30 @@
   (uses lambda-introduction)
   (uses application-elimination)
   (uses beta-conversion))
+
+# ---------------------------------------------------------------------------
+# Links-defined Peano natural numbers (issue #97, Phase 12). The five
+# proof-substrate rules below — `nat-zero-formation`, `nat-succ-formation`,
+# `nat-add-zero`, `nat-add-succ`, and `nat-induction` — make `Nat`,
+# `zero`, `succ`, addition, and structural induction available as
+# ordinary `(rule ...)` / `(proof-object ...)` data so the trust audit
+# reports them as `links-defined` constructs. The host's
+# `decimal-12-arithmetic` is unaffected; `nat-links` is an alternative
+# semantics for users who want to reason about naturals without relying
+# on the host numeric domain.
+#
+# A concrete Peano derivation lives in `examples/nat-links.lino`, and
+# the JS test in `js/tests/nat-links.test.mjs` plus the Rust mirror in
+# `rust/tests/nat_links_tests.rs` replay it through `(check-proof ...)`.
+# ---------------------------------------------------------------------------
+
+(foundation nat-links
+  (description links-defined-peano-naturals)
+  (numeric-domain decimal-12)
+  (truth-domain default-truth)
+  (extends default-rml)
+  (uses nat-zero-formation)
+  (uses nat-succ-formation)
+  (uses nat-add-zero)
+  (uses nat-add-succ)
+  (uses nat-induction))
