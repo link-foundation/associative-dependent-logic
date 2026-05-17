@@ -449,6 +449,24 @@
   (semantic-status links-checked)
   (depends-on mul succ add))
 
+# `eval-nat` is the **links-evaluated** fragment of the Nat foundation
+# (issue #97, Phase 13). Given a closed Peano term — strictly the
+# vocabulary `zero | (succ T) | (add T T) | (mul T T)` — it returns the
+# normal-form natural number by structural rewriting at the links level,
+# applying the four computation rules `nat-add-zero`, `nat-add-succ`,
+# `nat-mul-zero`, `nat-mul-succ` step by step. The result is the host
+# integer the normal form represents, so it slots into numeric query
+# infrastructure, but the *evaluation* never delegates to host `+`/`*`:
+# every rewrite is recorded in the trace transcript so the audit can
+# witness which Peano rule fired. This is what raises `nat-links` from
+# `links-checked` to `links-evaluated` — the foundation can not only
+# describe the rules, it can compute with them.
+(root-construct eval-nat
+  (kind evaluator)
+  (status links-defined)
+  (semantic-status links-evaluated)
+  (depends-on Nat zero succ add mul nat-add-zero nat-add-succ nat-mul-zero nat-mul-succ))
+
 (root-construct substitution
   (kind meta-operation)
   (status host-primitive)
@@ -715,4 +733,5 @@
   (uses nat-rec-succ)
   (uses mul)
   (uses nat-mul-zero)
-  (uses nat-mul-succ))
+  (uses nat-mul-succ)
+  (uses eval-nat))

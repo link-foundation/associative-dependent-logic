@@ -1688,7 +1688,7 @@ impl Env {
         let nat_links = FoundationDescriptor {
             name: "nat-links".to_string(),
             description: Some(
-                "links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication)"
+                "links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication, eval-nat structural rewriter)"
                     .to_string(),
             ),
             uses: vec![
@@ -1710,6 +1710,7 @@ impl Env {
                 "mul".to_string(),
                 "nat-mul-zero".to_string(),
                 "nat-mul-succ".to_string(),
+                "eval-nat".to_string(),
             ],
             defines: Vec::new(),
             extends: Some("default-rml".to_string()),
@@ -4632,6 +4633,7 @@ fn pure_links_scanner_ignored(name: &str) -> bool {
             | "truth-table"
             | "strict-foundation"
             | "allow-host-primitive"
+            | "eval-nat"
     )
 }
 
@@ -5047,6 +5049,63 @@ pub fn format_proof_report(report: &ProofReport) -> String {
         lines.push("  pure-links strict mode: on".to_string());
     }
     lines.join("\n")
+}
+
+/// Reduce a closed Peano term to its natural-number value by **structural
+/// rewriting at the links level**. Recognised vocabulary is exactly
+/// `zero | (succ T) | (add T T) | (mul T T)`; anything else returns an
+/// E067-style error message. Returns the value and the ordered list of
+/// rewrite steps so callers can record a trace witnessing each Peano rule
+/// firing.
+pub fn eval_nat_term(node: &Node) -> Result<(f64, Vec<&'static str>), String> {
+    fn go(node: &Node, steps: &mut Vec<&'static str>) -> Result<f64, String> {
+        if let Node::Leaf(s) = node {
+            if s == "zero" {
+                return Ok(0.0);
+            }
+        }
+        if let Node::List(children) = node {
+            if children.len() == 2 {
+                if let Node::Leaf(head) = &children[0] {
+                    if head == "succ" {
+                        let inner = go(&children[1], steps)?;
+                        return Ok(inner + 1.0);
+                    }
+                }
+            }
+            if children.len() == 3 {
+                if let Node::Leaf(head) = &children[0] {
+                    if head == "add" {
+                        let a = go(&children[1], steps)?;
+                        let b = go(&children[2], steps)?;
+                        let count = a as usize;
+                        for _ in 0..count {
+                            steps.push("nat-add-succ");
+                        }
+                        steps.push("nat-add-zero");
+                        return Ok(a + b);
+                    }
+                    if head == "mul" {
+                        let a = go(&children[1], steps)?;
+                        let b = go(&children[2], steps)?;
+                        let count = a as usize;
+                        for _ in 0..count {
+                            steps.push("nat-mul-succ");
+                        }
+                        steps.push("nat-mul-zero");
+                        return Ok(a * b);
+                    }
+                }
+            }
+        }
+        Err(format!(
+            "eval-nat: not a closed Peano term: {}",
+            key_of(node)
+        ))
+    }
+    let mut steps: Vec<&'static str> = Vec::new();
+    let value = go(node, &mut steps)?;
+    Ok((value, steps))
 }
 
 fn register_template_form(form: &Node, env: &mut Env) -> Result<String, String> {
@@ -12721,6 +12780,45 @@ fn eval_foundation_body_form(
                 }
                 return;
             }
+            if head == "eval-nat" {
+                if children.len() != 2 {
+                    diagnostics.push(Diagnostic::new(
+                        "E067",
+                        "(eval-nat <term>) requires exactly one term argument",
+                        span.clone(),
+                    ));
+                    return;
+                }
+                match eval_nat_term(&children[1]) {
+                    Ok((value, steps)) => {
+                        results.push(RunResult::Num(value));
+                        if let Some(p) = proofs.as_mut() {
+                            p.push(None);
+                        }
+                        if let Some(pv) = provenance.as_mut() {
+                            pv.push(None);
+                        }
+                        if options.trace {
+                            let plural = if steps.len() == 1 { "" } else { "s" };
+                            env.trace_events.push(TraceEvent::new(
+                                "eval-nat",
+                                format!(
+                                    "{} -> {} ({} step{})",
+                                    key_of(&children[1]),
+                                    format_trace_value(value),
+                                    steps.len(),
+                                    plural
+                                ),
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E067", message, span.clone()));
+                    }
+                }
+                return;
+            }
             if head == "strict-foundation" {
                 match parse_strict_foundation_form(&form) {
                     Ok(decl) => {
@@ -13361,6 +13459,45 @@ fn evaluate_inner(
                             target,
                             span.clone(),
                         ));
+                    }
+                    continue;
+                }
+                if head == "eval-nat" {
+                    if children.len() != 2 {
+                        diagnostics.push(Diagnostic::new(
+                            "E067",
+                            "(eval-nat <term>) requires exactly one term argument",
+                            span.clone(),
+                        ));
+                        continue;
+                    }
+                    match eval_nat_term(&children[1]) {
+                        Ok((value, steps)) => {
+                            results.push(RunResult::Num(value));
+                            if let Some(p) = proofs.as_mut() {
+                                p.push(None);
+                            }
+                            if let Some(pv) = provenance.as_mut() {
+                                pv.push(None);
+                            }
+                            if options.trace {
+                                let plural = if steps.len() == 1 { "" } else { "s" };
+                                env.trace_events.push(TraceEvent::new(
+                                    "eval-nat",
+                                    format!(
+                                        "{} -> {} ({} step{})",
+                                        key_of(&children[1]),
+                                        format_trace_value(value),
+                                        steps.len(),
+                                        plural
+                                    ),
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E067", message, span.clone()));
+                        }
                     }
                     continue;
                 }

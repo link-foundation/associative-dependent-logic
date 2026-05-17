@@ -52,6 +52,7 @@ fn nat_links_foundation_is_pre_registered() {
     assert_eq!(
         uses,
         vec![
+            "eval-nat".to_string(),
             "forall".to_string(),
             "implication".to_string(),
             "mul".to_string(),
@@ -733,7 +734,54 @@ fn runs_the_full_phase_12_example_end_to_end_with_no_diagnostics() {
         nums(&out.results),
         vec![
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-            1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 0.0, 1.0, 2.0, 4.0,
         ]
+    );
+}
+
+#[test]
+fn eval_nat_reduces_zero_succ_add_mul_by_structural_rewriting() {
+    // No leading whitespace on each line: the `.lino` parser treats
+    // indented continuation lines as part of the *previous* link.
+    let src = "(eval-nat zero)\n\
+               (eval-nat (succ (succ (succ zero))))\n\
+               (eval-nat (add (succ zero) (succ (succ zero))))\n\
+               (eval-nat (mul (succ (succ zero)) (succ (succ (succ zero)))))\n";
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![0.0, 3.0, 3.0, 6.0]);
+}
+
+#[test]
+fn eval_nat_of_non_peano_term_raises_e067() {
+    let out = run("(eval-nat (succ (something else)))");
+    assert!(out.results.is_empty());
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E067");
+    assert!(
+        out.diagnostics[0]
+            .message
+            .contains("not a closed Peano term"),
+        "diagnostic message: {}",
+        out.diagnostics[0].message
+    );
+}
+
+#[test]
+fn eval_nat_with_wrong_arity_raises_e067() {
+    let out = run("(eval-nat zero (succ zero))");
+    assert!(out.results.is_empty());
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E067");
+    assert!(
+        out.diagnostics[0]
+            .message
+            .contains("exactly one term argument"),
+        "diagnostic message: {}",
+        out.diagnostics[0].message
     );
 }

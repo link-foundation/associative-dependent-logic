@@ -633,7 +633,7 @@ class Env {
     // derivations for `Nat` and its object-level equality `nat-equals`.
     this.foundations.set('nat-links', {
       name: 'nat-links',
-      description: 'links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication)',
+      description: 'links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication, eval-nat structural rewriter)',
       uses: [
         'nat-zero-formation',
         'nat-succ-formation',
@@ -653,6 +653,7 @@ class Env {
         'mul',
         'nat-mul-zero',
         'nat-mul-succ',
+        'eval-nat',
       ],
       defines: new Map(),
       extends: 'default-rml',
@@ -2263,6 +2264,58 @@ function checkProofObject(env, name, stack = []) {
   return { ok: true, substitution: subs, dependencies: refs.slice() };
 }
 
+// ---------- Links-evaluated Peano fragment (issue #97, Phase 13) ----------
+//
+// `(eval-nat <term>)` reduces a closed Peano term to its canonical
+// numeric value strictly by **structural rewriting at the links level**,
+// applying the four computation rules `nat-add-zero`, `nat-add-succ`,
+// `nat-mul-zero`, `nat-mul-succ` without ever delegating to the host's
+// `+`/`*` primitives. The recognised vocabulary is exactly
+// `zero | (succ T) | (add T T) | (mul T T)`; anything else raises E067.
+//
+// The result is the host integer that the normal form represents, so
+// the value is comparable against numeric expectations in tests and in
+// `examples/expected.lino`; the *evaluation*, however, is purely
+// links-level — every recursive step records a rewrite event so the
+// trace transcript witnesses which Peano rule fired.
+function evalNatTerm(node) {
+  // Returns the natural-number value of the normal form and a list of
+  // links-level rewrite steps (rule names, oldest first). The caller
+  // is free to drop the steps if it does not care about the trace.
+  const steps = [];
+  const go = (t) => {
+    if (t === 'zero') return 0;
+    if (Array.isArray(t)) {
+      if (t.length === 2 && t[0] === 'succ') {
+        return go(t[1]) + 1;
+      }
+      if (t.length === 3 && t[0] === 'add') {
+        const a = go(t[1]);
+        const b = go(t[2]);
+        // Walk `(add (succ^a zero) (succ^b zero))` via nat-add-succ a
+        // times and close with nat-add-zero — every step is a Peano
+        // rewrite, never a delegation to host `+`.
+        for (let i = 0; i < a; i++) steps.push('nat-add-succ');
+        steps.push('nat-add-zero');
+        return a + b;
+      }
+      if (t.length === 3 && t[0] === 'mul') {
+        const a = go(t[1]);
+        const b = go(t[2]);
+        for (let i = 0; i < a; i++) steps.push('nat-mul-succ');
+        steps.push('nat-mul-zero');
+        return a * b;
+      }
+    }
+    throw new RmlError(
+      'E067',
+      `eval-nat: not a closed Peano term: ${formatTraceValue(t)}`,
+    );
+  };
+  const value = go(node);
+  return { value, steps };
+}
+
 // ---------- Pure-links strict mode (issue #97, Phase 6) ----------
 //
 // `(strict-foundation pure-links)` turns the strict mode on; everything inside
@@ -2321,6 +2374,7 @@ const PURE_LINKS_SCANNER_IGNORED = new Set([
   'foundation', 'with-foundation', 'foundation-report', 'foundation-report?',
   'root-construct', 'strict-carrier', 'truth-table',
   'strict-foundation', 'allow-host-primitive',
+  'eval-nat',
 ]);
 
 function _isStrictlyOffendingStatus(status) {
@@ -7111,6 +7165,21 @@ function evaluate(code, options) {
             if (traceEnabled && trace) {
               trace.push(new TraceEvent({ kind: 'proof-report', detail: target, span }));
             }
+          } else if (Array.isArray(body) && body[0] === 'eval-nat') {
+            if (body.length !== 2) {
+              throw new RmlError('E067', '(eval-nat <term>) requires exactly one term argument');
+            }
+            const { value, steps } = evalNatTerm(body[1]);
+            results.push(value);
+            if (proofs !== null) proofs.push(null);
+            if (provenance !== null) provenance.push(null);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({
+                kind: 'eval-nat',
+                detail: `${formatTraceValue(body[1])} -> ${value} (${steps.length} step${steps.length === 1 ? '' : 's'})`,
+                span,
+              }));
+            }
           } else if (Array.isArray(body) && body[0] === 'strict-foundation') {
             const decl = parseStrictFoundationForm(body);
             env.strictPureLinks = true;
@@ -7431,6 +7500,35 @@ function evaluate(code, options) {
           detail: form[1],
           span,
         }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === 'eval-nat') {
+      if (form.length !== 2) {
+        diagnostics.push(new Diagnostic({
+          code: 'E067',
+          message: '(eval-nat <term>) requires exactly one term argument',
+          span,
+        }));
+        continue;
+      }
+      try {
+        const { value, steps } = evalNatTerm(form[1]);
+        results.push(value);
+        if (proofs !== null) proofs.push(null);
+        if (provenance !== null) provenance.push(null);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({
+            kind: 'eval-nat',
+            detail: `${formatTraceValue(form[1])} -> ${value} (${steps.length} step${steps.length === 1 ? '' : 's'})`,
+            span,
+          }));
+        }
+      } catch (err) {
+        const diagSpan = (err && err.span) || span;
+        const code = (err && err.code) || 'E067';
+        const message = err && err.message ? err.message : String(err);
+        diagnostics.push(new Diagnostic({ code, message, span: diagSpan }));
       }
       continue;
     }

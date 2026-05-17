@@ -39,6 +39,7 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     const found = report.foundations.find(f => f.name === 'nat-links');
     assert.ok(found, 'nat-links foundation must be registered');
     assert.deepStrictEqual(found.uses.slice().sort(), [
+      'eval-nat',
       'forall',
       'implication',
       'mul',
@@ -574,6 +575,45 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     assert.deepStrictEqual(out.results, [
       1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
       1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      0, 1, 2, 4,
     ]);
+  });
+
+  it('(eval-nat <term>) reduces zero / succ / add / mul by structural rewriting', () => {
+    const out = evaluate(`
+      (eval-nat zero)
+      (eval-nat (succ (succ (succ zero))))
+      (eval-nat (add (succ zero) (succ (succ zero))))
+      (eval-nat (mul (succ (succ zero)) (succ (succ (succ zero)))))
+    `);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [0, 3, 3, 6]);
+  });
+
+  it('(eval-nat ...) trace records one rewrite step per Peano rule firing', () => {
+    const out = evaluate(`(eval-nat (add (succ zero) (succ zero)))`, { trace: true });
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.strictEqual(out.results.length, 1);
+    assert.strictEqual(out.results[0], 2);
+    const evt = out.trace.find((e) => e.kind === 'eval-nat');
+    assert.ok(evt, 'trace contains an eval-nat event');
+    // (add (succ zero) (succ zero)) → 2 via 1× nat-add-succ + 1× nat-add-zero.
+    assert.match(evt.detail, /-> 2 \(2 steps\)/);
+  });
+
+  it('(eval-nat <non-Peano>) raises an E067 diagnostic instead of crashing', () => {
+    const out = evaluate(`(eval-nat (succ (something else)))`);
+    assert.strictEqual(out.results.length, 0);
+    assert.strictEqual(out.diagnostics.length, 1);
+    assert.strictEqual(out.diagnostics[0].code, 'E067');
+    assert.match(out.diagnostics[0].message, /not a closed Peano term/);
+  });
+
+  it('(eval-nat <term>) with wrong arity reports E067', () => {
+    const out = evaluate(`(eval-nat zero (succ zero))`);
+    assert.strictEqual(out.results.length, 0);
+    assert.strictEqual(out.diagnostics.length, 1);
+    assert.strictEqual(out.diagnostics[0].code, 'E067');
+    assert.match(out.diagnostics[0].message, /exactly one term argument/);
   });
 });

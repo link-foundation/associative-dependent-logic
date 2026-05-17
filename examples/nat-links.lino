@@ -321,3 +321,21 @@
 (check-proof plus-one-O)
 (check-proof rec-id-at-zero)
 (check-proof rec-id-at-one)
+
+
+# --- Links-evaluated fragment ---
+# `(eval-nat <term>)` reduces a closed Peano term to its canonical
+# value strictly by **links-level structural rewriting**, applying the
+# four computation rules `nat-add-zero`, `nat-add-succ`, `nat-mul-zero`,
+# `nat-mul-succ`. The result is the host integer the normal form
+# represents, but the *evaluation* never delegates to host `+`/`*`:
+# every rewrite step is recorded in the trace transcript. This is what
+# raises `nat-links` from `links-checked` to `links-evaluated` in the
+# trust report — the foundation can now compute with its own rules,
+# not merely describe them. The four lines below normalise `0`, `1`,
+# `1 + 1`, and `2 * 2`; the structural matcher witnesses each step.
+# See: docs/case-studies/issue-97/README.md §9.10.
+(eval-nat zero)
+(eval-nat (succ zero))
+(eval-nat (add (succ zero) (succ zero)))
+(eval-nat (mul (succ (succ zero)) (succ (succ zero))))
