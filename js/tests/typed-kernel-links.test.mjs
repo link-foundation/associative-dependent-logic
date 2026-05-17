@@ -179,4 +179,106 @@ describe('Phase 5 — links-defined typed kernel', () => {
     assert.deepStrictEqual(out.diagnostics, []);
     assert.deepStrictEqual(out.results, [1, 1, 1, 1]);
   });
+
+  // Issue #97, netkeep80's audit deliverable: "Type, Prop, Pi, lambda,
+  // apply have links-level rule representations; substitution, freshness,
+  // alpha-renaming, beta-reduction, normalization, and conversion are
+  // either links-level or explicitly host-trusted." This test pins the
+  // complete typed-kernel boundary so any future change that quietly
+  // removes a construct, downgrades its trust bucket, or splits a
+  // dependency edge fails loudly.
+  it('reports the complete typed-kernel boundary in foundation-report', () => {
+    const env = new Env();
+    const report = env.foundationReport();
+    const lookup = (name) => report.rootConstructs.find(rc => rc.name === name);
+
+    const hostTrustedKernel = [
+      'Type',
+      'Prop',
+      'Pi',
+      'lambda',
+      'apply',
+      'beta-reduction',
+      'substitution',
+      'freshness',
+      'alpha-renaming',
+      'normalization',
+      'whnf',
+      'definitional-equality',
+      'conversion',
+    ];
+    for (const name of hostTrustedKernel) {
+      const rc = lookup(name);
+      assert.ok(rc, `${name} should be registered as a root construct`);
+      assert.strictEqual(rc.status, 'host-primitive',
+        `${name} should remain host-primitive at the kernel boundary`);
+      assert.strictEqual(rc.semanticStatus, 'host-trusted',
+        `${name} should report semantic-status host-trusted`);
+      assert.ok(report.bySemanticStatus['host-trusted'].includes(name),
+        `${name} should be bucketed under host-trusted in the report`);
+    }
+
+    const linksCheckedKernel = [
+      'pi-formation',
+      'lambda-introduction',
+      'application-elimination',
+      'beta-conversion',
+    ];
+    for (const name of linksCheckedKernel) {
+      const rc = lookup(name);
+      assert.ok(rc, `${name} should be registered as a links-defined typing rule`);
+      assert.strictEqual(rc.status, 'links-defined',
+        `${name} should be links-defined`);
+      assert.strictEqual(rc.semanticStatus, 'links-checked',
+        `${name} should report semantic-status links-checked`);
+    }
+
+    // Dependency edges that document the boundary in the audit graph.
+    assert.deepStrictEqual(lookup('beta-reduction').dependsOn,
+      ['substitution', 'freshness', 'alpha-renaming']);
+    assert.deepStrictEqual(lookup('normalization').dependsOn, ['beta-reduction']);
+    assert.deepStrictEqual(lookup('whnf').dependsOn, ['beta-reduction']);
+    assert.deepStrictEqual(lookup('conversion').dependsOn,
+      ['beta-reduction', 'normalization', 'structural-equality']);
+    assert.deepStrictEqual(lookup('definitional-equality').dependsOn,
+      ['beta-reduction', 'structural-equality']);
+    assert.deepStrictEqual(lookup('apply').dependsOn, ['lambda', 'beta-reduction']);
+    assert.deepStrictEqual(lookup('Pi').dependsOn,
+      ['Type', 'substitution', 'freshness']);
+  });
+
+  it('lib/self/foundations.lino declares conversion at the host boundary', () => {
+    const source = readFileSync(foundationsPath, 'utf8');
+    const marker = '(root-construct conversion';
+    const idx = source.indexOf(marker);
+    assert.ok(idx >= 0, 'conversion root-construct must be documented');
+    const window = source.slice(idx, idx + 400);
+    assert.match(window, /\(status host-primitive\)/);
+    assert.match(window, /\(semantic-status host-trusted\)/);
+    assert.match(window, /\(depends-on beta-reduction normalization structural-equality\)/);
+  });
+
+  // Replays the full typed-kernel-links example and then asks the
+  // foundation report which constructs the typed-kernel-links foundation
+  // exposes. The Phase 5 deliverable wants a nontrivial typed derivation
+  // with all dependencies visible — this composes that derivation with the
+  // dependency closure so the test pins both halves.
+  it('runs a nontrivial typed derivation with every kernel dependency visible', () => {
+    const env = new Env();
+    const out = evaluateFile(examplePath, { env });
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1, 1, 1, 1]);
+    const report = env.foundationReport();
+    const typedKernel = report.foundations.find(f => f.name === 'typed-kernel-links');
+    assert.ok(typedKernel, 'typed-kernel-links foundation must be reported');
+    // Each of the four typed-kernel typing rules used by the derivation
+    // must show up with `links-checked` semantic status in the dependency
+    // graph implicit in the typed-kernel-links foundation.
+    for (const rule of typedKernel.uses) {
+      const rc = report.rootConstructs.find(rc2 => rc2.name === rule);
+      assert.ok(rc, `${rule} should be a registered root construct`);
+      assert.strictEqual(rc.semanticStatus, 'links-checked',
+        `${rule} should report semantic-status links-checked`);
+    }
+  });
 });

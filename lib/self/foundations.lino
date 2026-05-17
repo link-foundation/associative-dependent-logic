@@ -498,6 +498,21 @@
   (encoded-as whnf-term)
   (depends-on beta-reduction))
 
+# `conversion` is the host-primitive convertibility relation that closes
+# the typed-kernel surface: two terms are convertible when normalization
+# (driven by beta-reduction and the host's whnf/normalize routines)
+# brings them to the same canonical form. It is listed explicitly in
+# netkeep80's audit checklist so the trust report can show that the
+# Type/Prop/Pi/lambda/apply layer rests on a bounded set of host
+# primitives — normalization, beta-reduction, and conversion — alongside
+# the links-defined typing rules below (`pi-formation`,
+# `lambda-introduction`, `application-elimination`, `beta-conversion`).
+(root-construct conversion
+  (kind equality-layer)
+  (status host-primitive)
+  (semantic-status host-trusted)
+  (depends-on beta-reduction normalization structural-equality))
+
 # ---------------------------------------------------------------------------
 # Inductive / coinductive.
 # ---------------------------------------------------------------------------

@@ -238,3 +238,210 @@ fn runs_the_full_phase_5_example_end_to_end_with_no_diagnostics() {
     );
     assert_eq!(nums(&out.results), vec![1.0, 1.0, 1.0, 1.0]);
 }
+
+// Issue #97, netkeep80's audit deliverable: "Type, Prop, Pi, lambda,
+// apply have links-level rule representations; substitution, freshness,
+// alpha-renaming, beta-reduction, normalization, and conversion are
+// either links-level or explicitly host-trusted." This test pins the
+// complete typed-kernel boundary so any future change that quietly
+// removes a construct, downgrades its trust bucket, or splits a
+// dependency edge fails loudly. Parallel to the JS test of the same
+// name in `js/tests/typed-kernel-links.test.mjs`.
+#[test]
+fn reports_the_complete_typed_kernel_boundary_in_foundation_report() {
+    let out = evaluate("(foundation-report)", None, None);
+    let report = out
+        .results
+        .iter()
+        .find_map(|r| match r {
+            RunResult::Foundation(report) => Some(report),
+            _ => None,
+        })
+        .expect("foundation-report must return a Foundation result");
+
+    let lookup = |name: &str| {
+        report
+            .root_constructs
+            .iter()
+            .find(|rc| rc.name == name)
+            .unwrap_or_else(|| panic!("{} should be registered as a root construct", name))
+    };
+
+    let host_trusted_kernel = [
+        "Type",
+        "Prop",
+        "Pi",
+        "lambda",
+        "apply",
+        "beta-reduction",
+        "substitution",
+        "freshness",
+        "alpha-renaming",
+        "normalization",
+        "whnf",
+        "definitional-equality",
+        "conversion",
+    ];
+    let host_trusted_bucket = report
+        .by_semantic_status
+        .iter()
+        .find(|(status, _)| status == "host-trusted")
+        .map(|(_, constructs)| constructs.clone())
+        .unwrap_or_default();
+    for name in host_trusted_kernel {
+        let rc = lookup(name);
+        assert_eq!(
+            rc.status.as_deref(),
+            Some("host-primitive"),
+            "{} should remain host-primitive at the kernel boundary",
+            name
+        );
+        assert_eq!(
+            rc.semantic_status.as_deref(),
+            Some("host-trusted"),
+            "{} should report semantic-status host-trusted",
+            name
+        );
+        assert!(
+            host_trusted_bucket.iter().any(|c| c == name),
+            "{} should be bucketed under host-trusted in the report",
+            name
+        );
+    }
+
+    let links_checked_kernel = [
+        "pi-formation",
+        "lambda-introduction",
+        "application-elimination",
+        "beta-conversion",
+    ];
+    for name in links_checked_kernel {
+        let rc = lookup(name);
+        assert_eq!(
+            rc.status.as_deref(),
+            Some("links-defined"),
+            "{} should be links-defined",
+            name
+        );
+        assert_eq!(
+            rc.semantic_status.as_deref(),
+            Some("links-checked"),
+            "{} should report semantic-status links-checked",
+            name
+        );
+    }
+
+    // Dependency edges that document the boundary in the audit graph.
+    assert_eq!(
+        lookup("beta-reduction").depends_on,
+        vec![
+            "substitution".to_string(),
+            "freshness".to_string(),
+            "alpha-renaming".to_string()
+        ]
+    );
+    assert_eq!(
+        lookup("normalization").depends_on,
+        vec!["beta-reduction".to_string()]
+    );
+    assert_eq!(
+        lookup("whnf").depends_on,
+        vec!["beta-reduction".to_string()]
+    );
+    assert_eq!(
+        lookup("conversion").depends_on,
+        vec![
+            "beta-reduction".to_string(),
+            "normalization".to_string(),
+            "structural-equality".to_string(),
+        ]
+    );
+    assert_eq!(
+        lookup("definitional-equality").depends_on,
+        vec![
+            "beta-reduction".to_string(),
+            "structural-equality".to_string()
+        ]
+    );
+    assert_eq!(
+        lookup("apply").depends_on,
+        vec!["lambda".to_string(), "beta-reduction".to_string()]
+    );
+    assert_eq!(
+        lookup("Pi").depends_on,
+        vec![
+            "Type".to_string(),
+            "substitution".to_string(),
+            "freshness".to_string()
+        ]
+    );
+}
+
+#[test]
+fn lib_self_foundations_declares_conversion_at_the_host_boundary() {
+    let path = repo_root().join("lib").join("self").join("foundations.lino");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("could not read {}: {}", path.display(), e));
+    let marker = "(root-construct conversion";
+    let idx = source
+        .find(marker)
+        .expect("conversion root-construct must be documented");
+    let window = &source[idx..(idx + 400).min(source.len())];
+    assert!(
+        window.contains("(status host-primitive)"),
+        "conversion must declare status host-primitive"
+    );
+    assert!(
+        window.contains("(semantic-status host-trusted)"),
+        "conversion must declare semantic-status host-trusted"
+    );
+    assert!(
+        window.contains("(depends-on beta-reduction normalization structural-equality)"),
+        "conversion must depend on beta-reduction, normalization, structural-equality"
+    );
+}
+
+// Replays the full typed-kernel-links example and then asks the
+// foundation report which constructs the typed-kernel-links foundation
+// exposes. The Phase 5 deliverable wants a nontrivial typed derivation
+// with all dependencies visible — this composes that derivation with the
+// dependency closure so the test pins both halves.
+#[test]
+fn runs_a_nontrivial_typed_derivation_with_every_kernel_dependency_visible() {
+    let path = repo_root().join("examples").join("typed-kernel-links.lino");
+    let out = evaluate_file(path.to_str().unwrap(), EvaluateOptions::default());
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0, 1.0, 1.0, 1.0]);
+
+    let report_out = evaluate("(foundation-report)", None, None);
+    let report = report_out
+        .results
+        .iter()
+        .find_map(|r| match r {
+            RunResult::Foundation(report) => Some(report),
+            _ => None,
+        })
+        .expect("foundation-report must return a Foundation result");
+    let typed_kernel = report
+        .foundations
+        .iter()
+        .find(|f| f.name == "typed-kernel-links")
+        .expect("typed-kernel-links foundation must be reported");
+    for rule in &typed_kernel.uses {
+        let rc = report
+            .root_constructs
+            .iter()
+            .find(|rc| &rc.name == rule)
+            .unwrap_or_else(|| panic!("{} should be a registered root construct", rule));
+        assert_eq!(
+            rc.semantic_status.as_deref(),
+            Some("links-checked"),
+            "{} should report semantic-status links-checked",
+            rule
+        );
+    }
+}

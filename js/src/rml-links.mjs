@@ -1623,6 +1623,16 @@ function seedBuiltinRootConstructs(env) {
     { name: 'alpha-renaming', kind: 'meta-operation', status: 'host-primitive' },
     { name: 'normalization', kind: 'reduction-rule', status: 'host-primitive', encodedAs: 'normalizeTerm', dependsOn: ['beta-reduction'] },
     { name: 'whnf', kind: 'reduction-rule', status: 'host-primitive', encodedAs: 'whnfTerm', dependsOn: ['beta-reduction'] },
+    { name: 'conversion', kind: 'equality-layer', status: 'host-primitive', dependsOn: ['beta-reduction', 'normalization', 'structural-equality'] },
+    // Phase 5 typed-kernel-links proof-substrate rules: links-defined
+    // mirrors of `Pi`, `lambda`, `apply`, `beta-reduction` that the
+    // `typed-kernel-links` foundation selects. Pre-seeded so the trust
+    // audit reports them as `links-defined`/`links-checked` immediately,
+    // matching the corresponding declarations in `lib/self/foundations.lino`.
+    { name: 'pi-formation', kind: 'typing-rule', status: 'links-defined', dependsOn: ['Pi'] },
+    { name: 'lambda-introduction', kind: 'typing-rule', status: 'links-defined', dependsOn: ['lambda'] },
+    { name: 'application-elimination', kind: 'typing-rule', status: 'links-defined', dependsOn: ['apply'] },
+    { name: 'beta-conversion', kind: 'reduction-rule', status: 'links-defined', dependsOn: ['beta-reduction'] },
     // Inductive / coinductive
     { name: 'inductive', kind: 'declaration', status: 'host-primitive', dependsOn: ['Type', 'Pi'] },
     { name: 'coinductive', kind: 'declaration', status: 'host-primitive', dependsOn: ['Type', 'Pi'] },

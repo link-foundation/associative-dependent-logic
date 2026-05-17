@@ -324,6 +324,12 @@
 (rule (eval (check-proof name))
   (check-proof-object name))
 
+(rule (eval (proof-report name))
+  (emit-proof-report name))
+
+(rule (eval (eval-nat term))
+  (reduce-nat-term term))
+
 (rule (eval (encodeAnum node))
   (encode-anum node))
 
