@@ -1648,7 +1648,7 @@ impl Env {
         let nat_links = FoundationDescriptor {
             name: "nat-links".to_string(),
             description: Some(
-                "links-defined Peano naturals (zero/succ formation, add by recursion, induction, nat-equality with reflexivity and successor congruence)"
+                "links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication)"
                     .to_string(),
             ),
             uses: vec![
@@ -1660,6 +1660,16 @@ impl Env {
                 "nat-equality".to_string(),
                 "nat-refl".to_string(),
                 "nat-cong-succ".to_string(),
+                "forall".to_string(),
+                "implication".to_string(),
+                "predicate-application".to_string(),
+                "nat-recursion".to_string(),
+                "nat-eliminator".to_string(),
+                "nat-rec-zero".to_string(),
+                "nat-rec-succ".to_string(),
+                "mul".to_string(),
+                "nat-mul-zero".to_string(),
+                "nat-mul-succ".to_string(),
             ],
             defines: Vec::new(),
             extends: Some("default-rml".to_string()),

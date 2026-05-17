@@ -633,7 +633,7 @@ class Env {
     // derivations for `Nat` and its object-level equality `nat-equals`.
     this.foundations.set('nat-links', {
       name: 'nat-links',
-      description: 'links-defined Peano naturals (zero/succ formation, add by recursion, induction, nat-equality with reflexivity and successor congruence)',
+      description: 'links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication)',
       uses: [
         'nat-zero-formation',
         'nat-succ-formation',
@@ -643,6 +643,16 @@ class Env {
         'nat-equality',
         'nat-refl',
         'nat-cong-succ',
+        'forall',
+        'implication',
+        'predicate-application',
+        'nat-recursion',
+        'nat-eliminator',
+        'nat-rec-zero',
+        'nat-rec-succ',
+        'mul',
+        'nat-mul-zero',
+        'nat-mul-succ',
       ],
       defines: new Map(),
       extends: 'default-rml',

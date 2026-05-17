@@ -39,14 +39,24 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     const found = report.foundations.find(f => f.name === 'nat-links');
     assert.ok(found, 'nat-links foundation must be registered');
     assert.deepStrictEqual(found.uses.slice().sort(), [
+      'forall',
+      'implication',
+      'mul',
       'nat-add-succ',
       'nat-add-zero',
       'nat-cong-succ',
+      'nat-eliminator',
       'nat-equality',
       'nat-induction',
+      'nat-mul-succ',
+      'nat-mul-zero',
+      'nat-rec-succ',
+      'nat-rec-zero',
+      'nat-recursion',
       'nat-refl',
       'nat-succ-formation',
       'nat-zero-formation',
+      'predicate-application',
     ]);
     assert.strictEqual(found.extends, 'default-rml');
   });
@@ -62,6 +72,13 @@ describe('Phase 12 — links-defined Peano naturals', () => {
       'nat-induction',
       'nat-refl',
       'nat-cong-succ',
+      'nat-recursion',
+      'nat-eliminator',
+      'nat-rec-zero',
+      'nat-rec-succ',
+      'mul',
+      'nat-mul-zero',
+      'nat-mul-succ',
     ]) {
       assert.match(source, new RegExp(`\\(uses ${rule}\\)`));
       assert.match(
@@ -80,6 +97,17 @@ describe('Phase 12 — links-defined Peano naturals', () => {
       /\(root-construct nat-equality[\s\S]*?equality-layer[\s\S]*?links-defined/,
       'nat-equality should be a links-defined equality-layer root construct',
     );
+    // Phase 13 promotes the logical glue (forall, implication,
+    // predicate-application) to first-class root constructs so the
+    // trust audit can list them by name.
+    for (const glue of ['forall', 'implication', 'predicate-application']) {
+      assert.match(source, new RegExp(`\\(uses ${glue}\\)`));
+      assert.match(
+        source,
+        new RegExp(`\\(root-construct ${glue}[\\s\\S]*?links-defined`),
+        `${glue} should appear as a links-defined root construct`,
+      );
+    }
   });
 
   it('nat-zero-formation derives `zero has-type Nat` without premises', () => {
@@ -316,9 +344,156 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     assert.deepStrictEqual(out.results, [1, 0]);
   });
 
-  it('runs the full Phase 12 example end-to-end with no diagnostics', () => {
+  it('nat-mul-zero discharges the base case of multiplication', () => {
+    const out = evaluate(`
+(rule nat-mul-zero
+  (premise (?n has-type Nat))
+  (conclusion ((mul zero ?n) nat-equals zero)))
+
+(axiom zero-is-nat
+  (judgement (zero has-type Nat)))
+
+(proof-object zero-mul-zero
+  (applies nat-mul-zero)
+  (premise-by zero-is-nat)
+  (conclusion ((mul zero zero) nat-equals zero)))
+
+(check-proof zero-mul-zero)
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('nat-mul-succ steps multiplication through the successor', () => {
+    // Two premises: the recursive product and the helper addition.
+    const out = evaluate(`
+(rule nat-mul-succ
+  (premise ((mul ?m ?n) nat-equals ?k))
+  (premise ((add ?n ?k) nat-equals ?s))
+  (conclusion ((mul (succ ?m) ?n) nat-equals ?s)))
+
+(axiom zero-mul-one
+  (judgement ((mul zero (succ zero)) nat-equals zero)))
+
+(axiom one-plus-zero-fact
+  (judgement ((add (succ zero) zero) nat-equals (succ zero))))
+
+(proof-object one-mul-one
+  (applies nat-mul-succ)
+  (premise-by zero-mul-one)
+  (premise-by one-plus-zero-fact)
+  (conclusion ((mul (succ zero) (succ zero)) nat-equals (succ zero))))
+
+(check-proof one-mul-one)
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('rejects a nat-mul-succ derivation whose helper addition is inconsistent', () => {
+    // Claiming `(mul (succ zero) zero) nat-equals (succ zero)` would
+    // require the helper addition `(add zero zero) nat-equals (succ zero)`
+    // — impossible. The structural matcher rejects it with E064.
+    const out = evaluate(`
+(rule nat-mul-succ
+  (premise ((mul ?m ?n) nat-equals ?k))
+  (premise ((add ?n ?k) nat-equals ?s))
+  (conclusion ((mul (succ ?m) ?n) nat-equals ?s)))
+
+(axiom zero-mul-zero
+  (judgement ((mul zero zero) nat-equals zero)))
+
+(axiom zero-plus-zero-fact
+  (judgement ((add zero zero) nat-equals zero)))
+
+(proof-object wrong-one-mul-zero
+  (applies nat-mul-succ)
+  (premise-by zero-mul-zero)
+  (premise-by zero-plus-zero-fact)
+  (conclusion ((mul (succ zero) zero) nat-equals (succ zero))))
+
+(check-proof wrong-one-mul-zero)
+`);
+    assert.deepStrictEqual(out.results, [0]);
+    assert.ok(out.diagnostics.some(d => d.code === 'E064'));
+  });
+
+  it('nat-rec-zero discharges the recursor at the base case', () => {
+    const out = evaluate(`
+(rule nat-rec-zero
+  (premise (?base has-type Nat))
+  (conclusion (((rec ?f ?base ?step) at zero) nat-equals ?base)))
+
+(axiom zero-is-nat
+  (judgement (zero has-type Nat)))
+
+(proof-object rec-id-at-zero
+  (applies nat-rec-zero)
+  (premise-by zero-is-nat)
+  (conclusion (((rec id zero step) at zero) nat-equals zero)))
+
+(check-proof rec-id-at-zero)
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('nat-rec-succ steps the recursor through the successor', () => {
+    const out = evaluate(`
+(rule nat-rec-succ
+  (premise (((rec ?f ?base ?step) at ?n) nat-equals ?prev))
+  (premise (((?step ?n) at ?prev) nat-equals ?next))
+  (conclusion (((rec ?f ?base ?step) at (succ ?n)) nat-equals ?next)))
+
+(axiom rec-id-at-zero
+  (judgement (((rec id zero step) at zero) nat-equals zero)))
+
+(axiom step-zero-applied
+  (judgement (((step zero) at zero) nat-equals (succ zero))))
+
+(proof-object rec-id-at-one
+  (applies nat-rec-succ)
+  (premise-by rec-id-at-zero)
+  (premise-by step-zero-applied)
+  (conclusion (((rec id zero step) at (succ zero)) nat-equals (succ zero))))
+
+(check-proof rec-id-at-one)
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('rejects a nat-rec-succ derivation that drops the successor wrapper on the scrutinee', () => {
+    const out = evaluate(`
+(rule nat-rec-succ
+  (premise (((rec ?f ?base ?step) at ?n) nat-equals ?prev))
+  (premise (((?step ?n) at ?prev) nat-equals ?next))
+  (conclusion (((rec ?f ?base ?step) at (succ ?n)) nat-equals ?next)))
+
+(axiom rec-id-at-zero
+  (judgement (((rec id zero step) at zero) nat-equals zero)))
+
+(axiom step-zero-applied
+  (judgement (((step zero) at zero) nat-equals (succ zero))))
+
+(proof-object bad-rec
+  (applies nat-rec-succ)
+  (premise-by rec-id-at-zero)
+  (premise-by step-zero-applied)
+  (conclusion (((rec id zero step) at zero) nat-equals (succ zero))))
+
+(check-proof bad-rec)
+`);
+    assert.deepStrictEqual(out.results, [0]);
+    assert.ok(out.diagnostics.some(d => d.code === 'E064'));
+  });
+
+  it('runs the full Phase 12/13 example end-to-end with no diagnostics', () => {
     const out = evaluateFile(examplePath);
     assert.deepStrictEqual(out.diagnostics, []);
-    assert.deepStrictEqual(out.results, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    assert.deepStrictEqual(out.results, [
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    ]);
   });
 });

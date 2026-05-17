@@ -354,7 +354,7 @@
   (kind proof-principle)
   (status links-defined)
   (semantic-status links-checked)
-  (depends-on Nat))
+  (depends-on Nat forall implication predicate-application))
 
 # `nat-refl` and `nat-cong-succ` make `nat-equality` provable from
 # links: reflexivity supplies `(?n nat-equals ?n)` for every well-typed
@@ -374,6 +374,80 @@
   (status links-defined)
   (semantic-status links-checked)
   (depends-on Nat succ nat-equality))
+
+# Logical glue used by `nat-induction`. These were implicit in PR 178
+# (the rule pattern simply referenced the bare literals `forall`,
+# `implies`, and `at`); promoting them to first-class root constructs
+# makes the trust audit list them and lets the case-study text talk
+# about each piece by name. They are still data only — the host's
+# structural matcher continues to replay every induction step.
+(root-construct forall
+  (kind universal-quantifier)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
+(root-construct implication
+  (kind logical-connective)
+  (status links-defined)
+  (semantic-status links-checked)
+  (encoded-as implies))
+
+(root-construct predicate-application
+  (kind logical-form)
+  (status links-defined)
+  (semantic-status links-checked)
+  (encoded-as at))
+
+# Phase 13 extensions (issue #97). `nat-recursion` declares the
+# eliminator (recursor) over `Nat`, and the two proof-substrate rules
+# `nat-rec-zero` and `nat-rec-succ` compute the recursor by structural
+# induction on the scrutinee. `nat-eliminator` is the proof principle
+# that turns a base/step pair into a function defined for every `Nat`.
+(root-construct nat-recursion
+  (kind recursor)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat zero succ nat-equality proof-replay structural-equality))
+
+(root-construct nat-eliminator
+  (kind eliminator)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat nat-recursion nat-induction))
+
+(root-construct nat-rec-zero
+  (kind computation-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on nat-recursion zero nat-equality))
+
+(root-construct nat-rec-succ
+  (kind computation-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on nat-recursion succ nat-equality))
+
+# Multiplication, defined Software-Foundations style by recursion on
+# the left argument. `nat-mul-zero` discharges `0 * n = 0`, and
+# `nat-mul-succ` steps the recursion using `add`.
+(root-construct mul
+  (kind derived-operation)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat zero succ add))
+
+(root-construct nat-mul-zero
+  (kind computation-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on mul zero))
+
+(root-construct nat-mul-succ
+  (kind computation-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on mul succ add))
 
 (root-construct substitution
   (kind meta-operation)
@@ -631,4 +705,14 @@
   (uses nat-induction)
   (uses nat-equality)
   (uses nat-refl)
-  (uses nat-cong-succ))
+  (uses nat-cong-succ)
+  (uses forall)
+  (uses implication)
+  (uses predicate-application)
+  (uses nat-recursion)
+  (uses nat-eliminator)
+  (uses nat-rec-zero)
+  (uses nat-rec-succ)
+  (uses mul)
+  (uses nat-mul-zero)
+  (uses nat-mul-succ))
