@@ -1259,6 +1259,46 @@ pub struct ProofObjectSnapshot {
     pub conclusion: String,
 }
 
+/// Verdict for `(proof-report <name>)`. Mirrors `CheckProofVerdict` shape
+/// without the substitution table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofReportVerdict {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+/// One entry of the transitive dependency walk inside a `ProofReport`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofReportDependency {
+    pub name: String,
+    pub kind: String,
+    /// Rule referenced by a proof-object dependency (empty for axioms/assumptions).
+    pub rule: Option<String>,
+    /// Stringified judgement, when known.
+    pub judgement: Option<String>,
+}
+
+/// Per-proof dependency/trust report (issue #97, Phase 13). Built by
+/// `Env::proof_report` and surfaced as `RunResult::Proof` so the
+/// trust audit can be performed for an individual proof object instead
+/// of only globally via `foundation-report`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofReport {
+    pub name: String,
+    pub rule: Option<String>,
+    pub conclusion: Option<String>,
+    pub premises: Vec<String>,
+    pub premise_refs: Vec<String>,
+    pub verdict: ProofReportVerdict,
+    pub dependencies: Vec<ProofReportDependency>,
+    pub rules: Vec<String>,
+    pub root_constructs_used: Vec<String>,
+    pub by_semantic_status: Vec<(String, Vec<String>)>,
+    pub by_trust_status: Vec<(String, Vec<String>)>,
+    pub active_foundation: String,
+    pub strict_pure_links: bool,
+}
+
 /// One constructor of an inductive datatype.
 #[derive(Debug, Clone)]
 pub struct ConstructorDecl {
@@ -1636,16 +1676,14 @@ impl Env {
             .insert(typed_kernel_links.name.clone(), typed_kernel_links);
         // Pre-seed the links-defined Peano naturals foundation (issue #97,
         // Phase 12). Selecting it via `(with-foundation nat-links ...)`
-        // records the proof-substrate rules `nat-zero-formation`,
-        // `nat-succ-formation`, `nat-add-zero`, `nat-add-succ`, and
-        // `nat-induction` as the canonical links-defined replacement for
-        // host-numeric Peano arithmetic. The host's decimal numeric domain
-        // is unaffected; the foundation is selected so the trust audit can
-        // list the five rules as the active derivations for `Nat`.
+        // records the Nat proof-substrate rules, the dedicated `nat-equality`
+        // layer, and the rule-driven `eval-nat` normalizer as active
+        // foundation dependencies. The host's decimal numeric domain and
+        // default equality layers are unaffected.
         let nat_links = FoundationDescriptor {
             name: "nat-links".to_string(),
             description: Some(
-                "links-defined Peano naturals (zero/succ formation, add by recursion, induction)"
+                "links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication, rule-driven eval-nat normalizer)"
                     .to_string(),
             ),
             uses: vec![
@@ -1654,6 +1692,22 @@ impl Env {
                 "nat-add-zero".to_string(),
                 "nat-add-succ".to_string(),
                 "nat-induction".to_string(),
+                "nat-equality".to_string(),
+                "nat-refl".to_string(),
+                "nat-cong-succ".to_string(),
+                "forall".to_string(),
+                "implication".to_string(),
+                "predicate-application".to_string(),
+                "nat-recursion".to_string(),
+                "nat-eliminator".to_string(),
+                "nat-rec-zero".to_string(),
+                "nat-rec-succ".to_string(),
+                "mul".to_string(),
+                "nat-mul-zero".to_string(),
+                "nat-mul-succ".to_string(),
+                "eval-nat-normalize".to_string(),
+                "eval-nat".to_string(),
+                "nat-normal-form-to-host-number".to_string(),
             ],
             defines: Vec::new(),
             extends: Some("default-rml".to_string()),
@@ -2018,6 +2072,198 @@ impl Env {
             strict_pure_links: self.strict_pure_links,
             allowed_host_primitives: allowed,
             dependency_graph,
+        }
+    }
+
+    /// Build a per-proof report (issue #97, Phase 13). Walks the proof
+    /// object tree starting at `name`, collects the transitive
+    /// dependencies (proof-objects, axioms, assumptions) and the
+    /// registered root constructs that appear as leaf operators in the
+    /// proof's premises/conclusion and in the rule patterns it
+    /// transitively applies. Returns the report in all cases — when the
+    /// proof object is missing, `verdict.ok` is `false`.
+    pub fn proof_report(&self, name: &str) -> ProofReport {
+        let active = if self.active_foundation.is_empty() {
+            "default-rml".to_string()
+        } else {
+            self.active_foundation.clone()
+        };
+        if name.is_empty() {
+            return ProofReport {
+                name: String::new(),
+                rule: None,
+                conclusion: None,
+                premises: Vec::new(),
+                premise_refs: Vec::new(),
+                verdict: ProofReportVerdict {
+                    ok: false,
+                    error: Some("proof name required".to_string()),
+                },
+                dependencies: Vec::new(),
+                rules: Vec::new(),
+                root_constructs_used: Vec::new(),
+                by_semantic_status: Vec::new(),
+                by_trust_status: Vec::new(),
+                active_foundation: active,
+                strict_pure_links: self.strict_pure_links,
+            };
+        }
+        let po = match self.get_proof_object(name) {
+            Some(po) => po.clone(),
+            None => {
+                return ProofReport {
+                    name: name.to_string(),
+                    rule: None,
+                    conclusion: None,
+                    premises: Vec::new(),
+                    premise_refs: Vec::new(),
+                    verdict: ProofReportVerdict {
+                        ok: false,
+                        error: Some(format!("unknown proof-object {}", name)),
+                    },
+                    dependencies: Vec::new(),
+                    rules: Vec::new(),
+                    root_constructs_used: Vec::new(),
+                    by_semantic_status: Vec::new(),
+                    by_trust_status: Vec::new(),
+                    active_foundation: active,
+                    strict_pure_links: self.strict_pure_links,
+                };
+            }
+        };
+        let verdict = check_proof_object(self, name);
+        let verdict = match verdict {
+            CheckProofVerdict::Ok(_) => ProofReportVerdict {
+                ok: true,
+                error: None,
+            },
+            CheckProofVerdict::Err(msg) => ProofReportVerdict {
+                ok: false,
+                error: Some(msg),
+            },
+        };
+        let mut dependencies: Vec<ProofReportDependency> = Vec::new();
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut rules: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut stack: Vec<String> = po.premise_refs.iter().cloned().rev().collect();
+        while let Some(refname) = stack.pop() {
+            if seen.contains(&refname) {
+                continue;
+            }
+            seen.insert(refname.clone());
+            if let Some(ax) = self.get_proof_assumption(&refname) {
+                dependencies.push(ProofReportDependency {
+                    name: ax.name.clone(),
+                    kind: ax.kind.clone(),
+                    rule: None,
+                    judgement: Some(key_of(&ax.judgement)),
+                });
+                continue;
+            }
+            if let Some(dep) = self.get_proof_object(&refname) {
+                for sub in dep.premise_refs.iter().rev() {
+                    stack.push(sub.clone());
+                }
+                if !dep.rule.is_empty() {
+                    rules.insert(dep.rule.clone());
+                }
+                dependencies.push(ProofReportDependency {
+                    name: dep.name.clone(),
+                    kind: "proof-object".to_string(),
+                    rule: Some(dep.rule.clone()),
+                    judgement: Some(key_of(&dep.conclusion)),
+                });
+                continue;
+            }
+            dependencies.push(ProofReportDependency {
+                name: refname.clone(),
+                kind: "unknown".to_string(),
+                rule: None,
+                judgement: None,
+            });
+        }
+        if !po.rule.is_empty() {
+            rules.insert(po.rule.clone());
+        }
+        let mut root_names: std::collections::BTreeSet<String> = [
+            "proof-replay",
+            "structural-equality",
+            "structural-matcher",
+            "substitution",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        fn collect_terms(
+            node: &Node,
+            registry: &std::collections::HashMap<String, RootConstructDescriptor>,
+            into: &mut std::collections::BTreeSet<String>,
+        ) {
+            match node {
+                Node::Leaf(s) => {
+                    if registry.contains_key(s) {
+                        into.insert(s.clone());
+                    }
+                }
+                Node::List(children) => {
+                    for child in children {
+                        collect_terms(child, registry, into);
+                    }
+                }
+            }
+        }
+        collect_terms(&po.conclusion, &self.root_constructs, &mut root_names);
+        for prem in &po.premises {
+            collect_terms(prem, &self.root_constructs, &mut root_names);
+        }
+        for rule_name in &rules {
+            if let Some(rule) = self.get_proof_rule(rule_name) {
+                collect_terms(&rule.conclusion, &self.root_constructs, &mut root_names);
+                for prem in &rule.premises {
+                    collect_terms(prem, &self.root_constructs, &mut root_names);
+                }
+            }
+        }
+        let root_constructs_used: Vec<String> = root_names.into_iter().collect();
+        let mut by_semantic_status_map: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        let mut by_trust_status_map: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for rc_name in &root_constructs_used {
+            if let Some(rc) = self.root_constructs.get(rc_name) {
+                let semantic =
+                    semantic_status_for_descriptor(rc).unwrap_or_else(|| "unknown".to_string());
+                let trust = rc.status.clone().unwrap_or_else(|| "unknown".to_string());
+                by_semantic_status_map
+                    .entry(semantic)
+                    .or_default()
+                    .push(rc_name.clone());
+                by_trust_status_map
+                    .entry(trust)
+                    .or_default()
+                    .push(rc_name.clone());
+            }
+        }
+        for v in by_semantic_status_map.values_mut() {
+            v.sort();
+        }
+        for v in by_trust_status_map.values_mut() {
+            v.sort();
+        }
+        ProofReport {
+            name: name.to_string(),
+            rule: Some(po.rule.clone()),
+            conclusion: Some(key_of(&po.conclusion)),
+            premises: po.premises.iter().map(key_of).collect(),
+            premise_refs: po.premise_refs.clone(),
+            verdict,
+            dependencies,
+            rules: rules.into_iter().collect(),
+            root_constructs_used,
+            by_semantic_status: by_semantic_status_map.into_iter().collect(),
+            by_trust_status: by_trust_status_map.into_iter().collect(),
+            active_foundation: active,
+            strict_pure_links: self.strict_pure_links,
         }
     }
 
@@ -3309,6 +3555,7 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         ("lino-parser", "parser", "external-trusted", vec![], Some("links-notation"), Some(false)),
         ("canonical-printer", "printer", "host-primitive", vec![], Some("keyOf"), None),
         ("structural-equality", "equality-layer", "host-primitive", vec![], Some("isStructurallySame"), None),
+        ("structural-matcher", "matcher", "external-trusted", vec![], Some("match_proof_pattern"), None),
         ("decimal-12-arithmetic", "numeric-domain", "host-primitive", vec![], Some("decRound"), Some(false)),
         ("+", "arithmetic-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
         ("-", "arithmetic-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
@@ -3351,6 +3598,11 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         ("alpha-renaming", "meta-operation", "host-primitive", vec![], None, None),
         ("normalization", "reduction-rule", "host-primitive", vec!["beta-reduction"], Some("normalizeTerm"), None),
         ("whnf", "reduction-rule", "host-primitive", vec!["beta-reduction"], Some("whnfTerm"), None),
+        ("conversion", "equality-layer", "host-primitive", vec!["beta-reduction", "normalization", "structural-equality"], None, None),
+        ("pi-formation", "typing-rule", "links-defined", vec!["Pi"], None, None),
+        ("lambda-introduction", "typing-rule", "links-defined", vec!["lambda"], None, None),
+        ("application-elimination", "typing-rule", "links-defined", vec!["apply"], None, None),
+        ("beta-conversion", "reduction-rule", "links-defined", vec!["beta-reduction"], None, None),
         ("inductive", "declaration", "host-primitive", vec!["Type", "Pi"], None, None),
         ("coinductive", "declaration", "host-primitive", vec!["Type", "Pi"], None, None),
         ("proof-replay", "replay-checker", "host-primitive", vec![], Some("check.mjs"), None),
@@ -3359,6 +3611,31 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         ("proof-checking-relation", "checking-relation", "links-defined", vec!["proof-replay", "structural-equality", "proof-object"], None, None),
         ("rule-application-check", "checking-relation", "links-defined", vec!["proof-replay", "structural-equality", "proof-rule-declaration"], None, None),
         ("by", "proof-rule", "host-primitive", vec![], None, None),
+        ("Nat", "inductive-type", "links-defined", vec![], None, None),
+        ("zero", "constructor", "links-defined", vec!["Nat"], None, None),
+        ("succ", "constructor", "links-defined", vec!["Nat"], None, None),
+        ("nat-equality", "equality-layer", "links-defined", vec!["Nat", "structural-equality"], Some("nat-equals"), None),
+        ("nat-recursion", "recursor", "links-defined", vec!["Nat", "zero", "succ", "nat-equality", "proof-replay", "structural-equality"], None, None),
+        ("add", "derived-operation", "links-defined", vec!["Nat", "zero", "succ", "nat-recursion", "nat-equality"], None, None),
+        ("nat-add-zero", "computation-rule", "links-defined", vec!["add", "zero", "nat-recursion", "nat-equality"], None, None),
+        ("nat-add-succ", "computation-rule", "links-defined", vec!["add", "succ", "nat-recursion", "nat-equality"], None, None),
+        ("nat-zero-formation", "typing-rule", "links-defined", vec!["Nat", "zero"], None, None),
+        ("nat-succ-formation", "typing-rule", "links-defined", vec!["Nat", "succ"], None, None),
+        ("forall", "universal-quantifier", "links-defined", vec!["Nat"], None, None),
+        ("implication", "logical-connective", "links-defined", vec![], Some("implies"), None),
+        ("predicate-application", "logical-form", "links-defined", vec![], Some("at"), None),
+        ("nat-induction", "proof-principle", "links-defined", vec!["Nat", "forall", "implication", "predicate-application", "substitution", "freshness", "proof-replay", "structural-equality"], None, None),
+        ("nat-refl", "equality-rule", "links-defined", vec!["Nat", "nat-equality"], None, None),
+        ("nat-cong-succ", "equality-rule", "links-defined", vec!["Nat", "succ", "nat-equality"], None, None),
+        ("nat-eliminator", "eliminator", "links-defined", vec!["Nat", "nat-recursion", "nat-induction"], None, None),
+        ("nat-rec-zero", "computation-rule", "links-defined", vec!["nat-recursion", "zero", "nat-equality"], None, None),
+        ("nat-rec-succ", "computation-rule", "links-defined", vec!["nat-recursion", "succ", "nat-equality"], None, None),
+        ("mul", "derived-operation", "links-defined", vec!["Nat", "zero", "succ", "add", "nat-recursion", "nat-equality"], None, None),
+        ("nat-mul-zero", "computation-rule", "links-defined", vec!["mul", "zero", "nat-recursion", "nat-equality"], None, None),
+        ("nat-mul-succ", "computation-rule", "links-defined", vec!["mul", "succ", "add", "nat-recursion", "nat-equality"], None, None),
+        ("eval-nat-normalize", "evaluator-fragment", "links-defined", vec!["Nat", "zero", "succ", "add", "mul", "nat-add-zero", "nat-add-succ", "nat-mul-zero", "nat-mul-succ", "structural-matcher"], None, None),
+        ("eval-nat", "evaluator", "links-defined", vec!["eval-nat-normalize", "nat-normal-form-to-host-number"], None, None),
+        ("nat-normal-form-to-host-number", "renderer", "host-derived", vec!["eval-nat-normalize"], None, None),
         ("smt-trusted", "external-decision", "external-trusted", vec![], None, None),
         ("atp-trusted", "external-decision", "external-trusted", vec![], None, None),
         ("mode", "mode-declaration", "host-primitive", vec![], None, None),
@@ -3386,6 +3663,17 @@ fn seed_builtin_root_constructs(env: &mut Env) {
             foundation: None,
         };
         env.root_constructs.insert(descriptor.name.clone(), descriptor);
+    }
+    for name in ["eval-nat-normalize", "eval-nat"] {
+        if let Some(descriptor) = env.root_constructs.get_mut(name) {
+            descriptor.semantic_status = Some("links-evaluated".to_string());
+        }
+    }
+    if let Some(descriptor) = env.root_constructs.get_mut("structural-matcher") {
+        descriptor.semantic_status = Some("host-trusted".to_string());
+    }
+    if let Some(descriptor) = env.root_constructs.get_mut("nat-normal-form-to-host-number") {
+        descriptor.semantic_status = Some("host-trusted".to_string());
     }
 }
 
@@ -4382,6 +4670,7 @@ fn pure_links_scanner_ignored(name: &str) -> bool {
             | "rule"
             | "proof-object"
             | "check-proof"
+            | "proof-report"
             | "foundation"
             | "with-foundation"
             | "foundation-report"
@@ -4713,6 +5002,455 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Pretty-print a [`ProofReport`] for the REPL / CLI. Mirrors the JS
+/// `formatProofReport` shape so transcripts agree across runtimes.
+pub fn format_proof_report(report: &ProofReport) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("Proof report for {}:", report.name));
+    lines.push(format!(
+        "  verdict: {}",
+        if report.verdict.ok { "ok" } else { "error" }
+    ));
+    if let Some(err) = &report.verdict.error {
+        lines.push(format!("  error: {}", err));
+    }
+    if let Some(rule) = &report.rule {
+        lines.push(format!("  rule: {}", rule));
+    }
+    if let Some(conc) = &report.conclusion {
+        lines.push(format!("  conclusion: {}", conc));
+    }
+    if !report.premises.is_empty() {
+        lines.push(format!("  premises: {}", report.premises.join(", ")));
+    }
+    if !report.premise_refs.is_empty() {
+        lines.push(format!(
+            "  premise refs: {}",
+            report.premise_refs.join(", ")
+        ));
+    }
+    if !report.dependencies.is_empty() {
+        lines.push(String::new());
+        lines.push("dependencies (transitive):".to_string());
+        for d in &report.dependencies {
+            let extra = match (&d.rule, &d.judgement) {
+                (Some(r), Some(j)) => format!(" — applies {} → {}", r, j),
+                (Some(r), None) => format!(" — applies {}", r),
+                (None, Some(j)) => format!(" — {}", j),
+                (None, None) => String::new(),
+            };
+            lines.push(format!("  - {} [{}]{}", d.name, d.kind, extra));
+        }
+    }
+    if !report.rules.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("rules applied: {}", report.rules.join(", ")));
+    }
+    if !report.root_constructs_used.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "root constructs used: {}",
+            report.root_constructs_used.join(", ")
+        ));
+    }
+    if !report.by_semantic_status.is_empty() {
+        lines.push(String::new());
+        lines.push("semantic statuses:".to_string());
+        let mut seen: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for status in SEMANTIC_STATUS_ORDER.iter() {
+            if let Some((_, names)) = report
+                .by_semantic_status
+                .iter()
+                .find(|(s, _)| s == status)
+            {
+                if !names.is_empty() {
+                    lines.push(format!("  {}: {}", status, names.join(", ")));
+                    seen.insert((*status).to_string());
+                }
+            }
+        }
+        for (status, names) in &report.by_semantic_status {
+            if seen.contains(status) || names.is_empty() {
+                continue;
+            }
+            lines.push(format!("  {}: {}", status, names.join(", ")));
+        }
+    }
+    if !report.by_trust_status.is_empty() {
+        lines.push(String::new());
+        lines.push("trust statuses:".to_string());
+        for (status, names) in &report.by_trust_status {
+            if names.is_empty() {
+                continue;
+            }
+            lines.push(format!("  {}: {}", status, names.join(", ")));
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!("  active foundation: {}", report.active_foundation));
+    if report.strict_pure_links {
+        lines.push("  pure-links strict mode: on".to_string());
+    }
+    lines.join("\n")
+}
+
+/// Result of `(eval-nat <term>)`. `normal_form` is the semantic result; the
+/// numeric `value` is only the legacy renderer for that Peano normal form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalNatResult {
+    pub value: f64,
+    pub normal_form: Node,
+    pub steps: Vec<String>,
+}
+
+fn leaf_node(s: &str) -> Node {
+    Node::Leaf(s.to_string())
+}
+
+fn list_node(items: Vec<Node>) -> Node {
+    Node::List(items)
+}
+
+fn default_eval_nat_rule(name: &str) -> Option<ProofRule> {
+    match name {
+        "nat-add-zero" => Some(ProofRule {
+            name: name.to_string(),
+            premises: vec![list_node(vec![
+                leaf_node("?n"),
+                leaf_node("has-type"),
+                leaf_node("Nat"),
+            ])],
+            conclusion: list_node(vec![
+                list_node(vec![leaf_node("add"), leaf_node("zero"), leaf_node("?n")]),
+                leaf_node("nat-equals"),
+                leaf_node("?n"),
+            ]),
+        }),
+        "nat-add-succ" => Some(ProofRule {
+            name: name.to_string(),
+            premises: vec![list_node(vec![
+                list_node(vec![leaf_node("add"), leaf_node("?m"), leaf_node("?n")]),
+                leaf_node("nat-equals"),
+                leaf_node("?k"),
+            ])],
+            conclusion: list_node(vec![
+                list_node(vec![
+                    leaf_node("add"),
+                    list_node(vec![leaf_node("succ"), leaf_node("?m")]),
+                    leaf_node("?n"),
+                ]),
+                leaf_node("nat-equals"),
+                list_node(vec![leaf_node("succ"), leaf_node("?k")]),
+            ]),
+        }),
+        "nat-mul-zero" => Some(ProofRule {
+            name: name.to_string(),
+            premises: vec![list_node(vec![
+                leaf_node("?n"),
+                leaf_node("has-type"),
+                leaf_node("Nat"),
+            ])],
+            conclusion: list_node(vec![
+                list_node(vec![leaf_node("mul"), leaf_node("zero"), leaf_node("?n")]),
+                leaf_node("nat-equals"),
+                leaf_node("zero"),
+            ]),
+        }),
+        "nat-mul-succ" => Some(ProofRule {
+            name: name.to_string(),
+            premises: vec![
+                list_node(vec![
+                    list_node(vec![leaf_node("mul"), leaf_node("?m"), leaf_node("?n")]),
+                    leaf_node("nat-equals"),
+                    leaf_node("?k"),
+                ]),
+                list_node(vec![
+                    list_node(vec![leaf_node("add"), leaf_node("?n"), leaf_node("?k")]),
+                    leaf_node("nat-equals"),
+                    leaf_node("?s"),
+                ]),
+            ],
+            conclusion: list_node(vec![
+                list_node(vec![
+                    leaf_node("mul"),
+                    list_node(vec![leaf_node("succ"), leaf_node("?m")]),
+                    leaf_node("?n"),
+                ]),
+                leaf_node("nat-equals"),
+                leaf_node("?s"),
+            ]),
+        }),
+        _ => None,
+    }
+}
+
+fn instantiate_proof_pattern(pattern: &Node, subs: &HashMap<String, Node>) -> Node {
+    match pattern {
+        Node::Leaf(token) if token.starts_with('?') => {
+            subs.get(token).cloned().unwrap_or_else(|| pattern.clone())
+        }
+        Node::Leaf(_) => pattern.clone(),
+        Node::List(children) => Node::List(
+            children
+                .iter()
+                .map(|child| instantiate_proof_pattern(child, subs))
+                .collect(),
+        ),
+    }
+}
+
+fn eval_nat_foundation_uses(
+    env: &Env,
+    foundation_name: &str,
+    rule_name: &str,
+    seen: &mut HashSet<String>,
+) -> bool {
+    if !seen.insert(foundation_name.to_string()) {
+        return false;
+    }
+    let Some(foundation) = env.get_foundation(foundation_name) else {
+        return false;
+    };
+    if foundation.uses.iter().any(|u| u == rule_name) {
+        return true;
+    }
+    foundation
+        .extends
+        .as_deref()
+        .map(|parent| eval_nat_foundation_uses(env, parent, rule_name, seen))
+        .unwrap_or(false)
+}
+
+fn eval_nat_active_foundation_uses(env: &Env, name: &str) -> bool {
+    let active = if env.active_foundation.is_empty() {
+        "default-rml"
+    } else {
+        env.active_foundation.as_str()
+    };
+    if active == "default-rml" {
+        return true;
+    }
+    eval_nat_foundation_uses(env, active, name, &mut HashSet::new())
+}
+
+fn eval_nat_rule(env: &Env, name: &str) -> Result<ProofRule, String> {
+    if !eval_nat_active_foundation_uses(env, name) {
+        return Err(format!(
+            "eval-nat requires {}, but it is not available in active foundation {}",
+            name,
+            if env.active_foundation.is_empty() {
+                "default-rml"
+            } else {
+                env.active_foundation.as_str()
+            }
+        ));
+    }
+    env.get_proof_rule(name)
+        .cloned()
+        .or_else(|| default_eval_nat_rule(name))
+        .ok_or_else(|| {
+            format!(
+                "eval-nat requires {}, but no links-level rule is registered",
+                name
+            )
+        })
+}
+
+fn eval_nat_equality_conclusion<'a>(
+    rule: &'a ProofRule,
+    rule_name: &str,
+) -> Result<(&'a Node, &'a Node), String> {
+    let Node::List(children) = &rule.conclusion else {
+        return Err(format!(
+            "eval-nat rule {} must conclude (<term> nat-equals <term>)",
+            rule_name
+        ));
+    };
+    if children.len() != 3 || !matches!(&children[1], Node::Leaf(mid) if mid == "nat-equals") {
+        return Err(format!(
+            "eval-nat rule {} must conclude (<term> nat-equals <term>)",
+            rule_name
+        ));
+    }
+    Ok((&children[0], &children[2]))
+}
+
+fn process_eval_nat_premises(
+    env: &Env,
+    rule: &ProofRule,
+    subs: &mut HashMap<String, Node>,
+    steps: &mut Vec<String>,
+    depth: usize,
+) -> Result<(), String> {
+    for premise in &rule.premises {
+        if let Node::List(children) = premise {
+            if children.len() == 3 && matches!(&children[1], Node::Leaf(mid) if mid == "nat-equals")
+            {
+                let premise_input = instantiate_proof_pattern(&children[0], subs);
+                let premise_normal =
+                    normalize_eval_nat_term(env, &premise_input, steps, depth + 1)?;
+                if !match_proof_pattern(&children[2], &premise_normal, subs) {
+                    return Err(format!(
+                        "eval-nat rule {} premise {} did not match normal form {}",
+                        rule.name,
+                        key_of(premise),
+                        key_of(&premise_normal)
+                    ));
+                }
+                continue;
+            }
+            if children.len() == 3
+                && matches!(&children[1], Node::Leaf(mid) if mid == "has-type")
+                && matches!(&children[2], Node::Leaf(ty) if ty == "Nat")
+            {
+                continue;
+            }
+        }
+        return Err(format!(
+            "eval-nat rule {} has unsupported premise {}",
+            rule.name,
+            key_of(premise)
+        ));
+    }
+    Ok(())
+}
+
+fn apply_eval_nat_rule(
+    env: &Env,
+    rule_name: &str,
+    term: &Node,
+    steps: &mut Vec<String>,
+    depth: usize,
+) -> Result<Node, String> {
+    let rule = eval_nat_rule(env, rule_name)?;
+    let (left, right) = eval_nat_equality_conclusion(&rule, rule_name)?;
+    let mut subs: HashMap<String, Node> = HashMap::new();
+    if !match_proof_pattern(left, term, &mut subs) {
+        return Err(format!(
+            "eval-nat rule {} does not apply to {}",
+            rule_name,
+            key_of(term)
+        ));
+    }
+    steps.push(rule.name.clone());
+    process_eval_nat_premises(env, &rule, &mut subs, steps, depth)?;
+    let next = instantiate_proof_pattern(right, &subs);
+    normalize_eval_nat_term(env, &next, steps, depth + 1)
+}
+
+fn normalize_eval_nat_term(
+    env: &Env,
+    node: &Node,
+    steps: &mut Vec<String>,
+    depth: usize,
+) -> Result<Node, String> {
+    if depth > 10_000 {
+        return Err("eval-nat exceeded its structural rewrite limit".to_string());
+    }
+    if let Node::Leaf(s) = node {
+        if s == "zero" {
+            return Ok(leaf_node("zero"));
+        }
+    }
+    if let Node::List(children) = node {
+        if children.len() == 2 {
+            if let Node::Leaf(head) = &children[0] {
+                if head == "succ" {
+                    let inner = normalize_eval_nat_term(env, &children[1], steps, depth + 1)?;
+                    return Ok(list_node(vec![leaf_node("succ"), inner]));
+                }
+            }
+        }
+        if children.len() == 3 {
+            if let Node::Leaf(head) = &children[0] {
+                if head == "add" {
+                    let left = normalize_eval_nat_term(env, &children[1], steps, depth + 1)?;
+                    let current =
+                        list_node(vec![leaf_node("add"), left.clone(), children[2].clone()]);
+                    if matches!(&left, Node::Leaf(s) if s == "zero") {
+                        return apply_eval_nat_rule(
+                            env,
+                            "nat-add-zero",
+                            &current,
+                            steps,
+                            depth + 1,
+                        );
+                    }
+                    if matches!(&left, Node::List(items) if items.len() == 2 && matches!(&items[0], Node::Leaf(h) if h == "succ"))
+                    {
+                        return apply_eval_nat_rule(
+                            env,
+                            "nat-add-succ",
+                            &current,
+                            steps,
+                            depth + 1,
+                        );
+                    }
+                }
+                if head == "mul" {
+                    let left = normalize_eval_nat_term(env, &children[1], steps, depth + 1)?;
+                    let current =
+                        list_node(vec![leaf_node("mul"), left.clone(), children[2].clone()]);
+                    if matches!(&left, Node::Leaf(s) if s == "zero") {
+                        return apply_eval_nat_rule(
+                            env,
+                            "nat-mul-zero",
+                            &current,
+                            steps,
+                            depth + 1,
+                        );
+                    }
+                    if matches!(&left, Node::List(items) if items.len() == 2 && matches!(&items[0], Node::Leaf(h) if h == "succ"))
+                    {
+                        return apply_eval_nat_rule(
+                            env,
+                            "nat-mul-succ",
+                            &current,
+                            steps,
+                            depth + 1,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Err(format!(
+        "eval-nat: not a closed Peano term: {}",
+        key_of(node)
+    ))
+}
+
+fn peano_normal_form_to_host_number(node: &Node) -> Result<f64, String> {
+    if let Node::Leaf(s) = node {
+        if s == "zero" {
+            return Ok(0.0);
+        }
+    }
+    if let Node::List(children) = node {
+        if children.len() == 2 && matches!(&children[0], Node::Leaf(head) if head == "succ") {
+            return Ok(1.0 + peano_normal_form_to_host_number(&children[1])?);
+        }
+    }
+    Err(format!(
+        "eval-nat produced a non-Peano normal form: {}",
+        key_of(node)
+    ))
+}
+
+/// Normalize a closed Peano term by dispatching through active links-level
+/// computation rules. Host arithmetic is only used by the final renderer.
+pub fn eval_nat_term(env: &Env, node: &Node) -> Result<EvalNatResult, String> {
+    let mut steps: Vec<String> = Vec::new();
+    let normal_form = normalize_eval_nat_term(env, node, &mut steps, 0)?;
+    let value = peano_normal_form_to_host_number(&normal_form)?;
+    Ok(EvalNatResult {
+        value,
+        normal_form,
+        steps,
+    })
 }
 
 fn register_template_form(form: &Node, env: &mut Env) -> Result<String, String> {
@@ -11791,13 +12529,14 @@ pub fn extract_program(text: &str, target: ExtractTarget) -> Result<String, Stri
 
 // ========== Runner ==========
 
-/// A result from running a query: a numeric value, a type string, or a
-/// foundation report (issue #97).
+/// A result from running a query: a numeric value, a type string, a
+/// foundation report, or a per-proof report (issue #97).
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunResult {
     Num(f64),
     Type(String),
     Foundation(FoundationReport),
+    Proof(ProofReport),
 }
 
 /// Evaluate a complete LiNo knowledge base and return both results and any
@@ -12346,6 +13085,85 @@ fn eval_foundation_body_form(
                         format!("{} → {}", target, if value == 1.0 { "ok" } else { "fail" }),
                         span.clone(),
                     ));
+                }
+                return;
+            }
+            if head == "proof-report" {
+                if children.len() != 2 {
+                    diagnostics.push(Diagnostic::new(
+                        "E064",
+                        "(proof-report <name>) requires a proof-object name",
+                        span.clone(),
+                    ));
+                    return;
+                }
+                let target = match &children[1] {
+                    Node::Leaf(s) if !s.is_empty() => s.clone(),
+                    _ => {
+                        diagnostics.push(Diagnostic::new(
+                            "E064",
+                            "(proof-report <name>) requires a proof-object name",
+                            span.clone(),
+                        ));
+                        return;
+                    }
+                };
+                let report = env.proof_report(&target);
+                results.push(RunResult::Proof(report));
+                if let Some(p) = proofs.as_mut() {
+                    p.push(None);
+                }
+                if let Some(pv) = provenance.as_mut() {
+                    pv.push(None);
+                }
+                if options.trace {
+                    env.trace_events.push(TraceEvent::new(
+                        "proof-report",
+                        target,
+                        span.clone(),
+                    ));
+                }
+                return;
+            }
+            if head == "eval-nat" {
+                if children.len() != 2 {
+                    diagnostics.push(Diagnostic::new(
+                        "E067",
+                        "(eval-nat <term>) requires exactly one term argument",
+                        span.clone(),
+                    ));
+                    return;
+                }
+                match eval_nat_term(env, &children[1]) {
+                    Ok(result) => {
+                        results.push(RunResult::Num(result.value));
+                        if let Some(p) = proofs.as_mut() {
+                            p.push(None);
+                        }
+                        if let Some(pv) = provenance.as_mut() {
+                            pv.push(None);
+                        }
+                        if options.trace {
+                            env.trace_events.push(TraceEvent::new(
+                                "eval-nat",
+                                format!(
+                                    "{} -> normal-form {} -> {}; rules-used: {}; host-primitives-used: structural-matcher; renderer: nat-normal-form-to-host-number",
+                                    key_of(&children[1]),
+                                    key_of(&result.normal_form),
+                                    format_trace_value(result.value),
+                                    if result.steps.is_empty() {
+                                        "<none>".to_string()
+                                    } else {
+                                        result.steps.join(", ")
+                                    }
+                                ),
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E067", message, span.clone()));
+                    }
                 }
                 return;
             }
@@ -12955,6 +13773,85 @@ fn evaluate_inner(
                     }
                     continue;
                 }
+                if head == "proof-report" {
+                    if children.len() != 2 {
+                        diagnostics.push(Diagnostic::new(
+                            "E064",
+                            "(proof-report <name>) requires a proof-object name",
+                            span.clone(),
+                        ));
+                        continue;
+                    }
+                    let target = match &children[1] {
+                        Node::Leaf(s) if !s.is_empty() => s.clone(),
+                        _ => {
+                            diagnostics.push(Diagnostic::new(
+                                "E064",
+                                "(proof-report <name>) requires a proof-object name",
+                                span.clone(),
+                            ));
+                            continue;
+                        }
+                    };
+                    let report = env.proof_report(&target);
+                    results.push(RunResult::Proof(report));
+                    if let Some(p) = proofs.as_mut() {
+                        p.push(None);
+                    }
+                    if let Some(pv) = provenance.as_mut() {
+                        pv.push(None);
+                    }
+                    if options.trace {
+                        env.trace_events.push(TraceEvent::new(
+                            "proof-report",
+                            target,
+                            span.clone(),
+                        ));
+                    }
+                    continue;
+                }
+                if head == "eval-nat" {
+                    if children.len() != 2 {
+                        diagnostics.push(Diagnostic::new(
+                            "E067",
+                            "(eval-nat <term>) requires exactly one term argument",
+                            span.clone(),
+                        ));
+                        continue;
+                    }
+                    match eval_nat_term(env, &children[1]) {
+                        Ok(result) => {
+                            results.push(RunResult::Num(result.value));
+                            if let Some(p) = proofs.as_mut() {
+                                p.push(None);
+                            }
+                            if let Some(pv) = provenance.as_mut() {
+                                pv.push(None);
+                            }
+                            if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "eval-nat",
+                                    format!(
+                                        "{} -> normal-form {} -> {}; rules-used: {}; host-primitives-used: structural-matcher; renderer: nat-normal-form-to-host-number",
+                                        key_of(&children[1]),
+                                        key_of(&result.normal_form),
+                                        format_trace_value(result.value),
+                                        if result.steps.is_empty() {
+                                            "<none>".to_string()
+                                        } else {
+                                            result.steps.join(", ")
+                                        }
+                                    ),
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E067", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
                 // Pure-links strict mode (issue #97, Phase 6).
                 if head == "strict-foundation" {
                     match parse_strict_foundation_form(&form) {
@@ -13285,6 +14182,7 @@ pub fn run(text: &str, options: Option<EnvOptions>) -> Vec<f64> {
             RunResult::Num(v) => Some(v),
             RunResult::Type(_) => None,
             RunResult::Foundation(_) => None,
+            RunResult::Proof(_) => None,
         })
         .collect()
 }

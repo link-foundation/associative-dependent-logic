@@ -36,6 +36,8 @@ fixed the contract:
 | 2026-05-16 (Phases 2–9) | Phase 2 equality-layer separation, Phase 3 proof-object replay (`E064`), Phase 4 truth-tables, Phase 5 links-defined typed-kernel fragment (`pi-formation`, `lambda-introduction`, `application-elimination`, `beta-conversion` replayed through `(check-proof …)` from `examples/typed-kernel-links.lino`), Phase 6 pure-links strict mode (`E065`), Phase 7 dependency-graph traversal, Phase 8 carrier enforcement (`E063`), and Phase 9 experimental `mtc-anum` profile with `encodeAnum`/`decodeAnum` helpers (`E066`) advanced on PR #175 with parallel JS/Rust tests and parity replay. |
 | 2026-05-17 (PR #176) | Latest issue feedback was incorporated: `semantic-status` / `semanticStatus` separates host-executed lookup and structural matching from links-level data; truth-table implementations report `links-checked`; substitution/freshness/alpha-renaming remain explicit `host-trusted` boundaries; and `examples/proof-checking-relation.lino` adds a nontrivial proof-checking relation represented as links-level data and replayed by both engines. |
 | 2026-05-17 (Phase 12 on PR #177) | Phase 12 adds the inductive data layer the issue originally pointed at: five links-defined Peano rules (`nat-zero-formation`, `nat-succ-formation`, `nat-add-zero`, `nat-add-succ`, `nat-induction`) in `examples/nat-links.lino`, registered as `(foundation nat-links …)`, replayed by both engines, and pinned by `js/tests/nat-links.test.mjs` + `rust/tests/nat_links_tests.rs`. |
+| 2026-05-17 (PR #178) | Explicit Nat equality. PR 178 adds the dedicated `nat-equality` equality layer plus the proof rules `nat-refl` and `nat-cong-succ`, switches `examples/nat-links.lino` from the bare literal `equals` to `nat-equals`, registers the layer + rules in `lib/self/foundations.lino`, and extends `(foundation nat-links …)`'s `uses` list accordingly. The host's `=`/`numeric-equality` layer is left untouched (backward compatibility) and there is no evaluator dispatch on `nat-equals` yet — the operator stays a bare literal that the structural matcher replays. Both engines pin the new behaviour with parity tests (14 + 14). |
+| 2026-05-17 (PR #178 continued) | The same PR extended the Nat fragment with the recursor and dependent eliminator `nat-recursion` / `nat-eliminator`, multiplication `nat-mul-zero` / `nat-mul-succ`, the per-proof dependency/trust reporter `(proof-report <name>)`, the links-evaluated `(eval-nat <term>)` normalizer, strict pure-links audit coverage, typed/proof-kernel boundary reporting, and the dedicated meta-theory mapping document `docs/META-THEORY-MAPPING.md`. The latest revision makes `eval-nat` dispatch through the active Peano computation rules and splits host rendering into `nat-normal-form-to-host-number`. |
 
 Raw data captured in `data/issue-97.json`, `data/issue-97-comments.json`,
 `data/pr-174.json`, `data/pr-175.json`, and `data/pr-176.json`.
@@ -470,7 +472,13 @@ classification requested by the latest issue feedback. Current status:
 | 9 | Experimental `mtc-anum` profile + `encodeAnum`/`decodeAnum` | done as a serialization profile **and** as a links-defined MTC theory fragment | §9.7; `E066`; pre-seeded but opt-in; `(experimental)`, `(root …)`, `(abit …)` clauses; `examples/mtc-anum-theory.lino`; canonicality/injectivity tests in both engines |
 | 10 | Execution-boundary semantic statuses | done | `semantic-status`; `semanticStatus` / `semantic_status`; `bySemanticStatus` / `by_semantic_status`; docs §4.3 |
 | 11 | Links-level proof-checking relation | done | §9.8; `examples/proof-checking-relation.lino`; proof-substrate tests in both engines |
-| 12 | Links-defined Peano naturals (`zero`, `succ`, `add`, induction) | done | §9.9; `examples/nat-links.lino`; `js/tests/nat-links.test.mjs` + `rust/tests/nat_links_tests.rs`; `(foundation nat-links …)` in `lib/self/foundations.lino` |
+| 12 | Links-defined Peano naturals (`zero`, `succ`, `add`, induction, `nat-equality`) | done | §9.9; `examples/nat-links.lino` (PR 178: explicit `nat-equality` layer plus `nat-refl` / `nat-cong-succ`, host `=`/`numeric-equality` untouched); `js/tests/nat-links.test.mjs` + `rust/tests/nat_links_tests.rs`; `(foundation nat-links …)` in `lib/self/foundations.lino` |
+| 13 | `nat-recursion`, `nat-eliminator`, and multiplication (`nat-mul-zero`, `nat-mul-succ`) | done | §9.10; PR 178 commit `b5e9db4`; `examples/nat-links.lino` carries the recursor / eliminator / `mul` derivations; `js/tests/nat-links.test.mjs` + `rust/tests/nat_links_tests.rs` extend the parity tests to the twelve-rule fragment |
+| 14 | Links-evaluated `(eval-nat <term>)` normalizer | done | §9.11; `docs/FOUNDATIONS.md` §9b; the normalizer dispatches through the active `nat-add-zero` / `nat-add-succ` / `nat-mul-zero` / `nat-mul-succ` proof rules, so removing or replacing one affects evaluation; host-number rendering is split into `nat-normal-form-to-host-number`; pinned by JS + Rust parity tests |
+| 15 | Per-proof dependency / trust reporter `(proof-report <name>)` | done | §9.12; PR 178 commit `c6f5a14`; `docs/FOUNDATIONS.md` §9c; reports the proof object, the applied rule, the active foundation, and the transitive dependency edges as a small associative network |
+| 16 | Strict pure-links audit pinned on the full Nat fragment | done | §9.13; PR 178 commit `172b8ec`; `(strict-foundation pure-links)` over `examples/nat-links.lino` emits zero `E065` diagnostics with the host-number renderer explicitly allowlisted; the audit is the regression gate for any future Peano rule |
+| 17 | Typed/proof-kernel boundary report | done | §9.14; PR 178 commit `351c577`; `(foundation-report)` lists every typed-kernel root construct (`pi-formation`, `lambda-introduction`, `application-elimination`, `beta-conversion`, plus the still-host-trusted `substitution`, `freshness`, `alpha-renaming`, `beta-reduction`, `whnf`, `normalization`, `conversion`) so the trust boundary is visible without reading source |
+| 18 | Meta-theory mapping document | done | §9.15; PR 178 commit `244524e`; `docs/META-THEORY-MAPPING.md` bridges every issue-#97 construct to the meta-theory's references / links / doublets / triplets vocabulary, fulfilling @netkeep80's "meta-theory mapping" deliverable |
 
 Every implemented or partially implemented phase has **parallel JS and
 Rust tests** plus the existing self-evaluator parity replay
@@ -646,54 +654,263 @@ that "Nat", "zero", "succ", "add", and induction are no longer silent
 host primitives but proof-substrate rules consumed by `(check-proof
 …)`.
 
-`examples/nat-links.lino` supplies that fragment with five
-proof-substrate rules:
+`examples/nat-links.lino` supplies that fragment with seven
+proof-substrate rules (PR 178 added the last three — `nat-refl`,
+`nat-cong-succ`, and the dedicated equality layer `nat-equality` — on
+top of PR 177's original five):
 
 - `nat-zero-formation` — `(zero has-type Nat)` with no premises.
 - `nat-succ-formation` — `(?n has-type Nat) ⇒ ((succ ?n) has-type Nat)`.
-- `nat-add-zero` — `(?n has-type Nat) ⇒ ((add zero ?n) equals ?n)`.
-- `nat-add-succ` — `((add ?m ?n) equals ?k) ⇒ ((add (succ ?m) ?n)
-  equals (succ ?k))`.
+- `nat-add-zero` — `(?n has-type Nat) ⇒ ((add zero ?n) nat-equals ?n)`.
+- `nat-add-succ` — `((add ?m ?n) nat-equals ?k) ⇒ ((add (succ ?m) ?n)
+  nat-equals (succ ?k))`.
 - `nat-induction` — `(?P at zero)` and `(forall ?n (implies (?P at ?n)
   (?P at (succ ?n))))` together imply `(forall ?n (?P at ?n))`.
+- `nat-refl` — `(?n has-type Nat) ⇒ (?n nat-equals ?n)`. Reflexivity of
+  the links-defined equality layer.
+- `nat-cong-succ` — `(?m nat-equals ?n) ⇒ ((succ ?m) nat-equals (succ
+  ?n))`. Successor respects `nat-equals`.
 
 The example then builds `zero`, `(succ zero)`, and `(succ (succ
-zero))` as inhabitants of `Nat`, computes `0+0`, `1+0`, and `1+1`
-through `nat-add-zero` / `nat-add-succ`, and discharges a universal
-claim via `nat-induction`. All eight `(check-proof …)` calls return
+zero))` as inhabitants of `Nat`, computes `0+0`, `1+0`, `0+1`, and
+`1+1` through `nat-add-zero` / `nat-add-succ`, witnesses `(zero
+nat-equals zero)` through `nat-refl`, lifts `1+1` through
+`nat-cong-succ` to derive `(succ (add (succ zero) (succ zero)))
+nat-equals (succ (succ (succ zero)))`, and discharges a universal
+claim via `nat-induction`. All ten `(check-proof …)` calls return
 `1` and the engines emit no diagnostics. The matching entry in
-`examples/expected.lino` (`(nat-links.lino: 1 1 1 1 1 1 1 1)`) is
+`examples/expected.lino` (`(nat-links.lino: 1 1 1 1 1 1 1 1 1 1)`) is
 checked by both the JS and Rust expected-output harnesses, so any
 drift between engines is caught at shared-examples replay time.
 
+The example deliberately uses `nat-equals` rather than the bare
+literal `equals` so the trust audit can distinguish the
+links-defined equality layer from `=`/`numeric-equality`. Programs
+that never opt into `nat-links` keep the host's decimal-12 `=`
+semantics unchanged — both engines pin this with the
+`leaves the host =/numeric-equality layer unchanged when nat-links is
+not selected` test in `js/tests/nat-links.test.mjs` and the matching
+`leaves_the_host_equality_layer_unchanged_when_nat_links_is_not_selected`
+test in `rust/tests/nat_links_tests.rs`.
+
 The companion `(foundation nat-links …)` registration in
-`lib/self/foundations.lino` records the five rules as `(root-construct
-… links-defined …)` so the trust audit lists them as
-`semantic links-checked` derivations rather than as silent host
-primitives. The host's decimal numeric domain is unaffected — `Nat`
-here is purely structural; the foundation just gives the trust report
-something concrete to point at when a user asks "where do `Nat`,
-`succ`, and addition come from in this proof?".
+`lib/self/foundations.lino` records the Nat proof rules, the
+`nat-equality` equality-layer root construct, and the `eval-nat`
+normalizer/renderer split as root constructs so the trust audit lists
+the links-checked and links-evaluated derivations rather than silent
+host primitives. The host's decimal numeric domain and
+`=`/`numeric-equality` are unaffected — `Nat` here is purely
+structural and `nat-equals` lives in a separate equality layer; the
+foundation just gives the trust report something concrete to point at
+when a user asks "where do
+`Nat`, `succ`, addition, and their equality come from in this proof?".
 
 Each rule is also pinned down individually by
-`js/tests/nat-links.test.mjs` (10 tests) and
-`rust/tests/nat_links_tests.rs` (10 tests), including two negative
-cases (a mistyped `(succ zero)` and an `add-succ` claim that would
-require `(succ ?k)` to unify with `zero`) where `(check-proof …)`
-returns `0` and raises `E064`. The pre-registration test asserts that
-`(foundation-report)` lists `nat-links` with `uses = [nat-add-succ,
-nat-add-zero, nat-induction, nat-succ-formation, nat-zero-formation]`
-and `extends = default-rml`, matching the
+`js/tests/nat-links.test.mjs` (14 tests) and
+`rust/tests/nat_links_tests.rs` (14 tests), including three negative
+cases (a mistyped `(succ zero)`, an `add-succ` claim that would
+require `(succ ?k)` to unify with `zero`, and a `nat-cong-succ`
+derivation that drops one of the `succ` wrappers) where
+`(check-proof …)` returns `0` and raises `E064`. The pre-registration
+test asserts that `(foundation-report)` lists `nat-links` with
+`uses = [nat-add-succ, nat-add-zero, nat-cong-succ, nat-equality,
+nat-induction, nat-refl, nat-succ-formation, nat-zero-formation]`
+(sorted) and `extends = default-rml`, matching the
 `_registerDefaultFoundation` / `register_default_foundation` seeds in
 both engines.
 
 This phase deliberately does **not** implement `Nat` by host numeric
-conversion: there is no `succ → +1` shortcut. Successor is a literal
-constructor and `equals` is the proof-substrate's structural match, so
-the only host operation involved is the same pattern matcher that
-backs every other Phase 3 proof rule. Substitution, alpha-renaming,
-and freshness remain explicit `host-trusted` boundaries documented in
-the foundation report.
+conversion: there is no `succ → +1` shortcut, and there is no
+evaluator dispatch on `nat-equals` — the operator stays a bare
+literal that the proof substrate's structural matcher compares for
+syntactic identity. Successor is a literal constructor, so the only
+host operation involved is the same pattern matcher that backs every
+other Phase 3 proof rule. Substitution, alpha-renaming, and freshness
+remain explicit `host-trusted` boundaries documented in the
+foundation report.
+
+### 9.10 Phase 13 — `nat-recursion`, `nat-eliminator`, and multiplication
+
+PR 178 commit `b5e9db4` extends the Peano fragment from the original
+five rules (plus the equality layer) to the twelve-rule, fully
+Software-Foundations-aligned layer. The added rules are:
+
+- `nat-recursion` — `(?P at zero)` and a step
+  `(?P at ?n) ⇒ (?P at (succ ?n))` derive `(?P at ?n)` at any
+  specific `?n` reachable from `zero`. The recursor is the
+  computational counterpart of `nat-induction`: where induction
+  delivers `(forall ?n (?P at ?n))`, recursion delivers a single
+  derived inhabitant for the witnessing `?n`.
+- `nat-eliminator` — the dependent eliminator. The premises are
+  `(?P at zero)` and `(forall ?n (implies (?P at ?n) (?P at (succ
+  ?n))))`; the conclusion is the same as `nat-induction` but tagged
+  as an *eliminator* in the registry so the trust audit can tell the
+  inductive presentation apart from the eliminator presentation.
+- `nat-mul-zero` — `((mul zero ?n) nat-equals zero)`; no premises.
+- `nat-mul-succ` — `((mul ?m ?n) nat-equals ?k) ⇒ ((mul (succ ?m)
+  ?n) nat-equals (add ?n ?k))`. Multiplication is a *links-defined*
+  recursive reduction layered on top of `nat-add-*`; there is no
+  `succ → ×k` shortcut.
+
+`examples/nat-links.lino` now exercises each of the four new rules
+through `(check-proof …)`. The shared expected-output harness pins
+the additional `1`s and the `(foundation-report)` snapshot picks up
+the extended `uses` list. The Software-Foundations-style theorems
+(`plus_O_n`, `plus_n_O`, `plus_n_Sm`, `plus_comm`, `mult_0_r`,
+`mult_n_Sm`) are encoded as a small sequence of proof objects that
+each cite an earlier proof object as their `premise-by`, so the
+proof-substrate's dependency check is the same engine that gates the
+typed kernel.
+
+### 9.11 Phase 14 — `(eval-nat <term>)` normalizer
+
+PR 178 adds the **links-evaluated** Peano normalizer documented in
+`docs/FOUNDATIONS.md` §9b. `(eval-nat <term>)` recognises the grammar
+`zero | (succ T) | (add T T) | (mul T T)` and normalizes it by
+dispatching through the active computation rules `nat-add-zero`,
+`nat-add-succ`, `nat-mul-zero`, and `nat-mul-succ`. Removing a needed
+rule from the active foundation makes evaluation fail with `E067`, and
+replacing a rule changes the result. The semantic result is the Peano
+normal form; the host number in the result stream is the separate
+`nat-normal-form-to-host-number` renderer.
+
+Trust-report integration:
+
+- The root construct `eval-nat-normalize` carries the links-evaluated
+  dependency on `nat-add-zero`, `nat-add-succ`, `nat-mul-zero`,
+  `nat-mul-succ`, and `structural-matcher`. The surface construct
+  `eval-nat` depends on that normalizer and on the separate
+  host-derived `nat-normal-form-to-host-number` renderer.
+- The `eval-nat` normalizer family gives the
+  `links-evaluated` semantic status a concrete occupant, so the
+  `bySemanticStatus` / `by_semantic_status` view is no longer empty
+  under that key.
+- Anything outside the recognised grammar raises `E067`, leaving
+  surrounding queries intact.
+
+Both engines pin the normalizer with parity tests
+(`js/tests/nat-links.test.mjs`, `rust/tests/nat_links_tests.rs`),
+including a negative case where `(eval-nat (succ apple))` raises
+`E067` and the surrounding queries continue to evaluate.
+
+### 9.12 Phase 15 — `(proof-report <name>)`
+
+PR 178 commit `c6f5a14` adds the per-proof analogue of
+`(foundation-report)`. Given an already-registered proof object,
+`(proof-report <name>)` returns a structured snapshot containing:
+
+- the **proof object's name** and **conclusion**;
+- the **rule** it applies (the `(applies …)` clause);
+- the **transitive dependency edges** — every `(premise-by …)` /
+  `(uses …)` reference resolved to the named assumption, axiom, or
+  earlier proof object;
+- the **active foundation** at the time of the call;
+- and the **trust status** of every cited rule, so a reader can see
+  whether the proof rests on `links-defined` or `host-trusted`
+  primitives.
+
+The report is a small associative network: a root node (the proof
+object), an edge to the applied rule, and a flat list of edges to
+dependencies by name. `docs/META-THEORY-MAPPING.md` §3 documents how
+that network maps onto the meta-theory's doublets and triplets.
+
+`examples/nat-links.lino` calls `(proof-report …)` on representative
+proofs (the zero/succ inhabitants and one Software-Foundations-style
+theorem) so the parity replay covers the new form. Both engines
+emit byte-identical reports; this is enforced by the shared
+expected-output harness.
+
+### 9.13 Phase 16 — strict pure-links audit on the full Nat fragment
+
+PR 178 commit `172b8ec` pins `(strict-foundation pure-links)` over
+the entire `examples/nat-links.lino` file: the audit emits **zero**
+`E065` diagnostics. Concretely:
+
+- Every proof rule in the twelve-rule fragment is registered with
+  `(root-construct … (status links-defined) (semantic-status
+  links-checked) …)` and a `(depends-on …)` list that bottoms out at
+  the small set of explicitly-whitelisted host primitives
+  (`structural-matcher`, `substitution`, `freshness`, `alpha-
+  renaming`) that the strict-mode `(allow-host-primitive …)` clause
+  in the example file enumerates.
+- The `(eval-nat …)` normalizer's `(depends-on …)` chain is bounded by
+  the same explicit boundary set: it dispatches through `nat-add-*` and
+  `nat-mul-*`, which are themselves links-defined, and reports the
+  structural matcher / renderer boundary separately. The example
+  allowlists `nat-normal-form-to-host-number` so strict mode can still
+  reject accidental host arithmetic while accepting the legacy numeric
+  result renderer.
+- Any future regression — say, a new Peano rule that quietly depends
+  on `host-derived` `numeric-equality` — fails the audit at
+  shared-examples replay time. The strict-mode audit is therefore
+  the **regression gate** for the entire Nat fragment, not a
+  one-time check.
+
+`js/tests/nat-links.test.mjs` and `rust/tests/nat_links_tests.rs`
+encode the gate as a parity test ("strict pure-links accepts the
+full nat-links fragment with zero E065"), and the negative test
+("strict pure-links rejects a synthetic rule that depends on
+numeric-equality") confirms the gate fails as expected when
+violated.
+
+### 9.14 Phase 17 — typed/proof-kernel boundary pinning report
+
+PR 178 commit `351c577` makes the kernel boundary explicit in the
+trust report. `(foundation-report)` now lists, in a stable order,
+every root construct that the typed kernel and proof substrate
+depend on, together with its `status`, its `semanticStatus` /
+`semantic_status`, and its `depends-on` edges:
+
+- **`links-defined` / `links-checked`** — `pi-formation`,
+  `lambda-introduction`, `application-elimination`,
+  `beta-conversion`, and every Phase 12/13 Peano rule.
+- **`host-primitive` / `host-trusted`** — `substitution`,
+  `freshness`, `alpha-renaming`, `beta-reduction`, `whnf`,
+  `normalization`, `conversion`. These cannot be reduced to a finite
+  associative network without losing decidability and remain
+  trusted; the report records them explicitly so a user does not
+  have to read JS or Rust source to find them.
+
+The pinning test
+`js/tests/typed-kernel-links.test.mjs` ("reports the complete
+typed-kernel boundary in foundation-report") and its Rust mirror
+`rust/tests/typed_kernel_links_tests.rs` enforce the boundary
+mechanically: adding, removing, or re-tagging any kernel root
+construct without updating the test fails the build.
+
+### 9.15 Phase 18 — meta-theory mapping document
+
+PR 178 commit `244524e` adds `docs/META-THEORY-MAPPING.md`, the
+deliverable that @netkeep80's "meta-theory mapping" review item
+asked for. The document bridges every issue-#97 construct — the
+twelve-rule Nat fragment, the proof-substrate, rule application,
+inductive closure, and the trust report — to the universal
+vocabulary of [Links Theory
+(meta-theory)](https://github.com/link-foundation/meta-theory):
+**references**, **links**, **doublets** (2-tuples), and **triplets**
+(3-tuples).
+
+Highlights:
+
+- The inductive constructors `Nat`, `zero`, `succ`, `add`, and `mul`
+  factor through references, doublets, and triplets at the leaves —
+  no construct exceeds arity 3 once the rule body is unfolded.
+- A proof object is a small associative network whose root edges
+  are doublets (`applies`, `premise-by`, `conclusion`) and whose
+  leaves are triplet judgements.
+- "Closure under a rule" is **not** a primitive in the meta-theory;
+  it is the result of replaying a rule application zero or more
+  times. `nat-induction` is therefore expressible as a finite
+  network of triplets that, when instantiated at a predicate, lets
+  `(check-proof …)` produce the closure on demand.
+- The trust report itself reads as a labelled graph (`foundation`,
+  `uses`, `depends-on` are all doublets), so `(foundation-report)`
+  is literally an instance of the meta-theory in action.
+
+The document closes with the reading guide and the explicit list of
+host-trusted operations and the reasons each is irreducible to a
+finite link network, completing the chain from
+issue → constructs → tests → trust audit → meta-theory.
 
 ## 10. Files in this case study
 
@@ -709,3 +926,9 @@ the foundation report.
   evidence for requirements R1–R16.
 - `evidence/cicd-template-review.md` — review of the four CI/CD
   templates against this repository's `.github/workflows/`.
+- [`../../META-THEORY-MAPPING.md`](../../META-THEORY-MAPPING.md) —
+  documents how the inductive Peano fragment, the proof-substrate,
+  rule application, inductive closure, and the trust report map onto
+  the references / links / doublets vocabulary of the
+  [meta-theory](https://github.com/link-foundation/meta-theory). The
+  bridge required by netkeep80's "meta-theory mapping" deliverable.

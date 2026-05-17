@@ -1,14 +1,19 @@
 // Phase 12 — links-defined Peano naturals (issue #97).
 //
-// Parallel to `js/tests/nat-links.test.mjs`. The five proof-substrate
-// rules (nat-zero-formation, nat-succ-formation, nat-add-zero,
-// nat-add-succ, nat-induction) are expressed inside the proof
-// substrate by `examples/nat-links.lino`. The tests below pin each
-// rule down on its own, then run the bundled example end-to-end, and
-// finally verify that the runtime registers the `nat-links`
-// foundation with the expected `uses` list.
+// Parallel to `js/tests/nat-links.test.mjs`. The Nat proof-substrate
+// rules are expressed inside `examples/nat-links.lino`, together with
+// the dedicated equality layer `nat-equality` and the rule-driven
+// `eval-nat` normalizer. The tests below pin each rule down on its
+// own, then run the bundled example end-to-end, and finally verify
+// that the runtime registers the `nat-links` foundation with the
+// expected `uses` list.
+//
+// PR 178 added the explicit `nat-equality` layer plus the rules
+// `nat-refl` and `nat-cong-succ`, switched the example from the bare
+// literal `equals` to `nat-equals`, and kept the host's
+// `=`/`numeric-equality` layer untouched for backward compatibility.
 
-use rml::{evaluate, evaluate_file, EvaluateOptions, EvaluateResult, RunResult};
+use rml::{evaluate, evaluate_file, evaluate_with_options, EvaluateOptions, EvaluateResult, RunResult};
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
@@ -45,11 +50,27 @@ fn nat_links_foundation_is_pre_registered() {
     assert_eq!(
         uses,
         vec![
+            "eval-nat".to_string(),
+            "eval-nat-normalize".to_string(),
+            "forall".to_string(),
+            "implication".to_string(),
+            "mul".to_string(),
             "nat-add-succ".to_string(),
             "nat-add-zero".to_string(),
+            "nat-cong-succ".to_string(),
+            "nat-eliminator".to_string(),
+            "nat-equality".to_string(),
             "nat-induction".to_string(),
+            "nat-mul-succ".to_string(),
+            "nat-mul-zero".to_string(),
+            "nat-normal-form-to-host-number".to_string(),
+            "nat-rec-succ".to_string(),
+            "nat-rec-zero".to_string(),
+            "nat-recursion".to_string(),
+            "nat-refl".to_string(),
             "nat-succ-formation".to_string(),
             "nat-zero-formation".to_string(),
+            "predicate-application".to_string(),
         ]
     );
     assert_eq!(foundation.extends.as_deref(), Some("default-rml"));
@@ -70,6 +91,17 @@ fn lib_self_foundations_documents_nat_links() {
         "nat-add-zero",
         "nat-add-succ",
         "nat-induction",
+        "nat-refl",
+        "nat-cong-succ",
+        "nat-recursion",
+        "nat-eliminator",
+        "nat-rec-zero",
+        "nat-rec-succ",
+        "mul",
+        "nat-mul-zero",
+        "nat-mul-succ",
+        "eval-nat-normalize",
+        "eval-nat",
     ] {
         assert!(
             source.contains(&format!("(uses {})", rule)),
@@ -85,6 +117,55 @@ fn lib_self_foundations_documents_nat_links() {
             window.contains("links-defined"),
             "{} root-construct must record links-defined status",
             rule
+        );
+    }
+    assert!(source.contains("(uses nat-normal-form-to-host-number)"));
+    let marker = "(root-construct nat-normal-form-to-host-number";
+    let idx = source
+        .find(marker)
+        .expect("missing root-construct entry for nat-normal-form-to-host-number");
+    let window = &source[idx..(idx + 400).min(source.len())];
+    assert!(
+        window.contains("(status host-derived)"),
+        "nat-normal-form-to-host-number must record host-derived renderer status"
+    );
+    // PR 178 introduced `nat-equality` as a dedicated equality layer
+    // that `nat-refl` and `nat-cong-succ` inhabit, listed by the
+    // `nat-links` foundation alongside the original five rules.
+    assert!(
+        source.contains("(uses nat-equality)"),
+        "nat-links must (uses nat-equality)"
+    );
+    let eq_idx = source
+        .find("(root-construct nat-equality")
+        .expect("missing root-construct entry for nat-equality");
+    let eq_window = &source[eq_idx..(eq_idx + 400).min(source.len())];
+    assert!(
+        eq_window.contains("equality-layer"),
+        "nat-equality must be declared as an equality-layer kind"
+    );
+    assert!(
+        eq_window.contains("links-defined"),
+        "nat-equality must record links-defined status"
+    );
+    // Phase 13 promotes the logical glue (forall, implication,
+    // predicate-application) to first-class root constructs so the
+    // trust audit can list them by name.
+    for glue in ["forall", "implication", "predicate-application"] {
+        assert!(
+            source.contains(&format!("(uses {})", glue)),
+            "nat-links must (uses {})",
+            glue
+        );
+        let marker = format!("(root-construct {}", glue);
+        let idx = source
+            .find(&marker)
+            .unwrap_or_else(|| panic!("missing root-construct entry for {}", glue));
+        let window = &source[idx..(idx + 400).min(source.len())];
+        assert!(
+            window.contains("links-defined"),
+            "{} root-construct must record links-defined status",
+            glue
         );
     }
 }
@@ -145,7 +226,7 @@ fn nat_add_zero_discharges_the_base_case_of_addition() {
     let src = r#"
 (rule nat-add-zero
   (premise (?n has-type Nat))
-  (conclusion ((add zero ?n) equals ?n)))
+  (conclusion ((add zero ?n) nat-equals ?n)))
 
 (axiom zero-is-nat
   (judgement (zero has-type Nat)))
@@ -153,7 +234,7 @@ fn nat_add_zero_discharges_the_base_case_of_addition() {
 (proof-object zero-plus-zero
   (applies nat-add-zero)
   (premise-by zero-is-nat)
-  (conclusion ((add zero zero) equals zero)))
+  (conclusion ((add zero zero) nat-equals zero)))
 
 (check-proof zero-plus-zero)
 "#;
@@ -170,16 +251,16 @@ fn nat_add_zero_discharges_the_base_case_of_addition() {
 fn nat_add_succ_steps_addition_through_the_successor() {
     let src = r#"
 (rule nat-add-succ
-  (premise ((add ?m ?n) equals ?k))
-  (conclusion ((add (succ ?m) ?n) equals (succ ?k))))
+  (premise ((add ?m ?n) nat-equals ?k))
+  (conclusion ((add (succ ?m) ?n) nat-equals (succ ?k))))
 
 (axiom zero-plus-zero
-  (judgement ((add zero zero) equals zero)))
+  (judgement ((add zero zero) nat-equals zero)))
 
 (proof-object one-plus-zero
   (applies nat-add-succ)
   (premise-by zero-plus-zero)
-  (conclusion ((add (succ zero) zero) equals (succ zero))))
+  (conclusion ((add (succ zero) zero) nat-equals (succ zero))))
 
 (check-proof one-plus-zero)
 "#;
@@ -190,6 +271,80 @@ fn nat_add_succ_steps_addition_through_the_successor() {
         out.diagnostics
     );
     assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn nat_refl_derives_n_nat_equals_n_for_a_well_typed_nat() {
+    let src = r#"
+(rule nat-refl
+  (premise (?n has-type Nat))
+  (conclusion (?n nat-equals ?n)))
+
+(axiom zero-is-nat
+  (judgement (zero has-type Nat)))
+
+(proof-object zero-nat-equals-zero
+  (applies nat-refl)
+  (premise-by zero-is-nat)
+  (conclusion (zero nat-equals zero)))
+
+(check-proof zero-nat-equals-zero)
+"#;
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn nat_cong_succ_lifts_a_nat_equality_through_succ() {
+    let src = r#"
+(rule nat-cong-succ
+  (premise (?m nat-equals ?n))
+  (conclusion ((succ ?m) nat-equals (succ ?n))))
+
+(axiom zero-nat-equals-zero
+  (judgement (zero nat-equals zero)))
+
+(proof-object succ-zero-nat-equals-succ-zero
+  (applies nat-cong-succ)
+  (premise-by zero-nat-equals-zero)
+  (conclusion ((succ zero) nat-equals (succ zero))))
+
+(check-proof succ-zero-nat-equals-succ-zero)
+"#;
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn rejects_a_nat_cong_succ_derivation_that_drops_one_of_the_succ_wrappers() {
+    let src = r#"
+(rule nat-cong-succ
+  (premise (?m nat-equals ?n))
+  (conclusion ((succ ?m) nat-equals (succ ?n))))
+
+(axiom zero-nat-equals-zero
+  (judgement (zero nat-equals zero)))
+
+(proof-object bad-cong
+  (applies nat-cong-succ)
+  (premise-by zero-nat-equals-zero)
+  (conclusion ((succ zero) nat-equals zero)))
+
+(check-proof bad-cong)
+"#;
+    let out = run(src);
+    assert_eq!(nums(&out.results), vec![0.0]);
+    assert!(out.diagnostics.iter().any(|d| d.code == "E064"));
 }
 
 #[test]
@@ -249,22 +404,389 @@ fn rejects_a_derivation_that_contradicts_nat_succ_formation() {
 fn rejects_an_add_succ_derivation_that_contradicts_its_arithmetic_premise() {
     let src = r#"
 (rule nat-add-succ
-  (premise ((add ?m ?n) equals ?k))
-  (conclusion ((add (succ ?m) ?n) equals (succ ?k))))
+  (premise ((add ?m ?n) nat-equals ?k))
+  (conclusion ((add (succ ?m) ?n) nat-equals (succ ?k))))
 
 (axiom zero-plus-zero
-  (judgement ((add zero zero) equals zero)))
+  (judgement ((add zero zero) nat-equals zero)))
 
 (proof-object wrong-add
   (applies nat-add-succ)
   (premise-by zero-plus-zero)
-  (conclusion ((add (succ zero) zero) equals zero)))
+  (conclusion ((add (succ zero) zero) nat-equals zero)))
 
 (check-proof wrong-add)
 "#;
     let out = run(src);
     assert_eq!(nums(&out.results), vec![0.0]);
     assert!(out.diagnostics.iter().any(|d| d.code == "E064"));
+}
+
+#[test]
+fn leaves_the_host_equality_layer_unchanged_when_nat_links_is_not_selected() {
+    // PR 178 introduces `nat-equality` as an additional links-defined
+    // layer; programs that never opt into the nat-links foundation
+    // must keep the host's decimal-12 `=` semantics.
+    let src = r#"
+(? (= 1 1))
+(? (= 1 2))
+"#;
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0, 0.0]);
+}
+
+#[test]
+fn nat_mul_zero_discharges_base_case_of_multiplication() {
+    let src = r#"
+(rule nat-mul-zero
+  (premise (?n has-type Nat))
+  (conclusion ((mul zero ?n) nat-equals zero)))
+
+(axiom zero-is-nat
+  (judgement (zero has-type Nat)))
+
+(proof-object zero-mul-zero
+  (applies nat-mul-zero)
+  (premise-by zero-is-nat)
+  (conclusion ((mul zero zero) nat-equals zero)))
+
+(check-proof zero-mul-zero)
+"#;
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn nat_mul_succ_steps_multiplication_through_the_successor() {
+    let src = r#"
+(rule nat-mul-succ
+  (premise ((mul ?m ?n) nat-equals ?k))
+  (premise ((add ?n ?k) nat-equals ?s))
+  (conclusion ((mul (succ ?m) ?n) nat-equals ?s)))
+
+(axiom zero-mul-one
+  (judgement ((mul zero (succ zero)) nat-equals zero)))
+
+(axiom one-plus-zero-fact
+  (judgement ((add (succ zero) zero) nat-equals (succ zero))))
+
+(proof-object one-mul-one
+  (applies nat-mul-succ)
+  (premise-by zero-mul-one)
+  (premise-by one-plus-zero-fact)
+  (conclusion ((mul (succ zero) (succ zero)) nat-equals (succ zero))))
+
+(check-proof one-mul-one)
+"#;
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn rejects_a_nat_mul_succ_derivation_with_inconsistent_helper_addition() {
+    let src = r#"
+(rule nat-mul-succ
+  (premise ((mul ?m ?n) nat-equals ?k))
+  (premise ((add ?n ?k) nat-equals ?s))
+  (conclusion ((mul (succ ?m) ?n) nat-equals ?s)))
+
+(axiom zero-mul-zero
+  (judgement ((mul zero zero) nat-equals zero)))
+
+(axiom zero-plus-zero-fact
+  (judgement ((add zero zero) nat-equals zero)))
+
+(proof-object wrong-one-mul-zero
+  (applies nat-mul-succ)
+  (premise-by zero-mul-zero)
+  (premise-by zero-plus-zero-fact)
+  (conclusion ((mul (succ zero) zero) nat-equals (succ zero))))
+
+(check-proof wrong-one-mul-zero)
+"#;
+    let out = run(src);
+    assert_eq!(nums(&out.results), vec![0.0]);
+    assert!(out.diagnostics.iter().any(|d| d.code == "E064"));
+}
+
+#[test]
+fn nat_rec_zero_discharges_the_recursor_at_the_base_case() {
+    let src = r#"
+(rule nat-rec-zero
+  (premise (?base has-type Nat))
+  (conclusion (((rec ?f ?base ?step) at zero) nat-equals ?base)))
+
+(axiom zero-is-nat
+  (judgement (zero has-type Nat)))
+
+(proof-object rec-id-at-zero
+  (applies nat-rec-zero)
+  (premise-by zero-is-nat)
+  (conclusion (((rec id zero step) at zero) nat-equals zero)))
+
+(check-proof rec-id-at-zero)
+"#;
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn nat_rec_succ_steps_the_recursor_through_the_successor() {
+    let src = r#"
+(rule nat-rec-succ
+  (premise (((rec ?f ?base ?step) at ?n) nat-equals ?prev))
+  (premise (((?step ?n) at ?prev) nat-equals ?next))
+  (conclusion (((rec ?f ?base ?step) at (succ ?n)) nat-equals ?next)))
+
+(axiom rec-id-at-zero
+  (judgement (((rec id zero step) at zero) nat-equals zero)))
+
+(axiom step-zero-applied
+  (judgement (((step zero) at zero) nat-equals (succ zero))))
+
+(proof-object rec-id-at-one
+  (applies nat-rec-succ)
+  (premise-by rec-id-at-zero)
+  (premise-by step-zero-applied)
+  (conclusion (((rec id zero step) at (succ zero)) nat-equals (succ zero))))
+
+(check-proof rec-id-at-one)
+"#;
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn rejects_a_nat_rec_succ_derivation_that_drops_the_succ_wrapper_on_the_scrutinee() {
+    let src = r#"
+(rule nat-rec-succ
+  (premise (((rec ?f ?base ?step) at ?n) nat-equals ?prev))
+  (premise (((?step ?n) at ?prev) nat-equals ?next))
+  (conclusion (((rec ?f ?base ?step) at (succ ?n)) nat-equals ?next)))
+
+(axiom rec-id-at-zero
+  (judgement (((rec id zero step) at zero) nat-equals zero)))
+
+(axiom step-zero-applied
+  (judgement (((step zero) at zero) nat-equals (succ zero))))
+
+(proof-object bad-rec
+  (applies nat-rec-succ)
+  (premise-by rec-id-at-zero)
+  (premise-by step-zero-applied)
+  (conclusion (((rec id zero step) at zero) nat-equals (succ zero))))
+
+(check-proof bad-rec)
+"#;
+    let out = run(src);
+    assert_eq!(nums(&out.results), vec![0.0]);
+    assert!(out.diagnostics.iter().any(|d| d.code == "E064"));
+}
+
+#[test]
+fn proof_report_returns_per_proof_dependency_and_trust_summary() {
+    // Phase 13 (issue #97): `(proof-report ...)` walks the proof-object
+    // tree and reports the dependencies, rules, and root constructs the
+    // proof touches — together with their semantic and trust statuses,
+    // so the trust audit can be done per-proof instead of only globally
+    // through `(foundation-report)`. We register `Nat`, `zero`, `succ`
+    // as links-defined root constructs first so the report can cite them.
+    let src = r#"
+(root-construct Nat
+  (kind inductive-type)
+  (status links-defined)
+  (semantic-status links-checked))
+
+(root-construct zero
+  (kind constructor)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
+(root-construct succ
+  (kind constructor)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat))
+
+(rule nat-zero-formation
+  (conclusion (zero has-type Nat)))
+
+(rule nat-succ-formation
+  (premise (?n has-type Nat))
+  (conclusion ((succ ?n) has-type Nat)))
+
+(proof-object zero-is-nat
+  (applies nat-zero-formation)
+  (conclusion (zero has-type Nat)))
+
+(proof-object one-is-nat
+  (applies nat-succ-formation)
+  (premise-by zero-is-nat)
+  (conclusion ((succ zero) has-type Nat)))
+
+(proof-report one-is-nat)
+"#;
+    let out = run(src);
+    assert!(out.diagnostics.is_empty(), "diagnostics: {:?}", out.diagnostics);
+    assert_eq!(out.results.len(), 1);
+    let report = match &out.results[0] {
+        RunResult::Proof(r) => r.clone(),
+        other => panic!("expected RunResult::Proof, got {:?}", other),
+    };
+    assert_eq!(report.name, "one-is-nat");
+    assert_eq!(report.rule.as_deref(), Some("nat-succ-formation"));
+    assert!(report.verdict.ok);
+    assert_eq!(report.premise_refs, vec!["zero-is-nat".to_string()]);
+    let mut rules = report.rules.clone();
+    rules.sort();
+    assert_eq!(
+        rules,
+        vec![
+            "nat-succ-formation".to_string(),
+            "nat-zero-formation".to_string(),
+        ]
+    );
+    let dep_names: Vec<String> = report.dependencies.iter().map(|d| d.name.clone()).collect();
+    assert!(
+        dep_names.iter().any(|n| n == "zero-is-nat"),
+        "dependencies should include zero-is-nat, got {:?}",
+        dep_names
+    );
+    assert!(report.root_constructs_used.contains(&"Nat".to_string()));
+    assert!(report
+        .root_constructs_used
+        .contains(&"proof-replay".to_string()));
+    assert!(report
+        .root_constructs_used
+        .contains(&"structural-equality".to_string()));
+    assert!(report
+        .root_constructs_used
+        .contains(&"structural-matcher".to_string()));
+    assert!(report
+        .root_constructs_used
+        .contains(&"substitution".to_string()));
+    assert!(report.root_constructs_used.contains(&"succ".to_string()));
+    assert!(report.root_constructs_used.contains(&"zero".to_string()));
+    let semantic = report
+        .by_semantic_status
+        .iter()
+        .find(|(s, _)| s == "links-checked")
+        .map(|(_, names)| {
+            let mut v = names.clone();
+            v.sort();
+            v
+        })
+        .expect("links-checked bucket must exist");
+    assert_eq!(
+        semantic,
+        vec!["Nat".to_string(), "succ".to_string(), "zero".to_string()]
+    );
+    let trust = report
+        .by_trust_status
+        .iter()
+        .find(|(s, _)| s == "links-defined")
+        .map(|(_, names)| {
+            let mut v = names.clone();
+            v.sort();
+            v
+        })
+        .expect("links-defined bucket must exist");
+    assert_eq!(
+        trust,
+        vec!["Nat".to_string(), "succ".to_string(), "zero".to_string()]
+    );
+    let host_semantic = report
+        .by_semantic_status
+        .iter()
+        .find(|(s, _)| s == "host-trusted")
+        .map(|(_, names)| {
+            let mut v = names.clone();
+            v.sort();
+            v
+        })
+        .expect("host-trusted bucket must exist");
+    assert_eq!(
+        host_semantic,
+        vec![
+            "proof-replay".to_string(),
+            "structural-equality".to_string(),
+            "structural-matcher".to_string(),
+            "substitution".to_string(),
+        ]
+    );
+    let host_trust = report
+        .by_trust_status
+        .iter()
+        .find(|(s, _)| s == "host-primitive")
+        .map(|(_, names)| {
+            let mut v = names.clone();
+            v.sort();
+            v
+        })
+        .expect("host-primitive bucket must exist");
+    assert_eq!(
+        host_trust,
+        vec![
+            "proof-replay".to_string(),
+            "structural-equality".to_string(),
+            "substitution".to_string(),
+        ]
+    );
+    let external_trust = report
+        .by_trust_status
+        .iter()
+        .find(|(s, _)| s == "external-trusted")
+        .map(|(_, names)| names.clone())
+        .expect("external-trusted bucket must exist");
+    assert_eq!(external_trust, vec!["structural-matcher".to_string()]);
+}
+
+#[test]
+fn proof_report_of_unknown_proof_returns_failing_verdict() {
+    let out = run("(proof-report no-such-proof)");
+    assert_eq!(out.results.len(), 1);
+    let report = match &out.results[0] {
+        RunResult::Proof(r) => r.clone(),
+        other => panic!("expected RunResult::Proof, got {:?}", other),
+    };
+    assert_eq!(report.name, "no-such-proof");
+    assert!(!report.verdict.ok);
+    let err = report
+        .verdict
+        .error
+        .as_deref()
+        .expect("unknown proof should record an error");
+    assert!(
+        err.contains("unknown proof-object"),
+        "expected error to mention unknown proof-object, got {:?}",
+        err
+    );
 }
 
 #[test]
@@ -276,5 +798,219 @@ fn runs_the_full_phase_12_example_end_to_end_with_no_diagnostics() {
         "diagnostics: {:?}",
         out.diagnostics
     );
-    assert_eq!(nums(&out.results), vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(
+        nums(&out.results),
+        vec![
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 0.0, 1.0, 2.0, 4.0,
+        ]
+    );
+}
+
+#[test]
+fn eval_nat_normalizes_zero_succ_add_mul_through_links_level_rules() {
+    // No leading whitespace on each line: the `.lino` parser treats
+    // indented continuation lines as part of the *previous* link.
+    let src = "(eval-nat zero)\n\
+               (eval-nat (succ (succ (succ zero))))\n\
+               (eval-nat (add (succ zero) (succ (succ zero))))\n\
+               (eval-nat (mul (succ (succ zero)) (succ (succ (succ zero)))))\n";
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![0.0, 3.0, 3.0, 6.0]);
+}
+
+#[test]
+fn eval_nat_trace_records_normal_form_rules_and_host_boundary() {
+    let out = evaluate_with_options(
+        "(eval-nat (add (succ zero) (succ zero)))",
+        None,
+        EvaluateOptions {
+            trace: true,
+            ..EvaluateOptions::default()
+        },
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![2.0]);
+    let evt = out
+        .trace
+        .iter()
+        .find(|e| e.kind == "eval-nat")
+        .expect("trace contains an eval-nat event");
+    assert!(
+        evt.detail.contains("normal-form (succ (succ zero)) -> 2"),
+        "detail was: {}",
+        evt.detail
+    );
+    assert!(
+        evt.detail
+            .contains("rules-used: nat-add-succ, nat-add-zero"),
+        "detail was: {}",
+        evt.detail
+    );
+    assert!(
+        evt.detail
+            .contains("host-primitives-used: structural-matcher"),
+        "detail was: {}",
+        evt.detail
+    );
+}
+
+#[test]
+fn eval_nat_fails_when_active_foundation_omits_needed_rule() {
+    let src = "(foundation broken-nat-links\n\
+(uses eval-nat)\n\
+(uses eval-nat-normalize)\n\
+(uses Nat)\n\
+(uses zero)\n\
+(uses succ)\n\
+(uses add))\n\
+(with-foundation broken-nat-links\n\
+(eval-nat (add zero (succ zero))))\n";
+    let out = run(src);
+    assert!(out.results.is_empty());
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E067");
+    assert!(
+        out.diagnostics[0].message.contains("requires nat-add-zero"),
+        "diagnostic message: {}",
+        out.diagnostics[0].message
+    );
+}
+
+#[test]
+fn eval_nat_sees_computation_rules_inherited_through_foundation_extends() {
+    let src = "(foundation child-nat-links\n\
+(extends nat-links))\n\
+(with-foundation child-nat-links\n\
+(eval-nat (add zero (succ zero))))\n";
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn eval_nat_behaviour_follows_replacement_links_level_rule() {
+    let src = "(rule nat-add-zero\n\
+(premise (?n has-type Nat))\n\
+(conclusion ((add zero ?n) nat-equals zero)))\n\
+\n\
+(eval-nat (add zero (succ zero)))\n";
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![0.0]);
+}
+
+#[test]
+fn eval_nat_of_non_peano_term_raises_e067() {
+    let out = run("(eval-nat (succ (something else)))");
+    assert!(out.results.is_empty());
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E067");
+    assert!(
+        out.diagnostics[0]
+            .message
+            .contains("not a closed Peano term"),
+        "diagnostic message: {}",
+        out.diagnostics[0].message
+    );
+}
+
+#[test]
+fn eval_nat_with_wrong_arity_raises_e067() {
+    let out = run("(eval-nat zero (succ zero))");
+    assert!(out.results.is_empty());
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E067");
+    assert!(
+        out.diagnostics[0]
+            .message
+            .contains("exactly one term argument"),
+        "diagnostic message: {}",
+        out.diagnostics[0].message
+    );
+}
+
+#[test]
+fn full_nat_links_example_replays_cleanly_under_strict_pure_links() {
+    // Phase 12.5 acceptance: the whole Peano fragment — Nat formation,
+    // addition, multiplication, equality, induction, recursor, and the
+    // eval-nat normalizer — must replay end-to-end without
+    // emitting a single E065 diagnostic when strict pure-links audit is
+    // turned on. The example explicitly allowlists the host-number
+    // renderer; if any rule, proof object, or evaluator step silently
+    // leaned on host `+`/`*`/`=`, the strict scanner would surface it as
+    // `... -> decimal-12-arithmetic -> host-primitive` and break this
+    // test. Mirrors the JS parity test.
+    let path = repo_root().join("examples").join("nat-links.lino");
+    let body = std::fs::read_to_string(&path).expect("read nat-links.lino");
+    let src = format!("(strict-foundation pure-links)\n{}", body);
+    let out = run(&src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(
+        nums(&out.results),
+        vec![
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 0.0, 1.0, 2.0, 4.0,
+        ]
+    );
+}
+
+#[test]
+fn eval_nat_under_strict_pure_links_computes_without_delegating_to_host_arithmetic() {
+    // The strict pure-links scanner inspects `eval-nat` through the
+    // root-construct registry. It passes because the normalizer depends
+    // on links-level computation rules rather than host `+`/`*`.
+    let src = "(strict-foundation pure-links)\n\
+               (allow-host-primitive nat-normal-form-to-host-number)\n\
+               (eval-nat (add (succ (succ zero)) (succ (succ (succ zero)))))\n\
+               (eval-nat (mul (succ (succ zero)) (succ (succ zero))))\n";
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![5.0, 4.0]);
+}
+
+#[test]
+fn strict_pure_links_still_catches_a_stray_host_arithmetic_query_in_nat_context() {
+    // Negative-direction check: the strict audit is genuinely live in
+    // the Nat context. A `(? (1 + 2))` interleaved with the Peano
+    // fragment is rejected with E065 even though every nat-links
+    // declaration around it is clean. Without this test the
+    // "passes strict mode" claim above would be vacuous (no audit
+    // could ever flag anything).
+    let src = "(strict-foundation pure-links)\n\
+               (rule nat-zero-formation\n  (conclusion (zero has-type Nat)))\n\
+               (? (1 + 2))\n";
+    let out = run(src);
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E065");
+    assert!(
+        out.diagnostics[0].message.contains("+"),
+        "diagnostic message: {}",
+        out.diagnostics[0].message
+    );
 }

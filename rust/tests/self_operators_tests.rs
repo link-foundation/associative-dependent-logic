@@ -117,6 +117,10 @@ fn single_number(out: EvaluateResult, label: &str) -> f64 {
             "{}: expected number, got foundation report for {}",
             label, report.active_foundation
         ),
+        RunResult::Proof(ref report) => panic!(
+            "{}: expected number, got proof report for {}",
+            label, report.name
+        ),
     }
 }
 

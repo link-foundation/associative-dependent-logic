@@ -177,6 +177,31 @@ function isProofRuleShape(node) {
     node.slice(2).some(c => c[0] === 'conclusion');
 }
 
+// Mirrors the default-result behaviour for closed Peano terms in the shared
+// examples. The host normalizer dispatches through active links-level rules
+// and renders the normal form separately; this fixture only needs the default
+// rendered value so the encoded evaluator can compare example result streams.
+function evalNatDefaultResult(node) {
+  if (node === 'zero') return 0;
+  if (Array.isArray(node)) {
+    if (node.length === 2 && node[0] === 'succ') {
+      const inner = evalNatDefaultResult(node[1]);
+      return inner === null ? null : inner + 1;
+    }
+    if (node.length === 3 && node[0] === 'add') {
+      const a = evalNatDefaultResult(node[1]);
+      const b = evalNatDefaultResult(node[2]);
+      return a === null || b === null ? null : a + b;
+    }
+    if (node.length === 3 && node[0] === 'mul') {
+      const a = evalNatDefaultResult(node[1]);
+      const b = evalNatDefaultResult(node[2]);
+      return a === null || b === null ? null : a * b;
+    }
+  }
+  return null;
+}
+
 class EncodedEvaluator {
   constructor(rulePatterns) {
     this.rulePatterns = rulePatterns;
@@ -398,6 +423,21 @@ class EncodedEvaluator {
       if (form.length !== 2 || typeof form[1] !== 'string') return;
       const verdict = checkProofObject(this, form[1]);
       results.push(verdict.ok ? 1 : 0);
+      return;
+    }
+    if (Array.isArray(form) && form[0] === 'proof-report') {
+      this.requireRule('(eval (proof-report name))');
+      // Host evaluator emits the report object; the parity test only
+      // compares numeric/object equality of result lists so we mirror the
+      // host by skipping the report payload — proof-report does not push
+      // a numeric result.
+      return;
+    }
+    if (Array.isArray(form) && form[0] === 'eval-nat') {
+      this.requireRule('(eval (eval-nat term))');
+      if (form.length !== 2) return;
+      const value = evalNatDefaultResult(form[1]);
+      if (value !== null) results.push(value);
       return;
     }
     if (Array.isArray(form) && (form[0] === 'encodeAnum' || form[0] === 'decodeAnum')) {

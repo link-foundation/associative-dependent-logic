@@ -179,6 +179,10 @@ fn every_corpus_file_runs_and_matches_expected_outputs() {
                     "{}[{}]: unexpected foundation report for {}",
                     file, i, report.active_foundation
                 )),
+                (RunResult::Proof(report), _) => failures.push(format!(
+                    "{}[{}]: unexpected proof report for {}",
+                    file, i, report.name
+                )),
             }
         }
     }
