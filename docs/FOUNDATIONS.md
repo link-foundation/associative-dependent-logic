@@ -370,20 +370,39 @@ and are pre-seeded by the JS and Rust hosts:
   `(root-construct … links-defined …)` and replayed through
   `(check-proof …)` from
   [`examples/typed-kernel-links.lino`](../examples/typed-kernel-links.lino).
-- **`nat-links`** — links-defined Peano naturals. The seven proof
-  substrate rules `nat-zero-formation`, `nat-succ-formation`,
-  `nat-add-zero`, `nat-add-succ`, `nat-induction`, `nat-refl`, and
-  `nat-cong-succ` describe `Nat`, `zero`, `succ`, addition, induction,
-  and an object-level equality layer `nat-equality` as proof-substrate
-  data rather than host arithmetic. There is no `succ → +1` shortcut:
-  successor stays a literal constructor and addition is reduced
-  recursively, while equalities are expressed as `(?m nat-equals ?n)`
-  rather than the bare literal `equals` so the trust audit can tell
-  the links-defined layer apart from `=`/`numeric-equality`. Programs
-  that do not opt into `nat-links` keep the host's decimal-12 equality
-  unchanged. Replayed end-to-end by
-  [`examples/nat-links.lino`](../examples/nat-links.lino) and pinned in
-  `examples/expected.lino`.
+- **`nat-links`** — links-defined Peano naturals. PR #178 extended
+  the original five Peano rules into a twelve-rule fragment that
+  exercises the full inductive layer the issue's Software Foundations
+  reference uses. The `(foundation nat-links …)` registration's `uses`
+  list now contains, alphabetically: `nat-add-succ`, `nat-add-zero`,
+  `nat-cong-succ`, `nat-eliminator`, `nat-equality`, `nat-induction`,
+  `nat-mul-succ`, `nat-mul-zero`, `nat-recursion`, `nat-refl`,
+  `nat-succ-formation`, `nat-zero-formation`. Highlights:
+  - `Nat`, `zero`, `succ` are inhabited / introduced by
+    `nat-zero-formation` and `nat-succ-formation`.
+  - Addition and multiplication are reduced by `nat-add-zero` /
+    `nat-add-succ` / `nat-mul-zero` / `nat-mul-succ` — recursive
+    definitions, no `succ → +1` shortcut.
+  - Induction is performed by `nat-induction` (with explicit
+    `?P at ?n` / `forall` / `implies` triplets); `nat-recursion` and
+    `nat-eliminator` are the matching recursor and dependent
+    eliminator.
+  - Equality is the `nat-equality` layer with `nat-refl` and
+    `nat-cong-succ`. The literal `nat-equals` keeps the trust audit
+    able to tell the links-defined layer apart from `=` /
+    `numeric-equality`; programs that do not opt into `nat-links`
+    keep the host's decimal-12 equality unchanged.
+  - A links-evaluated structural rewriter `(eval-nat <term>)` is
+    available (§9) for closed Peano terms over
+    `zero | (succ T) | (add T T) | (mul T T)`. The rewriter does
+    not delegate to host `+`/`*`; every step is a Peano rewrite
+    (`nat-add-zero`, `nat-add-succ`, `nat-mul-zero`, `nat-mul-succ`)
+    recorded in the trace.
+  - Replayed end-to-end by
+    [`examples/nat-links.lino`](../examples/nat-links.lino) and
+    pinned in `examples/expected.lino`. The strict-mode audit
+    `(strict-foundation pure-links)` reports zero E065 diagnostics
+    against the full file — see §8.
 
 The example [`examples/foundation-boolean-kleene.lino`](../examples/foundation-boolean-kleene.lino)
 exercises the Boolean/Kleene foundations in one file and shows the
@@ -535,6 +554,60 @@ Encoding rules:
 Decoding rejects characters outside the four-abit alphabet, unbalanced
 frames, and leaf payloads that are not byte-aligned, all with `E066`.
 
+## 9b. `(eval-nat <term>)` — links-evaluated Peano fragment
+
+`(eval-nat <term>)` reduces a closed Peano term to its canonical
+numeric value strictly by **structural rewriting at the links level**.
+The recognised vocabulary is exactly
+`zero | (succ T) | (add T T) | (mul T T)`. The reducer applies the
+four computation rules
+`nat-add-zero`, `nat-add-succ`, `nat-mul-zero`, `nat-mul-succ`
+without ever delegating to the host's `+`/`*` primitives; every
+rewrite step is recorded in the trace transcript.
+
+```lino
+(eval-nat zero)                                # → 0
+(eval-nat (succ (succ zero)))                  # → 2
+(eval-nat (add (succ zero) (succ zero)))       # → 2 via nat-add-succ; nat-add-zero
+(eval-nat (mul (succ (succ zero)) (succ zero)))# → 2 via nat-mul-succ; nat-mul-zero
+```
+
+Anything outside the recognised grammar raises `E067`. The result
+is the host integer that the normal form represents, so values are
+comparable against numeric expectations in tests; the **evaluation**,
+however, is purely links-level. `(eval-nat …)` therefore carries
+`semantic-status: links-evaluated` in the trust report — the only
+non-host-trusted operation it consumes is the structural matcher that
+backs every proof rule.
+
+## 9c. `(proof-report <name>)` — per-proof dependency / trust report
+
+`(proof-report <name>)` returns a structured snapshot of an
+already-registered `(proof-object …)`, listing every assumption,
+axiom, or earlier proof object the named proof transitively depends
+on, together with the proof rule it applies and the active
+foundation. It is the per-proof analogue of `(foundation-report)`.
+
+```lino
+(rule nat-succ-formation
+  (premise (?n has-type Nat))
+  (conclusion ((succ ?n) has-type Nat)))
+
+(axiom zero-is-nat (judgement (zero has-type Nat)))
+
+(proof-object one-is-nat
+  (applies nat-succ-formation)
+  (premise-by zero-is-nat)
+  (conclusion ((succ zero) has-type Nat)))
+
+(proof-report one-is-nat)
+```
+
+The report is a small associative network: the proof object as the
+root, the applied rule, and a flat list of dependency edges by name.
+See `docs/META-THEORY-MAPPING.md` §3 for how the structure maps onto
+the meta-theory's doublets and triplets.
+
 ## 10. Status of the broader programme
 
 The issue #97 roadmap is implemented where the work could stay
@@ -585,23 +658,27 @@ and derivations are links data.
   theory declares MTC rules and replays a composite proof. It does not
   replace the default RML foundation.
 - **Phase 12 — links-defined Peano naturals.** Implemented as a
-  fifth bundled foundation (§5). `examples/nat-links.lino` declares the
-  seven rules `nat-zero-formation`, `nat-succ-formation`,
-  `nat-add-zero`, `nat-add-succ`, `nat-induction`, `nat-refl`, and
-  `nat-cong-succ` as proof-substrate data and replays the inhabitants
-  `zero`, `(succ zero)`, `(succ (succ zero))`, the additions `0+0`,
-  `1+0`, `0+1`, `1+1`, an explicit `(zero nat-equals zero)` reflexivity
-  witness, a successor-congruence step on top of `1+1`, and one
-  induction conclusion through `(check-proof …)`. Equalities live in
-  the dedicated `nat-equality` layer (root construct
-  `(root-construct nat-equality (kind equality-layer) (status
-  links-defined) …)`) so the trust audit distinguishes them from the
-  host's `=`/`numeric-equality`. Successor is a literal constructor;
-  there is no `succ → +1` host shortcut. The default host numeric
-  layer and the host equality layers are unaffected — this phase adds
-  the inductive substrate the issue's Software Foundations reference
-  uses (PR 178 added `nat-equality`, `nat-refl`, and `nat-cong-succ`),
-  not a replacement numeric domain.
+  fifth bundled foundation (§5). `examples/nat-links.lino` declares
+  twelve rules — `nat-zero-formation`, `nat-succ-formation`,
+  `nat-add-zero`, `nat-add-succ`, `nat-mul-zero`, `nat-mul-succ`,
+  `nat-induction`, `nat-recursion`, `nat-eliminator`, `nat-refl`,
+  `nat-cong-succ`, and the dedicated equality layer `nat-equality` —
+  as proof-substrate data and replays inhabitants
+  `zero`, `(succ zero)`, `(succ (succ zero))`, the additions /
+  multiplications, equality reflexivity / successor congruence, an
+  induction conclusion, and several Software-Foundations-style
+  theorems through `(check-proof …)`. Successor is a literal
+  constructor; there is no `succ → +1` host shortcut. Closed Peano
+  terms can additionally be reduced by `(eval-nat <term>)` (§9b);
+  the reducer rewrites by `nat-add-zero` / `nat-add-succ` /
+  `nat-mul-zero` / `nat-mul-succ` without delegating to host
+  arithmetic and is reported as `semantic-status:
+  links-evaluated`. Strict mode (`(strict-foundation pure-links)`)
+  runs cleanly over the full file: zero E065 diagnostics are emitted
+  for the Nat fragment. The default host numeric and equality
+  layers are unaffected — this phase adds the inductive substrate
+  the issue's Software Foundations reference uses, not a replacement
+  numeric domain.
 
 Everything in this document is the *backward-compatible* surface. The
 strict modes (`(strict-carrier)`, `(strict-foundation pure-links)`) are
