@@ -34,10 +34,11 @@ fixed the contract:
 | 2026-05-15 | @konard's comment fixes backward-compatibility and CI/CD requirements. Issue-solver branch `issue-97-bbe597194dee` created; placeholder PR #174 opened. |
 | 2026-05-15 (this PR) | Root-construct registry + foundation scope implemented in both engines; JS and Rust unit/integration/e2e tests added; `examples/foundation-boolean-kleene.lino` + `examples/foundation-with-min.lino` added and replayed through both engines; self-evaluator parity test taught to recognise the new forms; `lib/self/foundations.lino` and `lib/self/evaluator.lino` extended; `docs/FOUNDATIONS.md` written; `docs/DIAGNOSTICS.md` extended with `E060`/`E061`/`E062`; this case study compiled. |
 | 2026-05-16 (Phases 2–9) | Phase 2 equality-layer separation, Phase 3 proof-object replay (`E064`), Phase 4 truth-tables, Phase 5 links-defined typed-kernel fragment (`pi-formation`, `lambda-introduction`, `application-elimination`, `beta-conversion` replayed through `(check-proof …)` from `examples/typed-kernel-links.lino`), Phase 6 pure-links strict mode (`E065`), Phase 7 dependency-graph traversal, Phase 8 carrier enforcement (`E063`), and Phase 9 experimental `mtc-anum` profile with `encodeAnum`/`decodeAnum` helpers (`E066`) advanced on PR #175 with parallel JS/Rust tests and parity replay. |
+| 2026-05-17 (PR #176) | Latest issue feedback was incorporated: `semantic-status` / `semanticStatus` separates host-executed lookup and structural matching from links-level data; truth-table implementations report `links-checked`; substitution/freshness/alpha-renaming remain explicit `host-trusted` boundaries; and `examples/proof-checking-relation.lino` adds a nontrivial proof-checking relation represented as links-level data and replayed by both engines. |
 
 Raw data captured in `data/issue-97.json`, `data/issue-97-comments.json`,
-`data/pr-174.json`, and `data/pr-175.json`. Code-level evidence in
-`evidence/foundation-surface.md`.
+`data/pr-174.json`, `data/pr-175.json`, and `data/pr-176.json`.
+Code-level evidence in `evidence/foundation-surface.md`.
 
 ## 2. Requirements extracted from the issue
 
@@ -95,6 +96,18 @@ requirements:
 13. **R13 — Case-study compilation.** Issue/PR data captured under
     `docs/case-studies/issue-97/data/`, line-numbered code evidence
     under `evidence/`, and a deep analysis at `README.md`.
+14. **R14 — Execution-boundary classification.** New mathematical
+    constructs must distinguish `links-described`, `links-checked`,
+    `links-evaluated`, `self-hosted`, and `host-trusted` rather than
+    relying only on the legacy trust `status`.
+15. **R15 — Links-level proof-checking relation.** At least one
+    nontrivial proof-checking relation must be represented as data and
+    replay-tested, with the host matching boundary visible.
+16. **R16 — Host boundaries remain explicit.** Substitution,
+    alpha-renaming, freshness, definitional equality, normalization,
+    conversion, truth-table lookup, and structural proof matching must
+    either be represented explicitly or marked as trusted host
+    boundaries.
 
 The broader programme proposed in @netkeep80's two comments (Phases
 2–9: equality-layer provenance, proof-object substrate, links-defined
@@ -102,8 +115,9 @@ finite logics, links-defined type kernel, pure-links strict mode,
 dependency-graph traversal, carrier enforcement, and experimental
 `mtc-anum` profile) was originally framed as out of scope for the first
 PR; subsequent commits on PR #175 implemented the backward-compatible
-parts and left the still-hosted type/proof kernel status explicit. See
-§10 for the phase-by-phase status.
+parts and left the still-hosted type/proof kernel status explicit. PR
+#176 adds the semantic execution-boundary layer requested by the latest
+feedback. See §10 for the phase-by-phase status.
 
 ## 3. Root-cause analysis
 
@@ -201,13 +215,20 @@ two engines. The shared test corpus
 (`rust/tests/shared_test_corpus.rs`, `rust/tests/shared_examples.rs`)
 asserts this.
 
+PR #176 extends the snapshot with `semanticStatus` /
+`semantic_status` on root constructs and active implementations, plus a
+`bySemanticStatus` / `by_semantic_status` bucket. This layer records
+whether an entry is `host-trusted`, `links-described`, `links-checked`,
+`links-evaluated`, or `self-hosted`, so a `links-defined` truth-table row
+set is no longer confused with a self-hosted evaluator.
+
 ### 4.4 Bundled foundations and finite-logic examples (R9)
 
 `lib/self/foundations.lino` declares three named alternatives:
 
 - `boolean-links` — strict `{0,1}` Boolean logic whose `and`, `or`, and
   `not` implementations are finite truth-table rows recorded as
-  `links-defined` while the foundation is active.
+  `links-defined` and `links-checked` while the foundation is active.
 - `boolean-classical` — two-valued logic, `and=min`, `or=max`,
   `both=min`, `neither=product`; these are host aggregator bindings.
 - `kleene-three-valued` — Strong Kleene, same operator shape over the
@@ -432,7 +453,8 @@ therefore picks up the new tests automatically.
 
 The original issue thread laid out a six-phase programme; @netkeep80's
 follow-up comment widened it to eight; the experimental `mtc-anum`
-profile added a ninth. The status of each on PR #175:
+profile added a ninth. PR #176 adds the explicit execution-boundary
+classification requested by the latest issue feedback. Current status:
 
 | Phase | Topic | Status | Where |
 |-------|-------|--------|-------|
@@ -445,6 +467,8 @@ profile added a ninth. The status of each on PR #175:
 | 7 | Dependency-graph traversal | done | Rendered in `formatFoundationReport`; powers strict-mode paths |
 | 8 | Carrier enforcement | done | `E063`; `(carrier …)` + `(strict-carrier)` |
 | 9 | Experimental `mtc-anum` profile + `encodeAnum`/`decodeAnum` | done as a serialization profile **and** as a links-defined MTC theory fragment | §9.7; `E066`; pre-seeded but opt-in; `(experimental)`, `(root …)`, `(abit …)` clauses; `examples/mtc-anum-theory.lino`; canonicality/injectivity tests in both engines |
+| 10 | Execution-boundary semantic statuses | done | `semantic-status`; `semanticStatus` / `semantic_status`; `bySemanticStatus` / `by_semantic_status`; docs §4.3 |
+| 11 | Links-level proof-checking relation | done | §9.8; `examples/proof-checking-relation.lino`; proof-substrate tests in both engines |
 
 Every implemented or partially implemented phase has **parallel JS and
 Rust tests** plus the existing self-evaluator parity replay
@@ -577,6 +601,37 @@ negative case where swapping the conclusion's head raises `E064`, and
 a structural check that the example file documents the theory /
 serialization boundary.
 
+### 9.8 PR #176 — semantic statuses and proof-checking relation
+
+PR #175 used `links-defined` for both finite truth-table rows and proof
+rules consumed by the host. The latest issue feedback called out that
+this can hide the actual trust boundary: the rows and rules are links
+data, but lookup, substitution, alpha-renaming, freshness checks,
+normalization/conversion, and structural proof matching still execute
+in JS/Rust.
+
+PR #176 adds an execution-boundary layer:
+
+- `semantic-status` in `.lino` descriptors.
+- `semanticStatus` / `bySemanticStatus` in JavaScript reports.
+- `semantic_status` / `by_semantic_status` in Rust reports.
+- active implementations that print, for example,
+  `and: links-defined; semantic links-checked; via truth-table:boolean-links/and`.
+
+The new shared example
+`examples/proof-checking-relation.lino` represents a data-level
+proof-checking judgement:
+
+```lino
+(?proof checks-as ?conclusion)
+```
+
+Its `proof-checks-modus-ponens` rule checks that a proof object has an
+implication proof, an antecedent proof, an applied rule tag, and two
+dependency edges. The final `(check-proof mp-rain-checks-wet)` returns
+`1`; both shared-example harnesses pin this in
+`examples/expected.lino`.
+
 ## 10. Files in this case study
 
 - `README.md` — this document.
@@ -585,7 +640,9 @@ serialization boundary.
   (@netkeep80's two implementation comments and @konard's final
   contract comment).
 - `data/pr-174.json` — pull-request metadata.
+- `data/pr-175.json` — PR #175 metadata for the completed phase work.
+- `data/pr-176.json` — PR #176 metadata for the semantic-status follow-up.
 - `evidence/foundation-surface.md` — line-numbered code-level
-  evidence for each requirement R1–R13.
+  evidence for requirements R1–R16.
 - `evidence/cicd-template-review.md` — review of the four CI/CD
   templates against this repository's `.github/workflows/`.

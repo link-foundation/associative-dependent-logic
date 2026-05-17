@@ -15,10 +15,14 @@
 (Foundation: (Type 0) Foundation)
 (Root-construct: (Type 0) Root-construct)
 (Trust-status: (Type 0) Trust-status)
+(Semantic-status: (Type 0) Semantic-status)
 
 # ---------------------------------------------------------------------------
-# Trust statuses recognized by `(foundation-report)`. The host evaluator
-# rejects unknown values to keep reports consistent across implementations.
+# Trust statuses recognized by `(foundation-report)`. These are the
+# backward-compatible trust buckets. `semantic-status` below records the
+# execution boundary: whether a construct is merely described as links,
+# checked from links-level data, evaluated by links-level rules, fully
+# self-hosted, or still trusted in the host.
 # ---------------------------------------------------------------------------
 
 (trust-status host-primitive reads implemented-by-host-kernel)
@@ -29,6 +33,12 @@
 (trust-status links-defined reads behaviour-derived-by-evaluating-self-rules)
 (trust-status user-overridden reads replaced-by-user-foundation)
 (trust-status planned reads not-yet-implemented)
+
+(semantic-status host-trusted reads behaviour-executes-in-host-or-external-trusted-code)
+(semantic-status links-described reads represented-as-links-but-interpreted-by-host)
+(semantic-status links-checked reads links-level-data-is-checked-by-host-proof-or-table-replay)
+(semantic-status links-evaluated reads behaviour-obtained-by-links-level-evaluator-rules)
+(semantic-status self-hosted reads checker-and-evaluator-are-themselves-links-level-derivations)
 
 # ---------------------------------------------------------------------------
 # Parsing / LiNo layer.
@@ -169,25 +179,30 @@
 (root-construct =
   (kind equality-layer)
   (status host-primitive)
+  (semantic-status host-trusted)
   (depends-on structural-equality decimal-12-arithmetic))
 
 (root-construct !=
   (kind equality-layer)
   (status host-derived)
+  (semantic-status host-trusted)
   (depends-on = not))
 
 (root-construct assigned-equality
   (kind equality-layer)
-  (status host-primitive))
+  (status host-primitive)
+  (semantic-status host-trusted))
 
 (root-construct numeric-equality
   (kind equality-layer)
   (status host-primitive)
+  (semantic-status host-trusted)
   (depends-on decimal-12-arithmetic))
 
 (root-construct definitional-equality
   (kind equality-layer)
   (status host-primitive)
+  (semantic-status host-trusted)
   (depends-on beta-reduction structural-equality))
 
 # ---------------------------------------------------------------------------
@@ -201,6 +216,7 @@
 (root-construct Type
   (kind universe-form)
   (status host-primitive)
+  (semantic-status host-trusted)
   (pure-links-ready no)
   (planned-as links-defined)
   (links-defined-via typed-kernel-links))
@@ -208,29 +224,34 @@
 (root-construct Prop
   (kind universe-form)
   (status host-primitive)
+  (semantic-status host-trusted)
   (depends-on Type))
 
 (root-construct Pi
   (kind binder)
   (status host-primitive)
+  (semantic-status host-trusted)
   (depends-on Type substitution freshness)
   (links-defined-via pi-formation))
 
 (root-construct lambda
   (kind binder)
   (status host-primitive)
+  (semantic-status host-trusted)
   (depends-on Pi substitution)
   (links-defined-via lambda-introduction))
 
 (root-construct apply
   (kind eliminator)
   (status host-primitive)
+  (semantic-status host-trusted)
   (depends-on lambda beta-reduction)
   (links-defined-via application-elimination))
 
 (root-construct beta-reduction
   (kind reduction-rule)
   (status host-primitive)
+  (semantic-status host-trusted)
   (depends-on substitution freshness alpha-renaming)
   (links-defined-via beta-conversion))
 
@@ -240,46 +261,55 @@
 (root-construct pi-formation
   (kind typing-rule)
   (status links-defined)
+  (semantic-status links-checked)
   (depends-on Pi))
 
 (root-construct lambda-introduction
   (kind typing-rule)
   (status links-defined)
+  (semantic-status links-checked)
   (depends-on lambda))
 
 (root-construct application-elimination
   (kind typing-rule)
   (status links-defined)
+  (semantic-status links-checked)
   (depends-on apply))
 
 (root-construct beta-conversion
   (kind reduction-rule)
   (status links-defined)
+  (semantic-status links-checked)
   (depends-on beta-reduction))
 
 (root-construct substitution
   (kind meta-operation)
   (status host-primitive)
+  (semantic-status host-trusted)
   (encoded-as substitute))
 
 (root-construct freshness
   (kind meta-operation)
   (status host-primitive)
+  (semantic-status host-trusted)
   (encoded-as eval-fresh))
 
 (root-construct alpha-renaming
   (kind meta-operation)
-  (status host-primitive))
+  (status host-primitive)
+  (semantic-status host-trusted))
 
 (root-construct normalization
   (kind reduction-rule)
   (status host-primitive)
+  (semantic-status host-trusted)
   (encoded-as normalize-term)
   (depends-on beta-reduction))
 
 (root-construct whnf
   (kind reduction-rule)
   (status host-primitive)
+  (semantic-status host-trusted)
   (encoded-as whnf-term)
   (depends-on beta-reduction))
 
@@ -297,7 +327,32 @@
 (root-construct proof-replay
   (kind replay-checker)
   (status host-primitive)
+  (semantic-status host-trusted)
   (encoded-as check.mjs))
+
+(root-construct proof-object
+  (kind proof-data)
+  (status links-encoded)
+  (semantic-status links-described)
+  (encoded-as proof-object))
+
+(root-construct proof-rule-declaration
+  (kind proof-data)
+  (status links-encoded)
+  (semantic-status links-described)
+  (encoded-as rule))
+
+(root-construct proof-checking-relation
+  (kind checking-relation)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on proof-replay structural-equality proof-object))
+
+(root-construct rule-application-check
+  (kind checking-relation)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on proof-replay structural-equality proof-rule-declaration))
 
 (root-construct by (kind proof-rule) (status host-primitive))
 (root-construct smt-trusted (kind external-decision) (status external-trusted))

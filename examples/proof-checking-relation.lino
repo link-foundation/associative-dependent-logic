@@ -1,0 +1,59 @@
+# Links-level proof-checking relation (issue #97, PR #176).
+#
+# The rule below does not merely prove an object-level proposition such as
+# `wet`. It describes a proof checker judgement as links-level data:
+#
+#   (?proof checks-as ?conclusion)
+#
+# The host still performs structural matching and recursive proof replay,
+# so the root construct is classified as `links-checked`, not self-hosted.
+# This is the intended execution-boundary distinction for PR #176.
+
+(root-construct proof-checking-relation
+  (kind checking-relation)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on proof-replay structural-equality proof-object))
+
+
+# --- Data-level proof checking relation for modus ponens ---
+
+(rule proof-checks-modus-ponens
+  (premise (?implication-proof checks-as (?antecedent implies ?consequent)))
+  (premise (?antecedent-proof checks-as ?antecedent))
+  (premise (?proof applies-rule modus-ponens))
+  (premise (?proof uses-proof ?implication-proof))
+  (premise (?proof uses-proof ?antecedent-proof))
+  (conclusion (?proof checks-as ?consequent)))
+
+
+# --- Proof metadata and existing checked subproofs ---
+
+(axiom rain-implies-wet-proof
+  (judgement (rain-implies-wet checks-as (raining implies wet))))
+
+(axiom rain-proof
+  (judgement (rain-proof checks-as raining)))
+
+(axiom mp-rain-applies
+  (judgement (mp-rain applies-rule modus-ponens)))
+
+(axiom mp-rain-uses-implication
+  (judgement (mp-rain uses-proof rain-implies-wet)))
+
+(axiom mp-rain-uses-antecedent
+  (judgement (mp-rain uses-proof rain-proof)))
+
+
+# --- The checked derivation ---
+
+(proof-object mp-rain-checks-wet
+  (applies proof-checks-modus-ponens)
+  (premise-by rain-implies-wet-proof)
+  (premise-by rain-proof)
+  (premise-by mp-rain-applies)
+  (premise-by mp-rain-uses-implication)
+  (premise-by mp-rain-uses-antecedent)
+  (conclusion (mp-rain checks-as wet)))
+
+(check-proof mp-rain-checks-wet)

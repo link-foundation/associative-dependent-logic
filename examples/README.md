@@ -45,6 +45,11 @@ cargo build --release --manifest-path rust/Cargo.toml
 | [`self-reasoning.lino`](./self-reasoning.lino) | Meta-logic reasoning about its own logic system |
 | [`dependent-types.lino`](./dependent-types.lino) | Dependent type system with universes, Π-types, λ |
 | [`lambda-calculus.lino`](./lambda-calculus.lino) | Lambda calculus via HOAS, with `forall` desugaring to `Pi` |
+| [`typed-kernel-links.lino`](./typed-kernel-links.lino) | Links-checked dependent-kernel typing derivation |
+| [`proof-checking-relation.lino`](./proof-checking-relation.lino) | Links-level proof-checking relation checked by proof replay |
+| [`mtc-anum-theory.lino`](./mtc-anum-theory.lino) | MTC/anum theory fragment kept separate from serialization |
+| [`foundation-boolean-kleene.lino`](./foundation-boolean-kleene.lino) | Foundation-scoped Boolean/Kleene truth-table semantics |
+| [`foundation-with-min.lino`](./foundation-with-min.lino) | Foundation-scoped aggregator override |
 | [`demo.lino`](./demo.lino) | Custom operator configuration (`avg`-based AND) |
 | [`flipped-axioms.lino`](./flipped-axioms.lino) | Arbitrary probability assignments |
 

@@ -1089,6 +1089,7 @@ pub struct FoundationFrame {
 pub struct RootConstructDescriptor {
     pub name: String,
     pub status: Option<String>,
+    pub semantic_status: Option<String>,
     pub kind: Option<String>,
     pub depends_on: Vec<String>,
     pub encoded_as: Option<String>,
@@ -1155,6 +1156,7 @@ pub struct ActiveImplementationDescriptor {
     pub foundation: Option<String>,
     pub implementation: Option<String>,
     pub status: Option<String>,
+    pub semantic_status: Option<String>,
     pub depends_on: Vec<String>,
 }
 
@@ -1175,6 +1177,7 @@ pub struct FoundationReport {
     pub truth_domain: Option<String>,
     pub root_constructs: Vec<RootConstructDescriptor>,
     pub by_status: Vec<(String, Vec<String>)>,
+    pub by_semantic_status: Vec<(String, Vec<String>)>,
     pub foundations: Vec<FoundationDescriptor>,
     pub active_implementations: Vec<ActiveImplementationDescriptor>,
     /// Proof-object substrate (issue #97, Phase 3). Surfaced on the report so
@@ -1713,6 +1716,7 @@ impl Env {
                         foundation: Some(name.to_string()),
                         implementation: Some(impl_name.clone()),
                         status: Some("host-primitive".to_string()),
+                        semantic_status: Some("host-trusted".to_string()),
                         depends_on: vec![impl_name.clone()],
                     },
                 );
@@ -1775,6 +1779,7 @@ impl Env {
                     foundation: Some(name.to_string()),
                     implementation: Some(format!("truth-table:{}/{}", name, op_name)),
                     status: Some("links-defined".to_string()),
+                    semantic_status: Some("links-checked".to_string()),
                     depends_on,
                 },
             );
@@ -1887,22 +1892,46 @@ impl Env {
             self.active_foundation.clone()
         };
         let foundation = self.foundations.get(&active).cloned();
-        let constructs = self.list_root_constructs();
+        let mut constructs = self.list_root_constructs();
+        for rc in &mut constructs {
+            if rc.semantic_status.is_none() {
+                rc.semantic_status = semantic_status_for_trust_status(rc.status.as_deref());
+            }
+        }
         let mut by_status_map: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        let mut by_semantic_status_map: std::collections::BTreeMap<String, Vec<String>> =
             std::collections::BTreeMap::new();
         for rc in &constructs {
             let key = rc.status.clone().unwrap_or_else(|| "unknown".to_string());
             by_status_map.entry(key).or_default().push(rc.name.clone());
+            let semantic_key =
+                semantic_status_for_descriptor(rc).unwrap_or_else(|| "unknown".to_string());
+            by_semantic_status_map
+                .entry(semantic_key)
+                .or_default()
+                .push(rc.name.clone());
         }
         for v in by_status_map.values_mut() {
             v.sort();
         }
+        for v in by_semantic_status_map.values_mut() {
+            v.sort();
+        }
         let by_status: Vec<(String, Vec<String>)> = by_status_map.into_iter().collect();
+        let by_semantic_status: Vec<(String, Vec<String>)> =
+            by_semantic_status_map.into_iter().collect();
         let mut foundations: Vec<FoundationDescriptor> =
             self.foundations.values().cloned().collect();
         foundations.sort_by(|a, b| a.name.cmp(&b.name));
         let mut active_implementations: Vec<ActiveImplementationDescriptor> =
             self.active_implementations.values().cloned().collect();
+        for implementation in &mut active_implementations {
+            if implementation.semantic_status.is_none() {
+                implementation.semantic_status =
+                    semantic_status_for_trust_status(implementation.status.as_deref());
+            }
+        }
         active_implementations.sort_by(|a, b| a.construct.cmp(&b.construct));
         let mut proof_rules: Vec<ProofRuleSnapshot> = self
             .proof_rules
@@ -1946,6 +1975,7 @@ impl Env {
             truth_domain: foundation.as_ref().and_then(|f| f.truth_domain.clone()),
             root_constructs: constructs,
             by_status,
+            by_semantic_status,
             foundations,
             active_implementations,
             proof_rules,
@@ -2911,6 +2941,9 @@ fn merge_root_construct_descriptors(
     if next.status.is_some() {
         base.status = next.status;
     }
+    if next.semantic_status.is_some() {
+        base.semantic_status = next.semantic_status;
+    }
     if next.kind.is_some() {
         base.kind = next.kind;
     }
@@ -2940,6 +2973,34 @@ fn merge_root_construct_descriptors(
         base.foundation = next.foundation;
     }
     base
+}
+
+const SEMANTIC_STATUS_ORDER: [&str; 5] = [
+    "host-trusted",
+    "links-described",
+    "links-checked",
+    "links-evaluated",
+    "self-hosted",
+];
+
+fn semantic_status_for_trust_status(status: Option<&str>) -> Option<String> {
+    match status {
+        Some("host-primitive")
+        | Some("host-derived")
+        | Some("external-trusted")
+        | Some("user-configurable")
+        | Some("user-overridden") => Some("host-trusted".to_string()),
+        Some("links-encoded") | Some("planned") => Some("links-described".to_string()),
+        Some("links-defined") => Some("links-checked".to_string()),
+        _ => None,
+    }
+}
+
+fn semantic_status_for_descriptor(descriptor: &RootConstructDescriptor) -> Option<String> {
+    descriptor
+        .semantic_status
+        .clone()
+        .or_else(|| semantic_status_for_trust_status(descriptor.status.as_deref()))
 }
 
 fn merge_foundation_descriptors(
@@ -3259,6 +3320,10 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         ("inductive", "declaration", "host-primitive", vec!["Type", "Pi"], None, None),
         ("coinductive", "declaration", "host-primitive", vec!["Type", "Pi"], None, None),
         ("proof-replay", "replay-checker", "host-primitive", vec![], Some("check.mjs"), None),
+        ("proof-object", "proof-data", "links-encoded", vec![], Some("proof-object"), None),
+        ("proof-rule-declaration", "proof-data", "links-encoded", vec![], Some("rule"), None),
+        ("proof-checking-relation", "checking-relation", "links-defined", vec!["proof-replay", "structural-equality", "proof-object"], None, None),
+        ("rule-application-check", "checking-relation", "links-defined", vec!["proof-replay", "structural-equality", "proof-rule-declaration"], None, None),
         ("by", "proof-rule", "host-primitive", vec![], None, None),
         ("smt-trusted", "external-decision", "external-trusted", vec![], None, None),
         ("atp-trusted", "external-decision", "external-trusted", vec![], None, None),
@@ -3277,6 +3342,7 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         let descriptor = RootConstructDescriptor {
             name: name.to_string(),
             status: Some(status.to_string()),
+            semantic_status: None,
             kind: Some(kind.to_string()),
             depends_on: depends_on.into_iter().map(String::from).collect(),
             encoded_as: encoded_as.map(String::from),
@@ -3344,6 +3410,16 @@ fn parse_root_construct_form(node: &Node) -> Result<RootConstructDescriptor, Str
                     descriptor.status = Some(v.clone());
                 } else {
                     return Err("(status …) requires one symbol".to_string());
+                }
+            }
+            "semantic-status" => {
+                if rest.len() != 1 {
+                    return Err("(semantic-status …) requires one symbol".to_string());
+                }
+                if let Node::Leaf(v) = rest[0] {
+                    descriptor.semantic_status = Some(v.clone());
+                } else {
+                    return Err("(semantic-status …) requires one symbol".to_string());
                 }
             }
             "kind" => {
@@ -4431,6 +4507,30 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
             lines.push(format!("  - {}", n));
         }
     }
+    if !report.by_semantic_status.is_empty() {
+        lines.push(String::new());
+        lines.push("semantic statuses:".to_string());
+        let mut seen_semantic: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for status in SEMANTIC_STATUS_ORDER.iter() {
+            if let Some((_, names)) = report
+                .by_semantic_status
+                .iter()
+                .find(|(s, _)| s == status)
+            {
+                if !names.is_empty() {
+                    lines.push(format!("  {}: {}", status, names.join(", ")));
+                    seen_semantic.insert((*status).to_string());
+                }
+            }
+        }
+        for (status, names) in &report.by_semantic_status {
+            if seen_semantic.contains(status) || names.is_empty() {
+                continue;
+            }
+            lines.push(format!("  {}: {}", status, names.join(", ")));
+        }
+    }
     if !report.active_implementations.is_empty() {
         lines.push(String::new());
         lines.push("active implementations:".to_string());
@@ -4438,6 +4538,9 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
             let mut parts: Vec<String> = Vec::new();
             if let Some(status) = &implementation.status {
                 parts.push(status.clone());
+            }
+            if let Some(semantic_status) = &implementation.semantic_status {
+                parts.push(format!("semantic {}", semantic_status));
             }
             if let Some(implementation_name) = &implementation.implementation {
                 parts.push(format!("via {}", implementation_name));
