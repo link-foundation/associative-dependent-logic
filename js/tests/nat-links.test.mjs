@@ -1,12 +1,20 @@
 // Phase 12 — links-defined Peano naturals (issue #97).
 //
-// These tests pin down the behaviour of the five proof-substrate rules
+// These tests pin down the behaviour of the seven proof-substrate rules
 // (nat-zero-formation, nat-succ-formation, nat-add-zero, nat-add-succ,
-// nat-induction) that are expressed inside the proof substrate by
-// `examples/nat-links.lino`. Each rule is exercised on its own, then
-// composed end-to-end, and finally the corresponding
+// nat-induction, nat-refl, nat-cong-succ) that are expressed inside the
+// proof substrate by `examples/nat-links.lino`, and of the dedicated
+// equality layer `nat-equality` they inhabit. Each rule is exercised on
+// its own, then composed end-to-end, and finally the corresponding
 // `(foundation nat-links ...)` registration is verified so the data
 // and the runtime stay in sync.
+//
+// PR 178 added the explicit `nat-equality` layer plus the rules
+// `nat-refl` and `nat-cong-succ`, and switched the example from the
+// bare literal `equals` to `nat-equals`. The tests below also check
+// that programs which never opt into `nat-links` continue to use the
+// host's `=`/`numeric-equality` layer unchanged (backward
+// compatibility).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
@@ -33,7 +41,10 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     assert.deepStrictEqual(found.uses.slice().sort(), [
       'nat-add-succ',
       'nat-add-zero',
+      'nat-cong-succ',
+      'nat-equality',
       'nat-induction',
+      'nat-refl',
       'nat-succ-formation',
       'nat-zero-formation',
     ]);
@@ -49,6 +60,8 @@ describe('Phase 12 — links-defined Peano naturals', () => {
       'nat-add-zero',
       'nat-add-succ',
       'nat-induction',
+      'nat-refl',
+      'nat-cong-succ',
     ]) {
       assert.match(source, new RegExp(`\\(uses ${rule}\\)`));
       assert.match(
@@ -57,6 +70,16 @@ describe('Phase 12 — links-defined Peano naturals', () => {
         `${rule} should appear as a root-construct with links-defined status`,
       );
     }
+    // The equality layer that the new rules inhabit is registered as a
+    // root construct, listed by the nat-links foundation, and marked
+    // links-defined so the trust audit can distinguish it from the
+    // host's `=`/`numeric-equality`.
+    assert.match(source, /\(uses nat-equality\)/);
+    assert.match(
+      source,
+      /\(root-construct nat-equality[\s\S]*?equality-layer[\s\S]*?links-defined/,
+      'nat-equality should be a links-defined equality-layer root construct',
+    );
   });
 
   it('nat-zero-formation derives `zero has-type Nat` without premises', () => {
@@ -102,7 +125,7 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     const out = evaluate(`
 (rule nat-add-zero
   (premise (?n has-type Nat))
-  (conclusion ((add zero ?n) equals ?n)))
+  (conclusion ((add zero ?n) nat-equals ?n)))
 
 (axiom zero-is-nat
   (judgement (zero has-type Nat)))
@@ -110,7 +133,7 @@ describe('Phase 12 — links-defined Peano naturals', () => {
 (proof-object zero-plus-zero
   (applies nat-add-zero)
   (premise-by zero-is-nat)
-  (conclusion ((add zero zero) equals zero)))
+  (conclusion ((add zero zero) nat-equals zero)))
 
 (check-proof zero-plus-zero)
 `);
@@ -121,21 +144,93 @@ describe('Phase 12 — links-defined Peano naturals', () => {
   it('nat-add-succ steps addition through the successor', () => {
     const out = evaluate(`
 (rule nat-add-succ
-  (premise ((add ?m ?n) equals ?k))
-  (conclusion ((add (succ ?m) ?n) equals (succ ?k))))
+  (premise ((add ?m ?n) nat-equals ?k))
+  (conclusion ((add (succ ?m) ?n) nat-equals (succ ?k))))
 
 (axiom zero-plus-zero
-  (judgement ((add zero zero) equals zero)))
+  (judgement ((add zero zero) nat-equals zero)))
 
 (proof-object one-plus-zero
   (applies nat-add-succ)
   (premise-by zero-plus-zero)
-  (conclusion ((add (succ zero) zero) equals (succ zero))))
+  (conclusion ((add (succ zero) zero) nat-equals (succ zero))))
 
 (check-proof one-plus-zero)
 `);
     assert.deepStrictEqual(out.diagnostics, []);
     assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('nat-refl derives (?n nat-equals ?n) for a well-typed Nat', () => {
+    // Reflexivity of the links-defined equality layer: every
+    // inhabitant of `Nat` is `nat-equals` to itself. The premise pins
+    // the metavariable `?n` to `zero`, so the structural matcher
+    // accepts `(zero nat-equals zero)` as the conclusion.
+    const out = evaluate(`
+(rule nat-refl
+  (premise (?n has-type Nat))
+  (conclusion (?n nat-equals ?n)))
+
+(axiom zero-is-nat
+  (judgement (zero has-type Nat)))
+
+(proof-object zero-nat-equals-zero
+  (applies nat-refl)
+  (premise-by zero-is-nat)
+  (conclusion (zero nat-equals zero)))
+
+(check-proof zero-nat-equals-zero)
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('nat-cong-succ lifts a nat-equality through succ', () => {
+    // Successor congruence: if `?m nat-equals ?n` is derived, then
+    // applying `succ` to both sides yields `(succ ?m) nat-equals (succ
+    // ?n)`. The axiom below stands in for the premise so the test
+    // exercises `nat-cong-succ` in isolation.
+    const out = evaluate(`
+(rule nat-cong-succ
+  (premise (?m nat-equals ?n))
+  (conclusion ((succ ?m) nat-equals (succ ?n))))
+
+(axiom zero-nat-equals-zero
+  (judgement (zero nat-equals zero)))
+
+(proof-object succ-zero-nat-equals-succ-zero
+  (applies nat-cong-succ)
+  (premise-by zero-nat-equals-zero)
+  (conclusion ((succ zero) nat-equals (succ zero))))
+
+(check-proof succ-zero-nat-equals-succ-zero)
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('rejects a nat-cong-succ derivation that drops one of the succ wrappers', () => {
+    // The conclusion of `nat-cong-succ` must wrap both sides of the
+    // premise in `succ`; deliberately dropping the wrapper on one side
+    // breaks the structural match and `(check-proof ...)` must return
+    // 0 with E064.
+    const out = evaluate(`
+(rule nat-cong-succ
+  (premise (?m nat-equals ?n))
+  (conclusion ((succ ?m) nat-equals (succ ?n))))
+
+(axiom zero-nat-equals-zero
+  (judgement (zero nat-equals zero)))
+
+(proof-object bad-cong
+  (applies nat-cong-succ)
+  (premise-by zero-nat-equals-zero)
+  (conclusion ((succ zero) nat-equals zero)))
+
+(check-proof bad-cong)
+`);
+    assert.deepStrictEqual(out.results, [0]);
+    assert.ok(out.diagnostics.some(d => d.code === 'E064'));
   });
 
   it('nat-induction folds a base case and a step into a universal claim', () => {
@@ -187,20 +282,20 @@ describe('Phase 12 — links-defined Peano naturals', () => {
   });
 
   it('rejects an add-succ derivation that contradicts its arithmetic premise', () => {
-    // Claiming that `(add (succ zero) zero)` equals `zero` would
+    // Claiming that `(add (succ zero) zero) nat-equals zero` would
     // require `(succ ?k)` to unify with `zero`, which is impossible.
     const out = evaluate(`
 (rule nat-add-succ
-  (premise ((add ?m ?n) equals ?k))
-  (conclusion ((add (succ ?m) ?n) equals (succ ?k))))
+  (premise ((add ?m ?n) nat-equals ?k))
+  (conclusion ((add (succ ?m) ?n) nat-equals (succ ?k))))
 
 (axiom zero-plus-zero
-  (judgement ((add zero zero) equals zero)))
+  (judgement ((add zero zero) nat-equals zero)))
 
 (proof-object wrong-add
   (applies nat-add-succ)
   (premise-by zero-plus-zero)
-  (conclusion ((add (succ zero) zero) equals zero)))
+  (conclusion ((add (succ zero) zero) nat-equals zero)))
 
 (check-proof wrong-add)
 `);
@@ -208,9 +303,22 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     assert.ok(out.diagnostics.some(d => d.code === 'E064'));
   });
 
+  it('leaves the host `=`/numeric-equality layer unchanged when nat-links is not selected', () => {
+    // PR 178 (issue #97) introduces `nat-equality` as an additional
+    // links-defined layer; programs that never opt into the nat-links
+    // foundation must keep the host's decimal-12 `=` semantics.
+    const out = evaluate(`
+(? (= 1 1))
+(? (= 1 2))
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    // `(= 1 1)` ⇒ 1; `(= 1 2)` ⇒ 0.
+    assert.deepStrictEqual(out.results, [1, 0]);
+  });
+
   it('runs the full Phase 12 example end-to-end with no diagnostics', () => {
     const out = evaluateFile(examplePath);
     assert.deepStrictEqual(out.diagnostics, []);
-    assert.deepStrictEqual(out.results, [1, 1, 1, 1, 1, 1, 1, 1]);
+    assert.deepStrictEqual(out.results, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
   });
 });

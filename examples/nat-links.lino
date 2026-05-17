@@ -1,32 +1,41 @@
 # Links-defined natural-number foundation (issue #97, Phase 12).
 #
-# Peano arithmetic encoded entirely as proof-substrate rules. The five
+# Peano arithmetic encoded entirely as proof-substrate rules. The seven
 # rules `nat-zero-formation`, `nat-succ-formation`, `nat-add-zero`,
-# `nat-add-succ`, and `nat-induction` make `Nat`, `zero`, `succ`,
-# addition, and structural induction available as links-level constructs
+# `nat-add-succ`, `nat-induction`, `nat-refl`, and `nat-cong-succ` make
+# `Nat`, `zero`, `succ`, addition, structural induction, and the
+# object-level equality `nat-equals` available as links-level constructs
 # whose derivations are checked by the host's structural pattern matcher
 # rather than by the host's decimal numeric domain.
 #
-# `has-type`, `equals`, `at`, `forall`, and `implies` are bare
+# `has-type`, `nat-equals`, `at`, `forall`, and `implies` are bare
 # identifiers — the proof substrate treats them as literals while
 # matching the surrounding `?` metavariables. `(zero has-type Nat)`
 # therefore plays the role of `0 : Nat`, and
-# `((add (succ zero) (succ zero)) equals (succ (succ zero)))` plays the
-# role of `1 + 1 = 2`.
+# `((add (succ zero) (succ zero)) nat-equals (succ (succ zero)))` plays
+# the role of `1 + 1 = 2` in the Peano equality layer.
+#
+# The example uses `nat-equals` rather than the bare literal `equals` so
+# that programs which never opt into the `nat-links` foundation keep
+# the host's `=`/`numeric-equality` layer untouched (PR 178). The
+# `(foundation nat-links ...)` registration in `lib/self/foundations.lino`
+# now lists `nat-equality`, `nat-refl`, and `nat-cong-succ` alongside the
+# five original Peano rules; the trust report distinguishes the
+# links-defined equality layer from `=`/`numeric-equality`.
 #
 # The derivation below builds `zero`, `(succ zero)`, and
 # `(succ (succ zero))` as inhabitants of `Nat`, computes three small
-# additions by recursion on the left argument, and uses
-# `nat-induction` to derive a trivially-true universally quantified
-# property. Every step is mechanically replayed by `(check-proof ...)`
-# so the host emits no diagnostics and each query returns `1`.
+# additions by recursion on the left argument, lifts one of those
+# arithmetic facts through `nat-cong-succ`, and uses `nat-induction` to
+# derive a trivially-true universally quantified property. Every step is
+# mechanically replayed by `(check-proof ...)` so the host emits no
+# diagnostics and each query returns `1`.
 #
 # This example mirrors the construction laid out in Software
 # Foundations' `Basics.v` / `Induction.v` but runs on the links
-# substrate instead of Coq's typed kernel. The companion foundation
-# entry `(foundation nat-links ...)` in `lib/self/foundations.lino`
-# documents the five rules as an alternative Peano-natural-number
-# foundation; the host's `decimal-12-arithmetic` is unaffected.
+# substrate instead of Coq's typed kernel. The host's
+# `decimal-12-arithmetic` is unaffected; reasoning that does not select
+# `nat-links` continues to use `=`/`numeric-equality`.
 #
 # See: docs/case-studies/issue-97/README.md §9.9.
 
@@ -45,11 +54,22 @@
 
 (rule nat-add-zero
   (premise (?n has-type Nat))
-  (conclusion ((add zero ?n) equals ?n)))
+  (conclusion ((add zero ?n) nat-equals ?n)))
 
 (rule nat-add-succ
-  (premise ((add ?m ?n) equals ?k))
-  (conclusion ((add (succ ?m) ?n) equals (succ ?k))))
+  (premise ((add ?m ?n) nat-equals ?k))
+  (conclusion ((add (succ ?m) ?n) nat-equals (succ ?k))))
+
+
+# --- Equality rules: nat-equality is reflexive and respects succ ---
+
+(rule nat-refl
+  (premise (?n has-type Nat))
+  (conclusion (?n nat-equals ?n)))
+
+(rule nat-cong-succ
+  (premise (?m nat-equals ?n))
+  (conclusion ((succ ?m) nat-equals (succ ?n))))
 
 
 # --- Proof principle: structural induction over Nat ---
@@ -83,28 +103,49 @@
 (proof-object zero-plus-zero
   (applies nat-add-zero)
   (premise-by zero-is-nat)
-  (conclusion ((add zero zero) equals zero)))
+  (conclusion ((add zero zero) nat-equals zero)))
 
 # 1 + 0 = 1 via nat-add-succ on top of (0 + 0 = 0).
 
 (proof-object one-plus-zero
   (applies nat-add-succ)
   (premise-by zero-plus-zero)
-  (conclusion ((add (succ zero) zero) equals (succ zero))))
+  (conclusion ((add (succ zero) zero) nat-equals (succ zero))))
 
 # 0 + 1 = 1 via nat-add-zero applied with n := (succ zero).
 
 (proof-object zero-plus-one
   (applies nat-add-zero)
   (premise-by one-is-nat)
-  (conclusion ((add zero (succ zero)) equals (succ zero))))
+  (conclusion ((add zero (succ zero)) nat-equals (succ zero))))
 
 # 1 + 1 = 2 via nat-add-succ on top of (0 + 1 = 1).
 
 (proof-object one-plus-one
   (applies nat-add-succ)
   (premise-by zero-plus-one)
-  (conclusion ((add (succ zero) (succ zero)) equals (succ (succ zero)))))
+  (conclusion ((add (succ zero) (succ zero)) nat-equals (succ (succ zero)))))
+
+
+# --- Using nat-equality: zero is equal to itself, and succ respects it ---
+# `nat-refl` lifts `(zero has-type Nat)` to `(zero nat-equals zero)`; then
+# `nat-cong-succ` repackages `(1 + 1 = 2)` as
+# `(succ (add (succ zero) (succ zero))) nat-equals (succ (succ (succ zero)))`,
+# witnessing that adding one to both sides of an established equality
+# stays inside the links-defined equality layer.
+
+(proof-object zero-nat-equals-zero
+  (applies nat-refl)
+  (premise-by zero-is-nat)
+  (conclusion (zero nat-equals zero)))
+
+(proof-object succ-one-plus-one
+  (applies nat-cong-succ)
+  (premise-by one-plus-one)
+  (conclusion
+    ((succ (add (succ zero) (succ zero)))
+     nat-equals
+     (succ (succ (succ zero))))))
 
 
 # --- Using induction: every Nat satisfies the trivial property `is-nat` ---
@@ -135,4 +176,6 @@
 (check-proof one-plus-zero)
 (check-proof zero-plus-one)
 (check-proof one-plus-one)
+(check-proof zero-nat-equals-zero)
+(check-proof succ-one-plus-one)
 (check-proof every-nat-is-nat)

@@ -623,20 +623,26 @@ class Env {
     // Pre-seed the links-defined Peano naturals foundation (issue #97,
     // Phase 12). Selecting it via `(with-foundation nat-links ...)`
     // records the proof-substrate rules `nat-zero-formation`,
-    // `nat-succ-formation`, `nat-add-zero`, `nat-add-succ`, and
-    // `nat-induction` as the canonical links-defined replacement for
-    // host-numeric Peano arithmetic. The host's decimal numeric domain
-    // is unaffected; the foundation is selected so the trust audit can
-    // list the five rules as the active derivations for `Nat`.
+    // `nat-succ-formation`, `nat-add-zero`, `nat-add-succ`,
+    // `nat-induction`, `nat-refl`, and `nat-cong-succ` as the canonical
+    // links-defined replacement for host-numeric Peano arithmetic, and
+    // names `nat-equality` as the dedicated equality layer that those
+    // two equality rules inhabit. The host's decimal numeric domain and
+    // default equality layers are unaffected; the foundation is selected
+    // so the trust audit can list the seven rules as the active
+    // derivations for `Nat` and its object-level equality `nat-equals`.
     this.foundations.set('nat-links', {
       name: 'nat-links',
-      description: 'links-defined Peano naturals (zero/succ formation, add by recursion, induction)',
+      description: 'links-defined Peano naturals (zero/succ formation, add by recursion, induction, nat-equality with reflexivity and successor congruence)',
       uses: [
         'nat-zero-formation',
         'nat-succ-formation',
         'nat-add-zero',
         'nat-add-succ',
         'nat-induction',
+        'nat-equality',
+        'nat-refl',
+        'nat-cong-succ',
       ],
       defines: new Map(),
       extends: 'default-rml',

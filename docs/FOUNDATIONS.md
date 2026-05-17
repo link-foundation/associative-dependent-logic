@@ -370,13 +370,18 @@ and are pre-seeded by the JS and Rust hosts:
   `(root-construct … links-defined …)` and replayed through
   `(check-proof …)` from
   [`examples/typed-kernel-links.lino`](../examples/typed-kernel-links.lino).
-- **`nat-links`** — links-defined Peano naturals. The five proof
+- **`nat-links`** — links-defined Peano naturals. The seven proof
   substrate rules `nat-zero-formation`, `nat-succ-formation`,
-  `nat-add-zero`, `nat-add-succ`, and `nat-induction` describe `Nat`,
-  `zero`, `succ`, addition, and induction as proof-substrate data
-  rather than host arithmetic. There is no `succ → +1` shortcut:
+  `nat-add-zero`, `nat-add-succ`, `nat-induction`, `nat-refl`, and
+  `nat-cong-succ` describe `Nat`, `zero`, `succ`, addition, induction,
+  and an object-level equality layer `nat-equality` as proof-substrate
+  data rather than host arithmetic. There is no `succ → +1` shortcut:
   successor stays a literal constructor and addition is reduced
-  recursively. Replayed end-to-end by
+  recursively, while equalities are expressed as `(?m nat-equals ?n)`
+  rather than the bare literal `equals` so the trust audit can tell
+  the links-defined layer apart from `=`/`numeric-equality`. Programs
+  that do not opt into `nat-links` keep the host's decimal-12 equality
+  unchanged. Replayed end-to-end by
   [`examples/nat-links.lino`](../examples/nat-links.lino) and pinned in
   `examples/expected.lino`.
 
@@ -581,14 +586,21 @@ and derivations are links data.
   replace the default RML foundation.
 - **Phase 12 — links-defined Peano naturals.** Implemented as a
   fifth bundled foundation (§5). `examples/nat-links.lino` declares the
-  five rules `nat-zero-formation`, `nat-succ-formation`,
-  `nat-add-zero`, `nat-add-succ`, and `nat-induction` as proof-substrate
-  data and replays the inhabitants `zero`, `(succ zero)`,
-  `(succ (succ zero))`, the additions `0+0`, `1+0`, `0+1`, `1+1`, and
-  one induction conclusion through `(check-proof …)`. Successor is a
-  literal constructor; there is no `succ → +1` host shortcut. The
-  default host numeric layer is unaffected — this phase adds the
-  inductive substrate the issue's Software Foundations reference uses,
+  seven rules `nat-zero-formation`, `nat-succ-formation`,
+  `nat-add-zero`, `nat-add-succ`, `nat-induction`, `nat-refl`, and
+  `nat-cong-succ` as proof-substrate data and replays the inhabitants
+  `zero`, `(succ zero)`, `(succ (succ zero))`, the additions `0+0`,
+  `1+0`, `0+1`, `1+1`, an explicit `(zero nat-equals zero)` reflexivity
+  witness, a successor-congruence step on top of `1+1`, and one
+  induction conclusion through `(check-proof …)`. Equalities live in
+  the dedicated `nat-equality` layer (root construct
+  `(root-construct nat-equality (kind equality-layer) (status
+  links-defined) …)`) so the trust audit distinguishes them from the
+  host's `=`/`numeric-equality`. Successor is a literal constructor;
+  there is no `succ → +1` host shortcut. The default host numeric
+  layer and the host equality layers are unaffected — this phase adds
+  the inductive substrate the issue's Software Foundations reference
+  uses (PR 178 added `nat-equality`, `nat-refl`, and `nat-cong-succ`),
   not a replacement numeric domain.
 
 Everything in this document is the *backward-compatible* surface. The

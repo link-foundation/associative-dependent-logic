@@ -205,6 +205,19 @@
   (semantic-status host-trusted)
   (depends-on beta-reduction structural-equality))
 
+# Object-level equality for the links-defined Peano naturals
+# (issue #97, Phase 12 / PR 178). `nat-equals` is an alternative
+# equality layer that the proof rules `nat-refl` and `nat-cong-succ`
+# inhabit; it lives next to `numeric-equality` so that programs which
+# do not opt into the `nat-links` foundation continue to use the
+# host's decimal-12 equality unchanged.
+(root-construct nat-equality
+  (kind equality-layer)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat structural-equality)
+  (encoded-as nat-equals))
+
 # ---------------------------------------------------------------------------
 # Typed kernel layer. The host primitives remain in place, but Phase 5 of
 # issue #97 also publishes a parallel links-defined replay via the
@@ -342,6 +355,25 @@
   (status links-defined)
   (semantic-status links-checked)
   (depends-on Nat))
+
+# `nat-refl` and `nat-cong-succ` make `nat-equality` provable from
+# links: reflexivity supplies `(?n nat-equals ?n)` for every well-typed
+# `Nat`, and successor congruence lifts an equality `?m nat-equals ?n`
+# to `(succ ?m) nat-equals (succ ?n)`. Together they let
+# `examples/nat-links.lino` express addition via `nat-equals` instead of
+# the host's overloaded `equals` literal while leaving the structural
+# pattern matcher in charge of replaying each step.
+(root-construct nat-refl
+  (kind equality-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat nat-equality))
+
+(root-construct nat-cong-succ
+  (kind equality-rule)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on Nat succ nat-equality))
 
 (root-construct substitution
   (kind meta-operation)
@@ -570,15 +602,17 @@
   (uses beta-conversion))
 
 # ---------------------------------------------------------------------------
-# Links-defined Peano natural numbers (issue #97, Phase 12). The five
+# Links-defined Peano natural numbers (issue #97, Phase 12). The seven
 # proof-substrate rules below — `nat-zero-formation`, `nat-succ-formation`,
-# `nat-add-zero`, `nat-add-succ`, and `nat-induction` — make `Nat`,
-# `zero`, `succ`, addition, and structural induction available as
+# `nat-add-zero`, `nat-add-succ`, `nat-induction`, `nat-refl`, and
+# `nat-cong-succ` — make `Nat`, `zero`, `succ`, addition, structural
+# induction, and the object-level equality `nat-equals` available as
 # ordinary `(rule ...)` / `(proof-object ...)` data so the trust audit
 # reports them as `links-defined` constructs. The host's
-# `decimal-12-arithmetic` is unaffected; `nat-links` is an alternative
-# semantics for users who want to reason about naturals without relying
-# on the host numeric domain.
+# `decimal-12-arithmetic` and the default `=`/`numeric-equality` layers
+# are unaffected; `nat-links` is an alternative semantics for users who
+# want to reason about naturals (and their equality) without relying on
+# the host numeric domain.
 #
 # A concrete Peano derivation lives in `examples/nat-links.lino`, and
 # the JS test in `js/tests/nat-links.test.mjs` plus the Rust mirror in
@@ -594,4 +628,7 @@
   (uses nat-succ-formation)
   (uses nat-add-zero)
   (uses nat-add-succ)
-  (uses nat-induction))
+  (uses nat-induction)
+  (uses nat-equality)
+  (uses nat-refl)
+  (uses nat-cong-succ))
