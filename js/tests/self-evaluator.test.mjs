@@ -177,27 +177,25 @@ function isProofRuleShape(node) {
     node.slice(2).some(c => c[0] === 'conclusion');
 }
 
-// Mirrors the host's `evalNatTerm` reducer: closed Peano terms over the
-// vocabulary `zero | (succ T) | (add T T) | (mul T T)` rewrite to a host
-// integer purely by structural recursion. Anything outside that grammar
-// returns null so the encoded evaluator silently drops the value, which
-// matches host behaviour where the reducer raises a diagnostic instead of
-// emitting a numeric result.
-function evalNatStructural(node) {
+// Mirrors the default-result behaviour for closed Peano terms in the shared
+// examples. The host normalizer dispatches through active links-level rules
+// and renders the normal form separately; this fixture only needs the default
+// rendered value so the encoded evaluator can compare example result streams.
+function evalNatDefaultResult(node) {
   if (node === 'zero') return 0;
   if (Array.isArray(node)) {
     if (node.length === 2 && node[0] === 'succ') {
-      const inner = evalNatStructural(node[1]);
+      const inner = evalNatDefaultResult(node[1]);
       return inner === null ? null : inner + 1;
     }
     if (node.length === 3 && node[0] === 'add') {
-      const a = evalNatStructural(node[1]);
-      const b = evalNatStructural(node[2]);
+      const a = evalNatDefaultResult(node[1]);
+      const b = evalNatDefaultResult(node[2]);
       return a === null || b === null ? null : a + b;
     }
     if (node.length === 3 && node[0] === 'mul') {
-      const a = evalNatStructural(node[1]);
-      const b = evalNatStructural(node[2]);
+      const a = evalNatDefaultResult(node[1]);
+      const b = evalNatDefaultResult(node[2]);
       return a === null || b === null ? null : a * b;
     }
   }
@@ -438,7 +436,7 @@ class EncodedEvaluator {
     if (Array.isArray(form) && form[0] === 'eval-nat') {
       this.requireRule('(eval (eval-nat term))');
       if (form.length !== 2) return;
-      const value = evalNatStructural(form[1]);
+      const value = evalNatDefaultResult(form[1]);
       if (value !== null) results.push(value);
       return;
     }

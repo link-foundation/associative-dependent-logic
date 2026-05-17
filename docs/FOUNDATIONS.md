@@ -392,12 +392,13 @@ and are pre-seeded by the JS and Rust hosts:
     able to tell the links-defined layer apart from `=` /
     `numeric-equality`; programs that do not opt into `nat-links`
     keep the host's decimal-12 equality unchanged.
-  - A links-evaluated structural rewriter `(eval-nat <term>)` is
-    available (§9) for closed Peano terms over
-    `zero | (succ T) | (add T T) | (mul T T)`. The rewriter does
-    not delegate to host `+`/`*`; every step is a Peano rewrite
-    (`nat-add-zero`, `nat-add-succ`, `nat-mul-zero`, `nat-mul-succ`)
-    recorded in the trace.
+  - A links-evaluated normalizer `(eval-nat <term>)` is available
+    (§9b) for closed Peano terms over
+    `zero | (succ T) | (add T T) | (mul T T)`. It dispatches through
+    the active links-level Peano computation rules, so removing or
+    replacing `nat-add-zero`, `nat-add-succ`, `nat-mul-zero`, or
+    `nat-mul-succ` changes evaluation. Rendering the resulting normal
+    form as a host number is reported separately.
   - Replayed end-to-end by
     [`examples/nat-links.lino`](../examples/nat-links.lino) and
     pinned in `examples/expected.lino`. The strict-mode audit
@@ -556,14 +557,13 @@ frames, and leaf payloads that are not byte-aligned, all with `E066`.
 
 ## 9b. `(eval-nat <term>)` — links-evaluated Peano fragment
 
-`(eval-nat <term>)` reduces a closed Peano term to its canonical
-numeric value strictly by **structural rewriting at the links level**.
-The recognised vocabulary is exactly
-`zero | (succ T) | (add T T) | (mul T T)`. The reducer applies the
-four computation rules
-`nat-add-zero`, `nat-add-succ`, `nat-mul-zero`, `nat-mul-succ`
-without ever delegating to the host's `+`/`*` primitives; every
-rewrite step is recorded in the trace transcript.
+`(eval-nat <term>)` normalizes a closed Peano term to its canonical
+Peano normal form by dispatching through the active links-level
+computation rules. The recognised vocabulary is exactly
+`zero | (succ T) | (add T T) | (mul T T)`. The normalizer consumes
+`nat-add-zero`, `nat-add-succ`, `nat-mul-zero`, and `nat-mul-succ`;
+removing one from the active foundation makes the corresponding
+evaluation fail, and replacing one changes the result.
 
 ```lino
 (eval-nat zero)                                # → 0
@@ -572,13 +572,17 @@ rewrite step is recorded in the trace transcript.
 (eval-nat (mul (succ (succ zero)) (succ zero)))# → 2 via nat-mul-succ; nat-mul-zero
 ```
 
-Anything outside the recognised grammar raises `E067`. The result
-is the host integer that the normal form represents, so values are
-comparable against numeric expectations in tests; the **evaluation**,
-however, is purely links-level. `(eval-nat …)` therefore carries
-`semantic-status: links-evaluated` in the trust report — the only
-non-host-trusted operation it consumes is the structural matcher that
-backs every proof rule.
+Anything outside the recognised grammar raises `E067`. The semantic
+result is the Peano normal form; the numeric value returned in the
+legacy result stream is the separate host-derived renderer
+`nat-normal-form-to-host-number`. `(eval-nat …)` and
+`eval-nat-normalize` therefore carry `semantic-status:
+links-evaluated`, while the renderer and the structural matcher remain
+visible host boundaries in reports and traces. Under
+`(strict-foundation pure-links)`, programs that need the legacy numeric
+result stream should explicitly allowlist
+`nat-normal-form-to-host-number`; the normalizer itself still dispatches
+through links-level Peano rules rather than host arithmetic.
 
 ## 9c. `(proof-report <name>)` — per-proof dependency / trust report
 
@@ -669,8 +673,8 @@ and derivations are links data.
   induction conclusion, and several Software-Foundations-style
   theorems through `(check-proof …)`. Successor is a literal
   constructor; there is no `succ → +1` host shortcut. Closed Peano
-  terms can additionally be reduced by `(eval-nat <term>)` (§9b);
-  the reducer rewrites by `nat-add-zero` / `nat-add-succ` /
+  terms can additionally be normalized by `(eval-nat <term>)` (§9b);
+  the normalizer dispatches through `nat-add-zero` / `nat-add-succ` /
   `nat-mul-zero` / `nat-mul-succ` without delegating to host
   arithmetic and is reported as `semantic-status:
   links-evaluated`. Strict mode (`(strict-foundation pure-links)`)

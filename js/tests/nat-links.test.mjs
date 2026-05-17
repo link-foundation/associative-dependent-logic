@@ -1,10 +1,8 @@
 // Phase 12 — links-defined Peano naturals (issue #97).
 //
-// These tests pin down the behaviour of the seven proof-substrate rules
-// (nat-zero-formation, nat-succ-formation, nat-add-zero, nat-add-succ,
-// nat-induction, nat-refl, nat-cong-succ) that are expressed inside the
-// proof substrate by `examples/nat-links.lino`, and of the dedicated
-// equality layer `nat-equality` they inhabit. Each rule is exercised on
+// These tests pin down the Nat proof-substrate rules expressed inside
+// `examples/nat-links.lino`, the dedicated equality layer `nat-equality`,
+// and the rule-driven `eval-nat` normalizer. Each rule is exercised on
 // its own, then composed end-to-end, and finally the corresponding
 // `(foundation nat-links ...)` registration is verified so the data
 // and the runtime stay in sync.
@@ -40,6 +38,7 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     assert.ok(found, 'nat-links foundation must be registered');
     assert.deepStrictEqual(found.uses.slice().sort(), [
       'eval-nat',
+      'eval-nat-normalize',
       'forall',
       'implication',
       'mul',
@@ -51,6 +50,7 @@ describe('Phase 12 — links-defined Peano naturals', () => {
       'nat-induction',
       'nat-mul-succ',
       'nat-mul-zero',
+      'nat-normal-form-to-host-number',
       'nat-rec-succ',
       'nat-rec-zero',
       'nat-recursion',
@@ -80,6 +80,8 @@ describe('Phase 12 — links-defined Peano naturals', () => {
       'mul',
       'nat-mul-zero',
       'nat-mul-succ',
+      'eval-nat-normalize',
+      'eval-nat',
     ]) {
       assert.match(source, new RegExp(`\\(uses ${rule}\\)`));
       assert.match(
@@ -88,6 +90,12 @@ describe('Phase 12 — links-defined Peano naturals', () => {
         `${rule} should appear as a root-construct with links-defined status`,
       );
     }
+    assert.match(source, /\(uses nat-normal-form-to-host-number\)/);
+    assert.match(
+      source,
+      /\(root-construct nat-normal-form-to-host-number[\s\S]*?\(status host-derived\)/,
+      'nat-normal-form-to-host-number should appear as a host-derived renderer',
+    );
     // The equality layer that the new rules inhabit is registered as a
     // root construct, listed by the nat-links foundation, and marked
     // links-defined so the trust audit can distinguish it from the
@@ -547,6 +555,10 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     const depNames = report.dependencies.map(d => d.name);
     assert.ok(depNames.includes('zero-is-nat'));
     assert.ok(report.rootConstructsUsed.includes('Nat'));
+    assert.ok(report.rootConstructsUsed.includes('proof-replay'));
+    assert.ok(report.rootConstructsUsed.includes('structural-equality'));
+    assert.ok(report.rootConstructsUsed.includes('structural-matcher'));
+    assert.ok(report.rootConstructsUsed.includes('substitution'));
     assert.ok(report.rootConstructsUsed.includes('succ'));
     assert.ok(report.rootConstructsUsed.includes('zero'));
     assert.deepStrictEqual(
@@ -557,6 +569,15 @@ describe('Phase 12 — links-defined Peano naturals', () => {
       report.byTrustStatus['links-defined'].slice().sort(),
       ['Nat', 'succ', 'zero'],
     );
+    assert.deepStrictEqual(
+      report.bySemanticStatus['host-trusted'].slice().sort(),
+      ['proof-replay', 'structural-equality', 'structural-matcher', 'substitution'],
+    );
+    assert.deepStrictEqual(
+      report.byTrustStatus['host-primitive'].slice().sort(),
+      ['proof-replay', 'structural-equality', 'substitution'],
+    );
+    assert.deepStrictEqual(report.byTrustStatus['external-trusted'], ['structural-matcher']);
   });
 
   it('(proof-report <unknown>) reports a failing verdict instead of throwing', () => {
@@ -579,7 +600,7 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     ]);
   });
 
-  it('(eval-nat <term>) reduces zero / succ / add / mul by structural rewriting', () => {
+  it('(eval-nat <term>) normalizes zero / succ / add / mul through links-level rules', () => {
     const out = evaluate(`
       (eval-nat zero)
       (eval-nat (succ (succ (succ zero))))
@@ -590,15 +611,57 @@ describe('Phase 12 — links-defined Peano naturals', () => {
     assert.deepStrictEqual(out.results, [0, 3, 3, 6]);
   });
 
-  it('(eval-nat ...) trace records one rewrite step per Peano rule firing', () => {
+  it('(eval-nat ...) trace records the normal form, fired Peano rules, and host boundary', () => {
     const out = evaluate(`(eval-nat (add (succ zero) (succ zero)))`, { trace: true });
     assert.deepStrictEqual(out.diagnostics, []);
     assert.strictEqual(out.results.length, 1);
     assert.strictEqual(out.results[0], 2);
     const evt = out.trace.find((e) => e.kind === 'eval-nat');
     assert.ok(evt, 'trace contains an eval-nat event');
-    // (add (succ zero) (succ zero)) → 2 via 1× nat-add-succ + 1× nat-add-zero.
-    assert.match(evt.detail, /-> 2 \(2 steps\)/);
+    assert.match(evt.detail, /normal-form \(succ \(succ zero\)\) -> 2/);
+    assert.match(evt.detail, /rules-used: nat-add-succ, nat-add-zero/);
+    assert.match(evt.detail, /host-primitives-used: structural-matcher/);
+  });
+
+  it('(eval-nat ...) fails when the active foundation omits a needed rule', () => {
+    const out = evaluate(`
+(foundation broken-nat-links
+  (uses eval-nat)
+  (uses eval-nat-normalize)
+  (uses Nat)
+  (uses zero)
+  (uses succ)
+  (uses add))
+(with-foundation broken-nat-links
+  (eval-nat (add zero (succ zero))))
+`);
+    assert.strictEqual(out.results.length, 0);
+    assert.strictEqual(out.diagnostics.length, 1);
+    assert.strictEqual(out.diagnostics[0].code, 'E067');
+    assert.match(out.diagnostics[0].message, /requires nat-add-zero/);
+  });
+
+  it('(eval-nat ...) sees computation rules inherited through foundation extends', () => {
+    const out = evaluate(`
+(foundation child-nat-links
+  (extends nat-links))
+(with-foundation child-nat-links
+  (eval-nat (add zero (succ zero))))
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+  });
+
+  it('(eval-nat ...) behaviour follows a replacement links-level rule', () => {
+    const out = evaluate(`
+(rule nat-add-zero
+  (premise (?n has-type Nat))
+  (conclusion ((add zero ?n) nat-equals zero)))
+
+(eval-nat (add zero (succ zero)))
+`);
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [0]);
   });
 
   it('(eval-nat <non-Peano>) raises an E067 diagnostic instead of crashing', () => {
@@ -620,12 +683,11 @@ describe('Phase 12 — links-defined Peano naturals', () => {
   it('the full nat-links example replays cleanly under (strict-foundation pure-links)', () => {
     // Phase 12.5 acceptance: the whole Peano fragment — Nat formation,
     // addition, multiplication, equality, induction, recursor, and the
-    // eval-nat structural rewriter — must replay end-to-end without
+    // eval-nat normalizer — must replay end-to-end without
     // emitting a single E065 diagnostic when strict pure-links audit is
-    // turned on. This is what raises the foundation from "host
-    // boundary visible" to "host-numeric-free": if any rule, proof
-    // object, or evaluator step silently leaned on host `+`/`*`/`=`,
-    // the strict scanner would surface it as
+    // turned on. The example explicitly allowlists the host-number
+    // renderer; if any rule, proof object, or evaluator step silently
+    // leaned on host `+`/`*`/`=`, the strict scanner would surface it as
     // `... -> decimal-12-arithmetic -> host-primitive` and break this
     // test.
     const body = readFileSync(examplePath, 'utf8');
@@ -638,14 +700,12 @@ describe('Phase 12 — links-defined Peano naturals', () => {
   });
 
   it('(eval-nat ...) under strict pure-links computes without delegating to host arithmetic', () => {
-    // The strict pure-links scanner ignores `eval-nat` (it is a
-    // dedicated links-evaluated form), and the rewriter is implemented
-    // as structural rewriting at the links level rather than as a host
-    // `+`/`*` call. Together these properties give eval-nat its
-    // `semantic-status links-evaluated` claim: the foundation can
-    // compute with its own rules under the most paranoid audit mode.
+    // The strict pure-links scanner inspects `eval-nat` through the
+    // root-construct registry. It passes because the normalizer depends
+    // on links-level computation rules rather than host `+`/`*`.
     const out = evaluate(`
 (strict-foundation pure-links)
+(allow-host-primitive nat-normal-form-to-host-number)
 (eval-nat (add (succ (succ zero)) (succ (succ (succ zero)))))
 (eval-nat (mul (succ (succ zero)) (succ (succ zero))))
 `);

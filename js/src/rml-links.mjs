@@ -622,18 +622,13 @@ class Env {
     });
     // Pre-seed the links-defined Peano naturals foundation (issue #97,
     // Phase 12). Selecting it via `(with-foundation nat-links ...)`
-    // records the proof-substrate rules `nat-zero-formation`,
-    // `nat-succ-formation`, `nat-add-zero`, `nat-add-succ`,
-    // `nat-induction`, `nat-refl`, and `nat-cong-succ` as the canonical
-    // links-defined replacement for host-numeric Peano arithmetic, and
-    // names `nat-equality` as the dedicated equality layer that those
-    // two equality rules inhabit. The host's decimal numeric domain and
-    // default equality layers are unaffected; the foundation is selected
-    // so the trust audit can list the seven rules as the active
-    // derivations for `Nat` and its object-level equality `nat-equals`.
+    // records the Nat proof-substrate rules, the dedicated `nat-equality`
+    // layer, and the rule-driven `eval-nat` normalizer as active
+    // foundation dependencies. The host's decimal numeric domain and
+    // default equality layers are unaffected.
     this.foundations.set('nat-links', {
       name: 'nat-links',
-      description: 'links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication, eval-nat structural rewriter)',
+      description: 'links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication, rule-driven eval-nat normalizer)',
       uses: [
         'nat-zero-formation',
         'nat-succ-formation',
@@ -653,7 +648,9 @@ class Env {
         'mul',
         'nat-mul-zero',
         'nat-mul-succ',
+        'eval-nat-normalize',
         'eval-nat',
+        'nat-normal-form-to-host-number',
       ],
       defines: new Map(),
       extends: 'default-rml',
@@ -1006,7 +1003,12 @@ class Env {
     };
     for (const ref of po.premiseRefs || []) walk(ref);
     if (po.rule) rules.add(po.rule);
-    const rootNames = new Set();
+    const rootNames = new Set([
+      'proof-replay',
+      'structural-equality',
+      'structural-matcher',
+      'substitution',
+    ]);
     const collectFromTerm = (term) => {
       if (!Array.isArray(term)) {
         if (typeof term === 'string' && this.rootConstructs.has(term)) rootNames.add(term);
@@ -1576,6 +1578,7 @@ function seedBuiltinRootConstructs(env) {
     { name: 'lino-parser', kind: 'parser', status: 'external-trusted', encodedAs: 'links-notation', pureLinksReady: false },
     { name: 'canonical-printer', kind: 'printer', status: 'host-primitive', encodedAs: 'keyOf' },
     { name: 'structural-equality', kind: 'equality-layer', status: 'host-primitive', encodedAs: 'isStructurallySame' },
+    { name: 'structural-matcher', kind: 'matcher', status: 'external-trusted', semanticStatus: 'host-trusted', encodedAs: 'matchProofPattern' },
     // Numeric layer
     { name: 'decimal-12-arithmetic', kind: 'numeric-domain', status: 'host-primitive', encodedAs: 'decRound', pureLinksReady: false },
     { name: '+', kind: 'arithmetic-operator', status: 'host-primitive', dependsOn: ['decimal-12-arithmetic'] },
@@ -1643,6 +1646,34 @@ function seedBuiltinRootConstructs(env) {
     { name: 'proof-checking-relation', kind: 'checking-relation', status: 'links-defined', dependsOn: ['proof-replay', 'structural-equality', 'proof-object'] },
     { name: 'rule-application-check', kind: 'checking-relation', status: 'links-defined', dependsOn: ['proof-replay', 'structural-equality', 'proof-rule-declaration'] },
     { name: 'by', kind: 'proof-rule', status: 'host-primitive' },
+    // Links-defined Nat fragment (issue #97). These built-in registry
+    // entries let strict mode audit `(eval-nat ...)` even when a program has
+    // not loaded `lib/self/foundations.lino`.
+    { name: 'Nat', kind: 'inductive-type', status: 'links-defined', semanticStatus: 'links-checked' },
+    { name: 'zero', kind: 'constructor', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat'] },
+    { name: 'succ', kind: 'constructor', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat'] },
+    { name: 'nat-equality', kind: 'equality-layer', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'structural-equality'], encodedAs: 'nat-equals' },
+    { name: 'nat-recursion', kind: 'recursor', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'zero', 'succ', 'nat-equality', 'proof-replay', 'structural-equality'] },
+    { name: 'add', kind: 'derived-operation', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'zero', 'succ', 'nat-recursion', 'nat-equality'] },
+    { name: 'nat-add-zero', kind: 'computation-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['add', 'zero', 'nat-recursion', 'nat-equality'] },
+    { name: 'nat-add-succ', kind: 'computation-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['add', 'succ', 'nat-recursion', 'nat-equality'] },
+    { name: 'nat-zero-formation', kind: 'typing-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'zero'] },
+    { name: 'nat-succ-formation', kind: 'typing-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'succ'] },
+    { name: 'forall', kind: 'universal-quantifier', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat'] },
+    { name: 'implication', kind: 'logical-connective', status: 'links-defined', semanticStatus: 'links-checked', encodedAs: 'implies' },
+    { name: 'predicate-application', kind: 'logical-form', status: 'links-defined', semanticStatus: 'links-checked', encodedAs: 'at' },
+    { name: 'nat-induction', kind: 'proof-principle', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'forall', 'implication', 'predicate-application', 'substitution', 'freshness', 'proof-replay', 'structural-equality'] },
+    { name: 'nat-refl', kind: 'equality-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'nat-equality'] },
+    { name: 'nat-cong-succ', kind: 'equality-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'succ', 'nat-equality'] },
+    { name: 'nat-eliminator', kind: 'eliminator', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'nat-recursion', 'nat-induction'] },
+    { name: 'nat-rec-zero', kind: 'computation-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['nat-recursion', 'zero', 'nat-equality'] },
+    { name: 'nat-rec-succ', kind: 'computation-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['nat-recursion', 'succ', 'nat-equality'] },
+    { name: 'mul', kind: 'derived-operation', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['Nat', 'zero', 'succ', 'add', 'nat-recursion', 'nat-equality'] },
+    { name: 'nat-mul-zero', kind: 'computation-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['mul', 'zero', 'nat-recursion', 'nat-equality'] },
+    { name: 'nat-mul-succ', kind: 'computation-rule', status: 'links-defined', semanticStatus: 'links-checked', dependsOn: ['mul', 'succ', 'add', 'nat-recursion', 'nat-equality'] },
+    { name: 'eval-nat-normalize', kind: 'evaluator-fragment', status: 'links-defined', semanticStatus: 'links-evaluated', dependsOn: ['Nat', 'zero', 'succ', 'add', 'mul', 'nat-add-zero', 'nat-add-succ', 'nat-mul-zero', 'nat-mul-succ', 'structural-matcher'] },
+    { name: 'eval-nat', kind: 'evaluator', status: 'links-defined', semanticStatus: 'links-evaluated', dependsOn: ['eval-nat-normalize', 'nat-normal-form-to-host-number'] },
+    { name: 'nat-normal-form-to-host-number', kind: 'renderer', status: 'host-derived', semanticStatus: 'host-trusted', dependsOn: ['eval-nat-normalize'] },
     { name: 'smt-trusted', kind: 'external-decision', status: 'external-trusted' },
     { name: 'atp-trusted', kind: 'external-decision', status: 'external-trusted' },
     // Metatheorem layer
@@ -2274,47 +2305,156 @@ function checkProofObject(env, name, stack = []) {
   return { ok: true, substitution: subs, dependencies: refs.slice() };
 }
 
-// ---------- Links-evaluated Peano fragment (issue #97, Phase 13) ----------
+// ---------- Links-evaluated Peano fragment (issue #97, Phase 14) ----------
 //
-// `(eval-nat <term>)` reduces a closed Peano term to its canonical
-// numeric value strictly by **structural rewriting at the links level**,
-// applying the four computation rules `nat-add-zero`, `nat-add-succ`,
-// `nat-mul-zero`, `nat-mul-succ` without ever delegating to the host's
-// `+`/`*` primitives. The recognised vocabulary is exactly
-// `zero | (succ T) | (add T T) | (mul T T)`; anything else raises E067.
-//
-// The result is the host integer that the normal form represents, so
-// the value is comparable against numeric expectations in tests and in
-// `examples/expected.lino`; the *evaluation*, however, is purely
-// links-level — every recursive step records a rewrite event so the
-// trace transcript witnesses which Peano rule fired.
-function evalNatTerm(node) {
-  // Returns the natural-number value of the normal form and a list of
-  // links-level rewrite steps (rule names, oldest first). The caller
-  // is free to drop the steps if it does not care about the trace.
+// `(eval-nat <term>)` normalizes a closed Peano term by consulting the
+// active links-level computation rules. The semantic result is the Peano
+// normal form; the host number returned to the legacy result stream is only
+// a renderer for that normal form. Custom `(rule nat-add-zero ...)` /
+// `(rule nat-add-succ ...)` declarations therefore change evaluation, and a
+// scoped foundation that omits a needed rule makes evaluation fail.
+
+const DEFAULT_EVAL_NAT_RULES = new Map([
+  ['nat-add-zero', {
+    name: 'nat-add-zero',
+    premises: [['?n', 'has-type', 'Nat']],
+    conclusion: [['add', 'zero', '?n'], 'nat-equals', '?n'],
+  }],
+  ['nat-add-succ', {
+    name: 'nat-add-succ',
+    premises: [[['add', '?m', '?n'], 'nat-equals', '?k']],
+    conclusion: [['add', ['succ', '?m'], '?n'], 'nat-equals', ['succ', '?k']],
+  }],
+  ['nat-mul-zero', {
+    name: 'nat-mul-zero',
+    premises: [['?n', 'has-type', 'Nat']],
+    conclusion: [['mul', 'zero', '?n'], 'nat-equals', 'zero'],
+  }],
+  ['nat-mul-succ', {
+    name: 'nat-mul-succ',
+    premises: [
+      [['mul', '?m', '?n'], 'nat-equals', '?k'],
+      [['add', '?n', '?k'], 'nat-equals', '?s'],
+    ],
+    conclusion: [['mul', ['succ', '?m'], '?n'], 'nat-equals', '?s'],
+  }],
+]);
+
+function cloneProofTerm(term) {
+  return Array.isArray(term) ? term.map(cloneProofTerm) : term;
+}
+
+function instantiateProofPattern(pattern, subs) {
+  if (typeof pattern === 'string' && pattern.startsWith('?')) {
+    return Object.prototype.hasOwnProperty.call(subs, pattern)
+      ? cloneProofTerm(subs[pattern])
+      : pattern;
+  }
+  if (Array.isArray(pattern)) return pattern.map(p => instantiateProofPattern(p, subs));
+  return pattern;
+}
+
+function evalNatFoundationUses(env, foundationName, ruleName, seen = new Set()) {
+  if (seen.has(foundationName)) return false;
+  seen.add(foundationName);
+  const foundation = env && env.getFoundation(foundationName);
+  if (!foundation) return false;
+  if (Array.isArray(foundation.uses) && foundation.uses.includes(ruleName)) return true;
+  return foundation.extends ? evalNatFoundationUses(env, foundation.extends, ruleName, seen) : false;
+}
+
+function evalNatActiveFoundationUses(env, name) {
+  const active = env && env.activeFoundation ? env.activeFoundation : 'default-rml';
+  if (active === 'default-rml') return true;
+  return evalNatFoundationUses(env, active, name);
+}
+
+function evalNatRule(env, name) {
+  if (!evalNatActiveFoundationUses(env, name)) {
+    throw new RmlError('E067', `eval-nat requires ${name}, but it is not available in active foundation ${env.activeFoundation || 'default-rml'}`);
+  }
+  return (env && env.getProofRule(name)) || DEFAULT_EVAL_NAT_RULES.get(name) || null;
+}
+
+function evalNatEqualityConclusion(rule, ruleName) {
+  const conclusion = rule && rule.conclusion;
+  if (!Array.isArray(conclusion) || conclusion.length !== 3 || conclusion[1] !== 'nat-equals') {
+    throw new RmlError('E067', `eval-nat rule ${ruleName} must conclude (<term> nat-equals <term>)`);
+  }
+  return { left: conclusion[0], right: conclusion[2] };
+}
+
+function processEvalNatPremises(env, rule, subs, normalize, depth) {
+  for (const premise of rule.premises || []) {
+    if (Array.isArray(premise) && premise.length === 3 && premise[1] === 'nat-equals') {
+      const premiseInput = instantiateProofPattern(premise[0], subs);
+      const premiseNormal = normalize(premiseInput, depth + 1);
+      if (!matchProofPattern(premise[2], premiseNormal, subs)) {
+        throw new RmlError(
+          'E067',
+          `eval-nat rule ${rule.name} premise ${keyOf(premise)} did not match normal form ${keyOf(premiseNormal)}`,
+        );
+      }
+      continue;
+    }
+    if (Array.isArray(premise) && premise.length === 3 && premise[1] === 'has-type' && premise[2] === 'Nat') {
+      continue;
+    }
+    throw new RmlError('E067', `eval-nat rule ${rule.name} has unsupported premise ${keyOf(premise)}`);
+  }
+}
+
+function applyEvalNatRule(env, ruleName, term, steps, normalize, depth) {
+  const rule = evalNatRule(env, ruleName);
+  if (!rule) throw new RmlError('E067', `eval-nat requires ${ruleName}, but no links-level rule is registered`);
+  const { left, right } = evalNatEqualityConclusion(rule, ruleName);
+  const subs = {};
+  if (!matchProofPattern(left, term, subs)) {
+    throw new RmlError('E067', `eval-nat rule ${ruleName} does not apply to ${keyOf(term)}`);
+  }
+  steps.push(rule.name);
+  processEvalNatPremises(env, rule, subs, normalize, depth);
+  return normalize(instantiateProofPattern(right, subs), depth + 1);
+}
+
+function peanoNormalFormToHostNumber(term) {
+  if (term === 'zero') return 0;
+  if (Array.isArray(term) && term.length === 2 && term[0] === 'succ') {
+    return 1 + peanoNormalFormToHostNumber(term[1]);
+  }
+  throw new RmlError('E067', `eval-nat produced a non-Peano normal form: ${formatTraceValue(term)}`);
+}
+
+function evalNatTerm(env, node) {
   const steps = [];
-  const go = (t) => {
-    if (t === 'zero') return 0;
+  const normalize = (t, depth = 0) => {
+    if (depth > 10000) {
+      throw new RmlError('E067', 'eval-nat exceeded its structural rewrite limit');
+    }
+    if (t === 'zero') return 'zero';
     if (Array.isArray(t)) {
       if (t.length === 2 && t[0] === 'succ') {
-        return go(t[1]) + 1;
+        return ['succ', normalize(t[1], depth + 1)];
       }
       if (t.length === 3 && t[0] === 'add') {
-        const a = go(t[1]);
-        const b = go(t[2]);
-        // Walk `(add (succ^a zero) (succ^b zero))` via nat-add-succ a
-        // times and close with nat-add-zero — every step is a Peano
-        // rewrite, never a delegation to host `+`.
-        for (let i = 0; i < a; i++) steps.push('nat-add-succ');
-        steps.push('nat-add-zero');
-        return a + b;
+        const left = normalize(t[1], depth + 1);
+        const current = ['add', left, cloneProofTerm(t[2])];
+        if (left === 'zero') {
+          return applyEvalNatRule(env, 'nat-add-zero', current, steps, normalize, depth + 1);
+        }
+        if (Array.isArray(left) && left.length === 2 && left[0] === 'succ') {
+          return applyEvalNatRule(env, 'nat-add-succ', current, steps, normalize, depth + 1);
+        }
       }
       if (t.length === 3 && t[0] === 'mul') {
-        const a = go(t[1]);
-        const b = go(t[2]);
-        for (let i = 0; i < a; i++) steps.push('nat-mul-succ');
-        steps.push('nat-mul-zero');
-        return a * b;
+        const left = normalize(t[1], depth + 1);
+        const current = ['mul', left, cloneProofTerm(t[2])];
+        if (left === 'zero') {
+          return applyEvalNatRule(env, 'nat-mul-zero', current, steps, normalize, depth + 1);
+        }
+        if (Array.isArray(left) && left.length === 2 && left[0] === 'succ') {
+          return applyEvalNatRule(env, 'nat-mul-succ', current, steps, normalize, depth + 1);
+        }
       }
     }
     throw new RmlError(
@@ -2322,8 +2462,9 @@ function evalNatTerm(node) {
       `eval-nat: not a closed Peano term: ${formatTraceValue(t)}`,
     );
   };
-  const value = go(node);
-  return { value, steps };
+  const normalForm = normalize(node);
+  const value = peanoNormalFormToHostNumber(normalForm);
+  return { value, normalForm, steps };
 }
 
 // ---------- Pure-links strict mode (issue #97, Phase 6) ----------
@@ -2384,7 +2525,6 @@ const PURE_LINKS_SCANNER_IGNORED = new Set([
   'foundation', 'with-foundation', 'foundation-report', 'foundation-report?',
   'root-construct', 'strict-carrier', 'truth-table',
   'strict-foundation', 'allow-host-primitive',
-  'eval-nat',
 ]);
 
 function _isStrictlyOffendingStatus(status) {
@@ -7179,14 +7319,14 @@ function evaluate(code, options) {
             if (body.length !== 2) {
               throw new RmlError('E067', '(eval-nat <term>) requires exactly one term argument');
             }
-            const { value, steps } = evalNatTerm(body[1]);
+            const { value, normalForm, steps } = evalNatTerm(env, body[1]);
             results.push(value);
             if (proofs !== null) proofs.push(null);
             if (provenance !== null) provenance.push(null);
             if (traceEnabled && trace) {
               trace.push(new TraceEvent({
                 kind: 'eval-nat',
-                detail: `${formatTraceValue(body[1])} -> ${value} (${steps.length} step${steps.length === 1 ? '' : 's'})`,
+                detail: `${formatTraceValue(body[1])} -> normal-form ${keyOf(normalForm)} -> ${value}; rules-used: ${steps.join(', ') || '<none>'}; host-primitives-used: structural-matcher; renderer: nat-normal-form-to-host-number`,
                 span,
               }));
             }
@@ -7523,14 +7663,14 @@ function evaluate(code, options) {
         continue;
       }
       try {
-        const { value, steps } = evalNatTerm(form[1]);
+        const { value, normalForm, steps } = evalNatTerm(env, form[1]);
         results.push(value);
         if (proofs !== null) proofs.push(null);
         if (provenance !== null) provenance.push(null);
         if (traceEnabled && trace) {
           trace.push(new TraceEvent({
             kind: 'eval-nat',
-            detail: `${formatTraceValue(form[1])} -> ${value} (${steps.length} step${steps.length === 1 ? '' : 's'})`,
+            detail: `${formatTraceValue(form[1])} -> normal-form ${keyOf(normalForm)} -> ${value}; rules-used: ${steps.join(', ') || '<none>'}; host-primitives-used: structural-matcher; renderer: nat-normal-form-to-host-number`,
             span,
           }));
         }

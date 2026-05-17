@@ -1,11 +1,9 @@
 // Phase 12 — links-defined Peano naturals (issue #97).
 //
-// Parallel to `js/tests/nat-links.test.mjs`. The seven proof-substrate
-// rules (nat-zero-formation, nat-succ-formation, nat-add-zero,
-// nat-add-succ, nat-induction, nat-refl, nat-cong-succ) are expressed
-// inside the proof substrate by `examples/nat-links.lino`, together
-// with the dedicated equality layer `nat-equality` that the two
-// equality rules inhabit. The tests below pin each rule down on its
+// Parallel to `js/tests/nat-links.test.mjs`. The Nat proof-substrate
+// rules are expressed inside `examples/nat-links.lino`, together with
+// the dedicated equality layer `nat-equality` and the rule-driven
+// `eval-nat` normalizer. The tests below pin each rule down on its
 // own, then run the bundled example end-to-end, and finally verify
 // that the runtime registers the `nat-links` foundation with the
 // expected `uses` list.
@@ -15,7 +13,7 @@
 // literal `equals` to `nat-equals`, and kept the host's
 // `=`/`numeric-equality` layer untouched for backward compatibility.
 
-use rml::{evaluate, evaluate_file, EvaluateOptions, EvaluateResult, RunResult};
+use rml::{evaluate, evaluate_file, evaluate_with_options, EvaluateOptions, EvaluateResult, RunResult};
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
@@ -53,6 +51,7 @@ fn nat_links_foundation_is_pre_registered() {
         uses,
         vec![
             "eval-nat".to_string(),
+            "eval-nat-normalize".to_string(),
             "forall".to_string(),
             "implication".to_string(),
             "mul".to_string(),
@@ -64,6 +63,7 @@ fn nat_links_foundation_is_pre_registered() {
             "nat-induction".to_string(),
             "nat-mul-succ".to_string(),
             "nat-mul-zero".to_string(),
+            "nat-normal-form-to-host-number".to_string(),
             "nat-rec-succ".to_string(),
             "nat-rec-zero".to_string(),
             "nat-recursion".to_string(),
@@ -100,6 +100,8 @@ fn lib_self_foundations_documents_nat_links() {
         "mul",
         "nat-mul-zero",
         "nat-mul-succ",
+        "eval-nat-normalize",
+        "eval-nat",
     ] {
         assert!(
             source.contains(&format!("(uses {})", rule)),
@@ -117,6 +119,16 @@ fn lib_self_foundations_documents_nat_links() {
             rule
         );
     }
+    assert!(source.contains("(uses nat-normal-form-to-host-number)"));
+    let marker = "(root-construct nat-normal-form-to-host-number";
+    let idx = source
+        .find(marker)
+        .expect("missing root-construct entry for nat-normal-form-to-host-number");
+    let window = &source[idx..(idx + 400).min(source.len())];
+    assert!(
+        window.contains("(status host-derived)"),
+        "nat-normal-form-to-host-number must record host-derived renderer status"
+    );
     // PR 178 introduced `nat-equality` as a dedicated equality layer
     // that `nat-refl` and `nat-cong-succ` inhabit, listed by the
     // `nat-links` foundation alongside the original five rules.
@@ -667,6 +679,18 @@ fn proof_report_returns_per_proof_dependency_and_trust_summary() {
         dep_names
     );
     assert!(report.root_constructs_used.contains(&"Nat".to_string()));
+    assert!(report
+        .root_constructs_used
+        .contains(&"proof-replay".to_string()));
+    assert!(report
+        .root_constructs_used
+        .contains(&"structural-equality".to_string()));
+    assert!(report
+        .root_constructs_used
+        .contains(&"structural-matcher".to_string()));
+    assert!(report
+        .root_constructs_used
+        .contains(&"substitution".to_string()));
     assert!(report.root_constructs_used.contains(&"succ".to_string()));
     assert!(report.root_constructs_used.contains(&"zero".to_string()));
     let semantic = report
@@ -697,6 +721,50 @@ fn proof_report_returns_per_proof_dependency_and_trust_summary() {
         trust,
         vec!["Nat".to_string(), "succ".to_string(), "zero".to_string()]
     );
+    let host_semantic = report
+        .by_semantic_status
+        .iter()
+        .find(|(s, _)| s == "host-trusted")
+        .map(|(_, names)| {
+            let mut v = names.clone();
+            v.sort();
+            v
+        })
+        .expect("host-trusted bucket must exist");
+    assert_eq!(
+        host_semantic,
+        vec![
+            "proof-replay".to_string(),
+            "structural-equality".to_string(),
+            "structural-matcher".to_string(),
+            "substitution".to_string(),
+        ]
+    );
+    let host_trust = report
+        .by_trust_status
+        .iter()
+        .find(|(s, _)| s == "host-primitive")
+        .map(|(_, names)| {
+            let mut v = names.clone();
+            v.sort();
+            v
+        })
+        .expect("host-primitive bucket must exist");
+    assert_eq!(
+        host_trust,
+        vec![
+            "proof-replay".to_string(),
+            "structural-equality".to_string(),
+            "substitution".to_string(),
+        ]
+    );
+    let external_trust = report
+        .by_trust_status
+        .iter()
+        .find(|(s, _)| s == "external-trusted")
+        .map(|(_, names)| names.clone())
+        .expect("external-trusted bucket must exist");
+    assert_eq!(external_trust, vec!["structural-matcher".to_string()]);
 }
 
 #[test]
@@ -740,7 +808,7 @@ fn runs_the_full_phase_12_example_end_to_end_with_no_diagnostics() {
 }
 
 #[test]
-fn eval_nat_reduces_zero_succ_add_mul_by_structural_rewriting() {
+fn eval_nat_normalizes_zero_succ_add_mul_through_links_level_rules() {
     // No leading whitespace on each line: the `.lino` parser treats
     // indented continuation lines as part of the *previous* link.
     let src = "(eval-nat zero)\n\
@@ -754,6 +822,99 @@ fn eval_nat_reduces_zero_succ_add_mul_by_structural_rewriting() {
         out.diagnostics
     );
     assert_eq!(nums(&out.results), vec![0.0, 3.0, 3.0, 6.0]);
+}
+
+#[test]
+fn eval_nat_trace_records_normal_form_rules_and_host_boundary() {
+    let out = evaluate_with_options(
+        "(eval-nat (add (succ zero) (succ zero)))",
+        None,
+        EvaluateOptions {
+            trace: true,
+            ..EvaluateOptions::default()
+        },
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![2.0]);
+    let evt = out
+        .trace
+        .iter()
+        .find(|e| e.kind == "eval-nat")
+        .expect("trace contains an eval-nat event");
+    assert!(
+        evt.detail.contains("normal-form (succ (succ zero)) -> 2"),
+        "detail was: {}",
+        evt.detail
+    );
+    assert!(
+        evt.detail
+            .contains("rules-used: nat-add-succ, nat-add-zero"),
+        "detail was: {}",
+        evt.detail
+    );
+    assert!(
+        evt.detail
+            .contains("host-primitives-used: structural-matcher"),
+        "detail was: {}",
+        evt.detail
+    );
+}
+
+#[test]
+fn eval_nat_fails_when_active_foundation_omits_needed_rule() {
+    let src = "(foundation broken-nat-links\n\
+(uses eval-nat)\n\
+(uses eval-nat-normalize)\n\
+(uses Nat)\n\
+(uses zero)\n\
+(uses succ)\n\
+(uses add))\n\
+(with-foundation broken-nat-links\n\
+(eval-nat (add zero (succ zero))))\n";
+    let out = run(src);
+    assert!(out.results.is_empty());
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E067");
+    assert!(
+        out.diagnostics[0].message.contains("requires nat-add-zero"),
+        "diagnostic message: {}",
+        out.diagnostics[0].message
+    );
+}
+
+#[test]
+fn eval_nat_sees_computation_rules_inherited_through_foundation_extends() {
+    let src = "(foundation child-nat-links\n\
+(extends nat-links))\n\
+(with-foundation child-nat-links\n\
+(eval-nat (add zero (succ zero))))\n";
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+}
+
+#[test]
+fn eval_nat_behaviour_follows_replacement_links_level_rule() {
+    let src = "(rule nat-add-zero\n\
+(premise (?n has-type Nat))\n\
+(conclusion ((add zero ?n) nat-equals zero)))\n\
+\n\
+(eval-nat (add zero (succ zero)))\n";
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![0.0]);
 }
 
 #[test]
@@ -790,9 +951,10 @@ fn eval_nat_with_wrong_arity_raises_e067() {
 fn full_nat_links_example_replays_cleanly_under_strict_pure_links() {
     // Phase 12.5 acceptance: the whole Peano fragment — Nat formation,
     // addition, multiplication, equality, induction, recursor, and the
-    // eval-nat structural rewriter — must replay end-to-end without
+    // eval-nat normalizer — must replay end-to-end without
     // emitting a single E065 diagnostic when strict pure-links audit is
-    // turned on. If any rule, proof object, or evaluator step silently
+    // turned on. The example explicitly allowlists the host-number
+    // renderer; if any rule, proof object, or evaluator step silently
     // leaned on host `+`/`*`/`=`, the strict scanner would surface it as
     // `... -> decimal-12-arithmetic -> host-primitive` and break this
     // test. Mirrors the JS parity test.
@@ -816,13 +978,11 @@ fn full_nat_links_example_replays_cleanly_under_strict_pure_links() {
 
 #[test]
 fn eval_nat_under_strict_pure_links_computes_without_delegating_to_host_arithmetic() {
-    // The strict pure-links scanner ignores `eval-nat` (a dedicated
-    // links-evaluated form), and the rewriter is implemented as
-    // structural rewriting at the links level rather than as a host
-    // `+`/`*` call. Together these properties give eval-nat its
-    // `semantic-status links-evaluated` claim: the foundation can
-    // compute with its own rules under the most paranoid audit mode.
+    // The strict pure-links scanner inspects `eval-nat` through the
+    // root-construct registry. It passes because the normalizer depends
+    // on links-level computation rules rather than host `+`/`*`.
     let src = "(strict-foundation pure-links)\n\
+               (allow-host-primitive nat-normal-form-to-host-number)\n\
                (eval-nat (add (succ (succ zero)) (succ (succ (succ zero)))))\n\
                (eval-nat (mul (succ (succ zero)) (succ (succ zero))))\n";
     let out = run(src);

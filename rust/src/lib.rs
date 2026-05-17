@@ -1676,19 +1676,14 @@ impl Env {
             .insert(typed_kernel_links.name.clone(), typed_kernel_links);
         // Pre-seed the links-defined Peano naturals foundation (issue #97,
         // Phase 12). Selecting it via `(with-foundation nat-links ...)`
-        // records the proof-substrate rules `nat-zero-formation`,
-        // `nat-succ-formation`, `nat-add-zero`, `nat-add-succ`,
-        // `nat-induction`, `nat-refl`, and `nat-cong-succ` as the canonical
-        // links-defined replacement for host-numeric Peano arithmetic, and
-        // names `nat-equality` as the dedicated equality layer that those
-        // two equality rules inhabit. The host's decimal numeric domain and
-        // default equality layers are unaffected; the foundation is selected
-        // so the trust audit can list the seven rules as the active
-        // derivations for `Nat` and its object-level equality `nat-equals`.
+        // records the Nat proof-substrate rules, the dedicated `nat-equality`
+        // layer, and the rule-driven `eval-nat` normalizer as active
+        // foundation dependencies. The host's decimal numeric domain and
+        // default equality layers are unaffected.
         let nat_links = FoundationDescriptor {
             name: "nat-links".to_string(),
             description: Some(
-                "links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication, eval-nat structural rewriter)"
+                "links-defined Peano naturals (zero/succ formation, add by recursion, induction with explicit forall/implication/predicate-application, nat-equality with reflexivity and successor congruence, nat-recursion/nat-eliminator, multiplication, rule-driven eval-nat normalizer)"
                     .to_string(),
             ),
             uses: vec![
@@ -1710,7 +1705,9 @@ impl Env {
                 "mul".to_string(),
                 "nat-mul-zero".to_string(),
                 "nat-mul-succ".to_string(),
+                "eval-nat-normalize".to_string(),
                 "eval-nat".to_string(),
+                "nat-normal-form-to-host-number".to_string(),
             ],
             defines: Vec::new(),
             extends: Some("default-rml".to_string()),
@@ -2188,7 +2185,15 @@ impl Env {
         if !po.rule.is_empty() {
             rules.insert(po.rule.clone());
         }
-        let mut root_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut root_names: std::collections::BTreeSet<String> = [
+            "proof-replay",
+            "structural-equality",
+            "structural-matcher",
+            "substitution",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         fn collect_terms(
             node: &Node,
             registry: &std::collections::HashMap<String, RootConstructDescriptor>,
@@ -3550,6 +3555,7 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         ("lino-parser", "parser", "external-trusted", vec![], Some("links-notation"), Some(false)),
         ("canonical-printer", "printer", "host-primitive", vec![], Some("keyOf"), None),
         ("structural-equality", "equality-layer", "host-primitive", vec![], Some("isStructurallySame"), None),
+        ("structural-matcher", "matcher", "external-trusted", vec![], Some("match_proof_pattern"), None),
         ("decimal-12-arithmetic", "numeric-domain", "host-primitive", vec![], Some("decRound"), Some(false)),
         ("+", "arithmetic-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
         ("-", "arithmetic-operator", "host-primitive", vec!["decimal-12-arithmetic"], None, None),
@@ -3605,6 +3611,31 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         ("proof-checking-relation", "checking-relation", "links-defined", vec!["proof-replay", "structural-equality", "proof-object"], None, None),
         ("rule-application-check", "checking-relation", "links-defined", vec!["proof-replay", "structural-equality", "proof-rule-declaration"], None, None),
         ("by", "proof-rule", "host-primitive", vec![], None, None),
+        ("Nat", "inductive-type", "links-defined", vec![], None, None),
+        ("zero", "constructor", "links-defined", vec!["Nat"], None, None),
+        ("succ", "constructor", "links-defined", vec!["Nat"], None, None),
+        ("nat-equality", "equality-layer", "links-defined", vec!["Nat", "structural-equality"], Some("nat-equals"), None),
+        ("nat-recursion", "recursor", "links-defined", vec!["Nat", "zero", "succ", "nat-equality", "proof-replay", "structural-equality"], None, None),
+        ("add", "derived-operation", "links-defined", vec!["Nat", "zero", "succ", "nat-recursion", "nat-equality"], None, None),
+        ("nat-add-zero", "computation-rule", "links-defined", vec!["add", "zero", "nat-recursion", "nat-equality"], None, None),
+        ("nat-add-succ", "computation-rule", "links-defined", vec!["add", "succ", "nat-recursion", "nat-equality"], None, None),
+        ("nat-zero-formation", "typing-rule", "links-defined", vec!["Nat", "zero"], None, None),
+        ("nat-succ-formation", "typing-rule", "links-defined", vec!["Nat", "succ"], None, None),
+        ("forall", "universal-quantifier", "links-defined", vec!["Nat"], None, None),
+        ("implication", "logical-connective", "links-defined", vec![], Some("implies"), None),
+        ("predicate-application", "logical-form", "links-defined", vec![], Some("at"), None),
+        ("nat-induction", "proof-principle", "links-defined", vec!["Nat", "forall", "implication", "predicate-application", "substitution", "freshness", "proof-replay", "structural-equality"], None, None),
+        ("nat-refl", "equality-rule", "links-defined", vec!["Nat", "nat-equality"], None, None),
+        ("nat-cong-succ", "equality-rule", "links-defined", vec!["Nat", "succ", "nat-equality"], None, None),
+        ("nat-eliminator", "eliminator", "links-defined", vec!["Nat", "nat-recursion", "nat-induction"], None, None),
+        ("nat-rec-zero", "computation-rule", "links-defined", vec!["nat-recursion", "zero", "nat-equality"], None, None),
+        ("nat-rec-succ", "computation-rule", "links-defined", vec!["nat-recursion", "succ", "nat-equality"], None, None),
+        ("mul", "derived-operation", "links-defined", vec!["Nat", "zero", "succ", "add", "nat-recursion", "nat-equality"], None, None),
+        ("nat-mul-zero", "computation-rule", "links-defined", vec!["mul", "zero", "nat-recursion", "nat-equality"], None, None),
+        ("nat-mul-succ", "computation-rule", "links-defined", vec!["mul", "succ", "add", "nat-recursion", "nat-equality"], None, None),
+        ("eval-nat-normalize", "evaluator-fragment", "links-defined", vec!["Nat", "zero", "succ", "add", "mul", "nat-add-zero", "nat-add-succ", "nat-mul-zero", "nat-mul-succ", "structural-matcher"], None, None),
+        ("eval-nat", "evaluator", "links-defined", vec!["eval-nat-normalize", "nat-normal-form-to-host-number"], None, None),
+        ("nat-normal-form-to-host-number", "renderer", "host-derived", vec!["eval-nat-normalize"], None, None),
         ("smt-trusted", "external-decision", "external-trusted", vec![], None, None),
         ("atp-trusted", "external-decision", "external-trusted", vec![], None, None),
         ("mode", "mode-declaration", "host-primitive", vec![], None, None),
@@ -3632,6 +3663,17 @@ fn seed_builtin_root_constructs(env: &mut Env) {
             foundation: None,
         };
         env.root_constructs.insert(descriptor.name.clone(), descriptor);
+    }
+    for name in ["eval-nat-normalize", "eval-nat"] {
+        if let Some(descriptor) = env.root_constructs.get_mut(name) {
+            descriptor.semantic_status = Some("links-evaluated".to_string());
+        }
+    }
+    if let Some(descriptor) = env.root_constructs.get_mut("structural-matcher") {
+        descriptor.semantic_status = Some("host-trusted".to_string());
+    }
+    if let Some(descriptor) = env.root_constructs.get_mut("nat-normal-form-to-host-number") {
+        descriptor.semantic_status = Some("host-trusted".to_string());
     }
 }
 
@@ -4638,7 +4680,6 @@ fn pure_links_scanner_ignored(name: &str) -> bool {
             | "truth-table"
             | "strict-foundation"
             | "allow-host-primitive"
-            | "eval-nat"
     )
 }
 
@@ -5056,61 +5097,360 @@ pub fn format_proof_report(report: &ProofReport) -> String {
     lines.join("\n")
 }
 
-/// Reduce a closed Peano term to its natural-number value by **structural
-/// rewriting at the links level**. Recognised vocabulary is exactly
-/// `zero | (succ T) | (add T T) | (mul T T)`; anything else returns an
-/// E067-style error message. Returns the value and the ordered list of
-/// rewrite steps so callers can record a trace witnessing each Peano rule
-/// firing.
-pub fn eval_nat_term(node: &Node) -> Result<(f64, Vec<&'static str>), String> {
-    fn go(node: &Node, steps: &mut Vec<&'static str>) -> Result<f64, String> {
-        if let Node::Leaf(s) = node {
-            if s == "zero" {
-                return Ok(0.0);
-            }
-        }
-        if let Node::List(children) = node {
-            if children.len() == 2 {
-                if let Node::Leaf(head) = &children[0] {
-                    if head == "succ" {
-                        let inner = go(&children[1], steps)?;
-                        return Ok(inner + 1.0);
-                    }
-                }
-            }
-            if children.len() == 3 {
-                if let Node::Leaf(head) = &children[0] {
-                    if head == "add" {
-                        let a = go(&children[1], steps)?;
-                        let b = go(&children[2], steps)?;
-                        let count = a as usize;
-                        for _ in 0..count {
-                            steps.push("nat-add-succ");
-                        }
-                        steps.push("nat-add-zero");
-                        return Ok(a + b);
-                    }
-                    if head == "mul" {
-                        let a = go(&children[1], steps)?;
-                        let b = go(&children[2], steps)?;
-                        let count = a as usize;
-                        for _ in 0..count {
-                            steps.push("nat-mul-succ");
-                        }
-                        steps.push("nat-mul-zero");
-                        return Ok(a * b);
-                    }
-                }
-            }
-        }
-        Err(format!(
-            "eval-nat: not a closed Peano term: {}",
-            key_of(node)
-        ))
+/// Result of `(eval-nat <term>)`. `normal_form` is the semantic result; the
+/// numeric `value` is only the legacy renderer for that Peano normal form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalNatResult {
+    pub value: f64,
+    pub normal_form: Node,
+    pub steps: Vec<String>,
+}
+
+fn leaf_node(s: &str) -> Node {
+    Node::Leaf(s.to_string())
+}
+
+fn list_node(items: Vec<Node>) -> Node {
+    Node::List(items)
+}
+
+fn default_eval_nat_rule(name: &str) -> Option<ProofRule> {
+    match name {
+        "nat-add-zero" => Some(ProofRule {
+            name: name.to_string(),
+            premises: vec![list_node(vec![
+                leaf_node("?n"),
+                leaf_node("has-type"),
+                leaf_node("Nat"),
+            ])],
+            conclusion: list_node(vec![
+                list_node(vec![leaf_node("add"), leaf_node("zero"), leaf_node("?n")]),
+                leaf_node("nat-equals"),
+                leaf_node("?n"),
+            ]),
+        }),
+        "nat-add-succ" => Some(ProofRule {
+            name: name.to_string(),
+            premises: vec![list_node(vec![
+                list_node(vec![leaf_node("add"), leaf_node("?m"), leaf_node("?n")]),
+                leaf_node("nat-equals"),
+                leaf_node("?k"),
+            ])],
+            conclusion: list_node(vec![
+                list_node(vec![
+                    leaf_node("add"),
+                    list_node(vec![leaf_node("succ"), leaf_node("?m")]),
+                    leaf_node("?n"),
+                ]),
+                leaf_node("nat-equals"),
+                list_node(vec![leaf_node("succ"), leaf_node("?k")]),
+            ]),
+        }),
+        "nat-mul-zero" => Some(ProofRule {
+            name: name.to_string(),
+            premises: vec![list_node(vec![
+                leaf_node("?n"),
+                leaf_node("has-type"),
+                leaf_node("Nat"),
+            ])],
+            conclusion: list_node(vec![
+                list_node(vec![leaf_node("mul"), leaf_node("zero"), leaf_node("?n")]),
+                leaf_node("nat-equals"),
+                leaf_node("zero"),
+            ]),
+        }),
+        "nat-mul-succ" => Some(ProofRule {
+            name: name.to_string(),
+            premises: vec![
+                list_node(vec![
+                    list_node(vec![leaf_node("mul"), leaf_node("?m"), leaf_node("?n")]),
+                    leaf_node("nat-equals"),
+                    leaf_node("?k"),
+                ]),
+                list_node(vec![
+                    list_node(vec![leaf_node("add"), leaf_node("?n"), leaf_node("?k")]),
+                    leaf_node("nat-equals"),
+                    leaf_node("?s"),
+                ]),
+            ],
+            conclusion: list_node(vec![
+                list_node(vec![
+                    leaf_node("mul"),
+                    list_node(vec![leaf_node("succ"), leaf_node("?m")]),
+                    leaf_node("?n"),
+                ]),
+                leaf_node("nat-equals"),
+                leaf_node("?s"),
+            ]),
+        }),
+        _ => None,
     }
-    let mut steps: Vec<&'static str> = Vec::new();
-    let value = go(node, &mut steps)?;
-    Ok((value, steps))
+}
+
+fn instantiate_proof_pattern(pattern: &Node, subs: &HashMap<String, Node>) -> Node {
+    match pattern {
+        Node::Leaf(token) if token.starts_with('?') => {
+            subs.get(token).cloned().unwrap_or_else(|| pattern.clone())
+        }
+        Node::Leaf(_) => pattern.clone(),
+        Node::List(children) => Node::List(
+            children
+                .iter()
+                .map(|child| instantiate_proof_pattern(child, subs))
+                .collect(),
+        ),
+    }
+}
+
+fn eval_nat_foundation_uses(
+    env: &Env,
+    foundation_name: &str,
+    rule_name: &str,
+    seen: &mut HashSet<String>,
+) -> bool {
+    if !seen.insert(foundation_name.to_string()) {
+        return false;
+    }
+    let Some(foundation) = env.get_foundation(foundation_name) else {
+        return false;
+    };
+    if foundation.uses.iter().any(|u| u == rule_name) {
+        return true;
+    }
+    foundation
+        .extends
+        .as_deref()
+        .map(|parent| eval_nat_foundation_uses(env, parent, rule_name, seen))
+        .unwrap_or(false)
+}
+
+fn eval_nat_active_foundation_uses(env: &Env, name: &str) -> bool {
+    let active = if env.active_foundation.is_empty() {
+        "default-rml"
+    } else {
+        env.active_foundation.as_str()
+    };
+    if active == "default-rml" {
+        return true;
+    }
+    eval_nat_foundation_uses(env, active, name, &mut HashSet::new())
+}
+
+fn eval_nat_rule(env: &Env, name: &str) -> Result<ProofRule, String> {
+    if !eval_nat_active_foundation_uses(env, name) {
+        return Err(format!(
+            "eval-nat requires {}, but it is not available in active foundation {}",
+            name,
+            if env.active_foundation.is_empty() {
+                "default-rml"
+            } else {
+                env.active_foundation.as_str()
+            }
+        ));
+    }
+    env.get_proof_rule(name)
+        .cloned()
+        .or_else(|| default_eval_nat_rule(name))
+        .ok_or_else(|| {
+            format!(
+                "eval-nat requires {}, but no links-level rule is registered",
+                name
+            )
+        })
+}
+
+fn eval_nat_equality_conclusion<'a>(
+    rule: &'a ProofRule,
+    rule_name: &str,
+) -> Result<(&'a Node, &'a Node), String> {
+    let Node::List(children) = &rule.conclusion else {
+        return Err(format!(
+            "eval-nat rule {} must conclude (<term> nat-equals <term>)",
+            rule_name
+        ));
+    };
+    if children.len() != 3 || !matches!(&children[1], Node::Leaf(mid) if mid == "nat-equals") {
+        return Err(format!(
+            "eval-nat rule {} must conclude (<term> nat-equals <term>)",
+            rule_name
+        ));
+    }
+    Ok((&children[0], &children[2]))
+}
+
+fn process_eval_nat_premises(
+    env: &Env,
+    rule: &ProofRule,
+    subs: &mut HashMap<String, Node>,
+    steps: &mut Vec<String>,
+    depth: usize,
+) -> Result<(), String> {
+    for premise in &rule.premises {
+        if let Node::List(children) = premise {
+            if children.len() == 3 && matches!(&children[1], Node::Leaf(mid) if mid == "nat-equals")
+            {
+                let premise_input = instantiate_proof_pattern(&children[0], subs);
+                let premise_normal =
+                    normalize_eval_nat_term(env, &premise_input, steps, depth + 1)?;
+                if !match_proof_pattern(&children[2], &premise_normal, subs) {
+                    return Err(format!(
+                        "eval-nat rule {} premise {} did not match normal form {}",
+                        rule.name,
+                        key_of(premise),
+                        key_of(&premise_normal)
+                    ));
+                }
+                continue;
+            }
+            if children.len() == 3
+                && matches!(&children[1], Node::Leaf(mid) if mid == "has-type")
+                && matches!(&children[2], Node::Leaf(ty) if ty == "Nat")
+            {
+                continue;
+            }
+        }
+        return Err(format!(
+            "eval-nat rule {} has unsupported premise {}",
+            rule.name,
+            key_of(premise)
+        ));
+    }
+    Ok(())
+}
+
+fn apply_eval_nat_rule(
+    env: &Env,
+    rule_name: &str,
+    term: &Node,
+    steps: &mut Vec<String>,
+    depth: usize,
+) -> Result<Node, String> {
+    let rule = eval_nat_rule(env, rule_name)?;
+    let (left, right) = eval_nat_equality_conclusion(&rule, rule_name)?;
+    let mut subs: HashMap<String, Node> = HashMap::new();
+    if !match_proof_pattern(left, term, &mut subs) {
+        return Err(format!(
+            "eval-nat rule {} does not apply to {}",
+            rule_name,
+            key_of(term)
+        ));
+    }
+    steps.push(rule.name.clone());
+    process_eval_nat_premises(env, &rule, &mut subs, steps, depth)?;
+    let next = instantiate_proof_pattern(right, &subs);
+    normalize_eval_nat_term(env, &next, steps, depth + 1)
+}
+
+fn normalize_eval_nat_term(
+    env: &Env,
+    node: &Node,
+    steps: &mut Vec<String>,
+    depth: usize,
+) -> Result<Node, String> {
+    if depth > 10_000 {
+        return Err("eval-nat exceeded its structural rewrite limit".to_string());
+    }
+    if let Node::Leaf(s) = node {
+        if s == "zero" {
+            return Ok(leaf_node("zero"));
+        }
+    }
+    if let Node::List(children) = node {
+        if children.len() == 2 {
+            if let Node::Leaf(head) = &children[0] {
+                if head == "succ" {
+                    let inner = normalize_eval_nat_term(env, &children[1], steps, depth + 1)?;
+                    return Ok(list_node(vec![leaf_node("succ"), inner]));
+                }
+            }
+        }
+        if children.len() == 3 {
+            if let Node::Leaf(head) = &children[0] {
+                if head == "add" {
+                    let left = normalize_eval_nat_term(env, &children[1], steps, depth + 1)?;
+                    let current =
+                        list_node(vec![leaf_node("add"), left.clone(), children[2].clone()]);
+                    if matches!(&left, Node::Leaf(s) if s == "zero") {
+                        return apply_eval_nat_rule(
+                            env,
+                            "nat-add-zero",
+                            &current,
+                            steps,
+                            depth + 1,
+                        );
+                    }
+                    if matches!(&left, Node::List(items) if items.len() == 2 && matches!(&items[0], Node::Leaf(h) if h == "succ"))
+                    {
+                        return apply_eval_nat_rule(
+                            env,
+                            "nat-add-succ",
+                            &current,
+                            steps,
+                            depth + 1,
+                        );
+                    }
+                }
+                if head == "mul" {
+                    let left = normalize_eval_nat_term(env, &children[1], steps, depth + 1)?;
+                    let current =
+                        list_node(vec![leaf_node("mul"), left.clone(), children[2].clone()]);
+                    if matches!(&left, Node::Leaf(s) if s == "zero") {
+                        return apply_eval_nat_rule(
+                            env,
+                            "nat-mul-zero",
+                            &current,
+                            steps,
+                            depth + 1,
+                        );
+                    }
+                    if matches!(&left, Node::List(items) if items.len() == 2 && matches!(&items[0], Node::Leaf(h) if h == "succ"))
+                    {
+                        return apply_eval_nat_rule(
+                            env,
+                            "nat-mul-succ",
+                            &current,
+                            steps,
+                            depth + 1,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Err(format!(
+        "eval-nat: not a closed Peano term: {}",
+        key_of(node)
+    ))
+}
+
+fn peano_normal_form_to_host_number(node: &Node) -> Result<f64, String> {
+    if let Node::Leaf(s) = node {
+        if s == "zero" {
+            return Ok(0.0);
+        }
+    }
+    if let Node::List(children) = node {
+        if children.len() == 2 && matches!(&children[0], Node::Leaf(head) if head == "succ") {
+            return Ok(1.0 + peano_normal_form_to_host_number(&children[1])?);
+        }
+    }
+    Err(format!(
+        "eval-nat produced a non-Peano normal form: {}",
+        key_of(node)
+    ))
+}
+
+/// Normalize a closed Peano term by dispatching through active links-level
+/// computation rules. Host arithmetic is only used by the final renderer.
+pub fn eval_nat_term(env: &Env, node: &Node) -> Result<EvalNatResult, String> {
+    let mut steps: Vec<String> = Vec::new();
+    let normal_form = normalize_eval_nat_term(env, node, &mut steps, 0)?;
+    let value = peano_normal_form_to_host_number(&normal_form)?;
+    Ok(EvalNatResult {
+        value,
+        normal_form,
+        steps,
+    })
 }
 
 fn register_template_form(form: &Node, env: &mut Env) -> Result<String, String> {
@@ -12794,9 +13134,9 @@ fn eval_foundation_body_form(
                     ));
                     return;
                 }
-                match eval_nat_term(&children[1]) {
-                    Ok((value, steps)) => {
-                        results.push(RunResult::Num(value));
+                match eval_nat_term(env, &children[1]) {
+                    Ok(result) => {
+                        results.push(RunResult::Num(result.value));
                         if let Some(p) = proofs.as_mut() {
                             p.push(None);
                         }
@@ -12804,15 +13144,18 @@ fn eval_foundation_body_form(
                             pv.push(None);
                         }
                         if options.trace {
-                            let plural = if steps.len() == 1 { "" } else { "s" };
                             env.trace_events.push(TraceEvent::new(
                                 "eval-nat",
                                 format!(
-                                    "{} -> {} ({} step{})",
+                                    "{} -> normal-form {} -> {}; rules-used: {}; host-primitives-used: structural-matcher; renderer: nat-normal-form-to-host-number",
                                     key_of(&children[1]),
-                                    format_trace_value(value),
-                                    steps.len(),
-                                    plural
+                                    key_of(&result.normal_form),
+                                    format_trace_value(result.value),
+                                    if result.steps.is_empty() {
+                                        "<none>".to_string()
+                                    } else {
+                                        result.steps.join(", ")
+                                    }
                                 ),
                                 span.clone(),
                             ));
@@ -13476,9 +13819,9 @@ fn evaluate_inner(
                         ));
                         continue;
                     }
-                    match eval_nat_term(&children[1]) {
-                        Ok((value, steps)) => {
-                            results.push(RunResult::Num(value));
+                    match eval_nat_term(env, &children[1]) {
+                        Ok(result) => {
+                            results.push(RunResult::Num(result.value));
                             if let Some(p) = proofs.as_mut() {
                                 p.push(None);
                             }
@@ -13486,15 +13829,18 @@ fn evaluate_inner(
                                 pv.push(None);
                             }
                             if options.trace {
-                                let plural = if steps.len() == 1 { "" } else { "s" };
                                 env.trace_events.push(TraceEvent::new(
                                     "eval-nat",
                                     format!(
-                                        "{} -> {} ({} step{})",
+                                        "{} -> normal-form {} -> {}; rules-used: {}; host-primitives-used: structural-matcher; renderer: nat-normal-form-to-host-number",
                                         key_of(&children[1]),
-                                        format_trace_value(value),
-                                        steps.len(),
-                                        plural
+                                        key_of(&result.normal_form),
+                                        format_trace_value(result.value),
+                                        if result.steps.is_empty() {
+                                            "<none>".to_string()
+                                        } else {
+                                            result.steps.join(", ")
+                                        }
                                     ),
                                     span.clone(),
                                 ));

@@ -328,7 +328,7 @@
   (emit-proof-report name))
 
 (rule (eval (eval-nat term))
-  (reduce-nat-term term))
+  (render-host-number (normalize-nat-term term)))
 
 (rule (eval (encodeAnum node))
   (encode-anum node))

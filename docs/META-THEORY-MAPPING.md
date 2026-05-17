@@ -55,10 +55,12 @@ or a triplet whose subject/object is itself a link.
 | **`mul ?m ?n`** | `(mul ?m ?n)` | Same shape as `add`; a triplet with a different relation. |
 
 There is **no host integer** anywhere in the encoding: `2` is the
-doublet `(succ (succ zero))`, not `2`. The `eval-nat` rewriter
-(§9) is an interpretation function that returns a host integer for
-display purposes; it does not change the meta-theory shape of the
-underlying link.
+doublet `(succ (succ zero))`, not `2`. The `eval-nat` normalizer
+(§9) dispatches through the active Peano computation rules and
+produces a Peano normal form. The legacy result stream renders that
+normal form as a host number for display, but that renderer is a
+separate trust boundary and does not change the meta-theory shape of
+the underlying link.
 
 ### 2.2 Typing and equality judgements (triplets)
 

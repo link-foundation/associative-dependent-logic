@@ -1,12 +1,11 @@
 # Links-defined natural-number foundation (issue #97, Phase 12).
 #
-# Peano arithmetic encoded entirely as proof-substrate rules. The seven
-# rules `nat-zero-formation`, `nat-succ-formation`, `nat-add-zero`,
-# `nat-add-succ`, `nat-induction`, `nat-refl`, and `nat-cong-succ` make
-# `Nat`, `zero`, `succ`, addition, structural induction, and the
-# object-level equality `nat-equals` available as links-level constructs
-# whose derivations are checked by the host's structural pattern matcher
-# rather than by the host's decimal numeric domain.
+# Peano arithmetic encoded as proof-substrate rules. The Nat rules make
+# `Nat`, `zero`, `succ`, addition, multiplication, structural induction,
+# the recursor/eliminator, and the object-level equality `nat-equals`
+# available as links-level constructs whose derivations are checked by
+# the host's structural pattern matcher rather than by the host's decimal
+# numeric domain.
 #
 # `has-type`, `nat-equals`, `at`, `forall`, and `implies` are bare
 # identifiers — the proof substrate treats them as literals while
@@ -19,8 +18,8 @@
 # that programs which never opt into the `nat-links` foundation keep
 # the host's `=`/`numeric-equality` layer untouched (PR 178). The
 # `(foundation nat-links ...)` registration in `lib/self/foundations.lino`
-# now lists `nat-equality`, `nat-refl`, and `nat-cong-succ` alongside the
-# five original Peano rules; the trust report distinguishes the
+# lists the Nat proof rules, the dedicated equality layer, and the
+# `eval-nat` normalizer/renderer split; the trust report distinguishes the
 # links-defined equality layer from `=`/`numeric-equality`.
 #
 # The derivation below builds `zero`, `(succ zero)`, and
@@ -324,17 +323,16 @@
 
 
 # --- Links-evaluated fragment ---
-# `(eval-nat <term>)` reduces a closed Peano term to its canonical
-# value strictly by **links-level structural rewriting**, applying the
-# four computation rules `nat-add-zero`, `nat-add-succ`, `nat-mul-zero`,
-# `nat-mul-succ`. The result is the host integer the normal form
-# represents, but the *evaluation* never delegates to host `+`/`*`:
-# every rewrite step is recorded in the trace transcript. This is what
-# raises `nat-links` from `links-checked` to `links-evaluated` in the
-# trust report — the foundation can now compute with its own rules,
-# not merely describe them. The four lines below normalise `0`, `1`,
-# `1 + 1`, and `2 * 2`; the structural matcher witnesses each step.
-# See: docs/case-studies/issue-97/README.md §9.10.
+# `(eval-nat <term>)` normalizes a closed Peano term by dispatching
+# through the active links-level computation rules `nat-add-zero`,
+# `nat-add-succ`, `nat-mul-zero`, and `nat-mul-succ`. Removing or
+# replacing one of those rules changes evaluation. The semantic result
+# is the Peano normal form; rendering that normal form as a host number
+# is a separate `nat-normal-form-to-host-number` boundary. The four
+# lines below normalise `0`, `1`, `1 + 1`, and `2 * 2`; the structural
+# matcher witnesses each rewrite step.
+# See: docs/case-studies/issue-97/README.md §9.11.
+(allow-host-primitive nat-normal-form-to-host-number)
 (eval-nat zero)
 (eval-nat (succ zero))
 (eval-nat (add (succ zero) (succ zero)))
