@@ -220,6 +220,50 @@ fn builds_a_structured_foundation_report_snapshot() {
         !report.root_constructs.is_empty(),
         "root constructs should be seeded by default"
     );
+    let proof_checking = report
+        .root_constructs
+        .iter()
+        .find(|rc| rc.name == "proof-checking-relation")
+        .expect("proof-checking-relation should be registered");
+    assert_eq!(proof_checking.status.as_deref(), Some("links-defined"));
+    assert_eq!(
+        proof_checking.semantic_status.as_deref(),
+        Some("links-checked")
+    );
+    let links_checked = report
+        .by_semantic_status
+        .iter()
+        .find(|(status, _)| status == "links-checked")
+        .expect("links-checked semantic status bucket should exist");
+    assert!(links_checked
+        .1
+        .contains(&"proof-checking-relation".to_string()));
+    let host_trusted = report
+        .by_semantic_status
+        .iter()
+        .find(|(status, _)| status == "host-trusted")
+        .expect("host-trusted semantic status bucket should exist");
+    assert!(host_trusted.1.contains(&"avg".to_string()));
+    for name in [
+        "substitution",
+        "freshness",
+        "alpha-renaming",
+        "definitional-equality",
+        "normalization",
+        "whnf",
+    ] {
+        let boundary = report
+            .root_constructs
+            .iter()
+            .find(|rc| rc.name == name)
+            .unwrap_or_else(|| panic!("{} should be registered", name));
+        assert_eq!(
+            boundary.semantic_status.as_deref(),
+            Some("host-trusted"),
+            "{} should remain an explicit host boundary",
+            name
+        );
+    }
     let text = format_foundation_report(&report);
     assert!(
         text.contains("active foundation: tiny"),
@@ -229,6 +273,16 @@ fn builds_a_structured_foundation_report_snapshot() {
     assert!(
         text.contains("description: toy-foundation"),
         "report text missing description line: {}",
+        text
+    );
+    assert!(
+        text.contains("semantic statuses:"),
+        "report text missing semantic status section: {}",
+        text
+    );
+    assert!(
+        text.contains("links-checked:") && text.contains("proof-checking-relation"),
+        "report text missing links-checked proof relation: {}",
         text
     );
     env.exit_foundation();
@@ -856,6 +910,7 @@ fn truth_table_reports_active_implementations_inside_with_foundation() {
         .find(|implementation| implementation.construct == "and")
         .expect("active and implementation should be reported");
     assert_eq!(active_and.status.as_deref(), Some("links-defined"));
+    assert_eq!(active_and.semantic_status.as_deref(), Some("links-checked"));
     assert_eq!(active_and.foundation.as_deref(), Some("boolean-links"));
     assert_eq!(
         active_and.implementation.as_deref(),
@@ -865,6 +920,6 @@ fn truth_table_reports_active_implementations_inside_with_foundation() {
     let printed = format_foundation_report(report);
     assert!(printed.contains("active implementations:"));
     assert!(printed.contains(
-        "and: links-defined; via truth-table:boolean-links/and; foundation boolean-links"
+        "and: links-defined; semantic links-checked; via truth-table:boolean-links/and; foundation boolean-links"
     ));
 }

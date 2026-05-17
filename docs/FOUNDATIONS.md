@@ -32,8 +32,8 @@ classical `and = min`, but it leaves the bookkeeping implicit:
 - Which root constructs are *host primitives* — implemented directly in
   JS/Rust and trusted unconditionally?
 - Which are *links-encoded* (described as data in `lib/self/*.lino`) vs.
-  *links-defined* (their meaning is derived by evaluating those data
-  rules)?
+  *links-defined* (their selected rules or rows are consumable by the
+  host checker)?
 - Which are *user-configurable* runtime knobs?
 - Which are *external trusted* oracles (SMT, ATP)?
 - Which are *planned* but not yet implemented?
@@ -56,7 +56,8 @@ A descriptor field is one of:
 | Field | Meaning |
 |-------|---------|
 | `kind` | What category the construct belongs to (e.g. `truth-operator`, `aggregator`, `binder`, `equality-layer`). |
-| `status` | One of the trust statuses below. |
+| `status` | One of the backward-compatible trust statuses below. |
+| `semantic-status` | One of the execution-boundary statuses below. Omit it to derive the conservative default from `status`. |
 | `depends-on` | Names of constructs this one builds on. Forms a dependency graph the report can traverse. |
 | `encoded-as` | The host symbol that currently implements the construct (for documentation only). |
 | `pure-links-ready` | `yes` if the construct's meaning is derivable from links alone, `no` otherwise. |
@@ -71,9 +72,24 @@ Trust statuses, mirroring the categories proposed in the issue thread:
 | `external-trusted`   | Relies on an external binary (SMT, ATP) or system service. |
 | `user-configurable`  | A runtime knob the user can tune (range, valence, operator aggregator). |
 | `links-encoded`      | Description lives in `lib/self/*.lino` as data; the host still interprets it. |
-| `links-defined`      | Behaviour is derived by evaluating the encoded self-rules. |
+| `links-defined`      | Behaviour is selected from links-level rules or rows that the prover/checker can consume. See `semantic-status` for the execution boundary. |
 | `user-overridden`    | Replaced by an active user foundation inside the current scope. |
 | `planned`            | Not yet implemented. |
+
+Semantic statuses make the "built from links/references" claim more precise:
+
+| Semantic status | When to use it |
+|-----------------|----------------|
+| `host-trusted` | Behaviour is executed by JS/Rust or by an external trusted boundary. |
+| `links-described` | The construct is represented as links/LiNo data, but host code still interprets that description. |
+| `links-checked` | Links-level rows, rules, or proof objects are checked by the host replay/matching machinery. |
+| `links-evaluated` | Behaviour is obtained by evaluator rules expressed at links level. This is reserved for future milestones unless a construct explicitly opts in. |
+| `self-hosted` | The checker/evaluator for the construct is itself represented and justified in the links substrate. No bundled default construct currently claims this status. |
+
+The default derivation is deliberately conservative: host and configurable
+trust statuses become `host-trusted`, `links-encoded` becomes
+`links-described`, and the legacy `links-defined` bucket becomes
+`links-checked` unless a descriptor says otherwise.
 
 The canonical inventory lives in [`lib/self/foundations.lino`](../lib/self/foundations.lino).
 That file is the single source of truth — both the JS and Rust hosts pre-seed
@@ -87,6 +103,7 @@ forms in user files extend or refine that base.
 (root-construct my-and
   (kind truth-operator)
   (status links-defined)
+  (semantic-status links-checked)
   (depends-on truth-range))
 ```
 
@@ -213,11 +230,12 @@ snapshot of the active foundation. The snapshot has the shape:
   description:      "<text> | null",
   numericDomain:    "<name> | null",
   truthDomain:      "<name> | null",
-  rootConstructs:   [ { name, kind, status, dependsOn, encodedAs, ... } ],
+  rootConstructs:   [ { name, kind, status, semanticStatus, dependsOn, encodedAs, ... } ],
   byStatus:         { "<status>": ["<name>", ...] },
+  bySemanticStatus: { "<semantic-status>": ["<name>", ...] },
   foundations:      [ { name, description, defines, ... } ],
   activeImplementations: [
-    { construct, foundation, implementation, status, dependsOn }
+    { construct, foundation, implementation, status, semanticStatus, dependsOn }
   ],
   proofRules:       [ { name, premises, conclusion } ],
   proofAssumptions: [ { name, kind, judgement } ],
@@ -277,6 +295,11 @@ external-trusted:
   - lino-parser
   - smt-trusted
 
+semantic statuses:
+  host-trusted: +, -, *, /, <, <=, =, !=, Pi, Prop, Type, ...
+  links-described: proof-object, proof-rule-declaration, self.evaluator, ...
+  links-checked: proof-checking-relation, rule-application-check, ...
+
 foundations:
   - boolean-links — links-defined two-valued Boolean logic via finite truth tables
       numeric domain: boolean-zero-one
@@ -329,7 +352,8 @@ and are pre-seeded by the JS and Rust hosts:
 - **`boolean-links`** — two-valued Boolean logic over the strict carrier
   `{0,1}`. `and`, `or`, and `not` are selected from finite truth-table
   rows, so the active implementation descriptors for those operators
-  are `links-defined` while the foundation is active.
+  are `links-defined` with `semanticStatus: "links-checked"` while the
+  foundation is active.
 - **`boolean-classical`** — two-valued classical Boolean logic. `and`
   becomes `min`, `or` becomes `max`, `both` collapses to `min`, and
   `neither` to `product`. The numeric domain field is set to
@@ -380,10 +404,12 @@ whether `true`/`false` are bound to `{0,1}` or `{0.0, 1.0}` or `{0, 0.5,
 ## 7. Truth tables: `(truth-table ...)`
 
 Operators can also be rebound to a finite truth table written in
-`.lino`. This is the smallest implemented path to a `links-defined`
-operator: the rows are links data, and matching rows do not consult a
-host aggregator while the foundation is active. The evaluator still
-performs the table lookup, so this is not a self-hosted proof kernel.
+`.lino`. This is the smallest implemented path to a legacy
+`links-defined` operator: the rows are links data, and matching rows do
+not consult a host aggregator while the foundation is active. The active
+implementation also reports `semanticStatus: "links-checked"` because
+the host still performs table lookup against those rows. It is not a
+self-hosted evaluator.
 
 ```lino
 (foundation xor-boolean
@@ -433,7 +459,7 @@ for example `and -> avg -> host-primitive`.
 (? ((a = true) and (b = true)))
 
 ; OK: the active implementation of `and` is a truth-table row set
-; recorded as links-defined.
+; recorded as links-defined / links-checked.
 (with-foundation boolean-links
   (? ((a = true) and (b = true))))
 ```
@@ -492,9 +518,10 @@ frames, and leaf payloads that are not byte-aligned, all with `E066`.
 
 The issue #97 roadmap is implemented where the work could stay
 backward-compatible and inspectable. The remaining self-hosting boundary
-is still explicit: truth-table lookup and proof-rule matching are
-performed by the host, while the selected tables, proof rules, and
-derivations are links data.
+is still explicit: truth-table lookup, substitution, alpha-renaming,
+normalization, conversion, and proof-rule matching are performed by the
+host, while the selected tables, proof rules, proof-checking relations,
+and derivations are links data.
 
 - **Phase 1 — inventory + reporting + scoped overrides.** Implemented.
   See §2 (registry), §4 (`foundation-report`), §3 (`(with-foundation ...)`).
@@ -507,7 +534,10 @@ derivations are links data.
   `(assumption ...)` / `(axiom ...)`, `(proof-object ...)`, and
   `(check-proof ...)`. Premises must cite an assumption, axiom, or
   earlier proof object using `(premise-by ...)` / `(uses ...)`;
-  unjustified raw premises raise `E064`.
+  unjustified raw premises raise `E064`. PR #176 adds
+  `examples/proof-checking-relation.lino`, which represents a
+  nontrivial proof-checking judgement as links-level rule data and marks
+  it `links-checked`.
 - **Phase 4 — links-defined finite logics.** Implemented. See the
   bundled `boolean-links` truth-table foundation (§5), the
   `(truth-table ...)` clause (§7), and `(carrier ...)` +
@@ -519,7 +549,9 @@ derivations are links data.
   `application-elimination`, and `beta-conversion` as proof-substrate
   rules and replays a typed identity derivation through
   `(check-proof ...)`. The default host typed kernel remains available
-  for legacy programs.
+  for legacy programs. Substitution, alpha-renaming, freshness,
+  definitional equality, normalization, and conversion remain explicit
+  `host-trusted` boundaries in the report.
 - **Phase 6 — pure-links checking mode.** Implemented. See §8.
 - **Phase 7 — dependency-graph traversal.** Implemented for trust
   reporting and strict-mode enforcement paths.

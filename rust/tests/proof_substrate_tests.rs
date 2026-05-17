@@ -428,6 +428,76 @@ fn accepts_proof_object_dependencies_produced_by_other_proof_objects() {
 }
 
 #[test]
+fn checks_a_links_level_proof_checking_relation_as_data() {
+    let mut env = Env::new(None);
+    let src = r#"
+(root-construct proof-checking-relation
+  (kind checking-relation)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on proof-replay structural-equality proof-object))
+(rule proof-checks-modus-ponens
+  (premise (?implication-proof checks-as (?antecedent implies ?consequent)))
+  (premise (?antecedent-proof checks-as ?antecedent))
+  (premise (?proof applies-rule modus-ponens))
+  (premise (?proof uses-proof ?implication-proof))
+  (premise (?proof uses-proof ?antecedent-proof))
+  (conclusion (?proof checks-as ?consequent)))
+(axiom rain-implies-wet-proof
+  (judgement (rain-implies-wet checks-as (raining implies wet))))
+(axiom rain-proof
+  (judgement (rain-proof checks-as raining)))
+(axiom mp-rain-applies
+  (judgement (mp-rain applies-rule modus-ponens)))
+(axiom mp-rain-uses-implication
+  (judgement (mp-rain uses-proof rain-implies-wet)))
+(axiom mp-rain-uses-antecedent
+  (judgement (mp-rain uses-proof rain-proof)))
+(proof-object mp-rain-checks-wet
+  (applies proof-checks-modus-ponens)
+  (premise-by rain-implies-wet-proof)
+  (premise-by rain-proof)
+  (premise-by mp-rain-applies)
+  (premise-by mp-rain-uses-implication)
+  (premise-by mp-rain-uses-antecedent)
+  (conclusion (mp-rain checks-as wet)))
+(check-proof mp-rain-checks-wet)
+"#;
+    let out = evaluate_with_env(src, None, &mut env);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![1.0]);
+
+    let report = env.foundation_report();
+    let proof_checking = report
+        .root_constructs
+        .iter()
+        .find(|rc| rc.name == "proof-checking-relation")
+        .expect("proof-checking-relation should be registered");
+    assert_eq!(
+        proof_checking.semantic_status.as_deref(),
+        Some("links-checked")
+    );
+    let relation_rule = report
+        .proof_rules
+        .iter()
+        .find(|rule| rule.name == "proof-checks-modus-ponens")
+        .expect("proof-checks-modus-ponens should be reported");
+    assert_eq!(relation_rule.premises.len(), 5);
+    let links_checked = report
+        .by_semantic_status
+        .iter()
+        .find(|(status, _)| status == "links-checked")
+        .expect("links-checked semantic status bucket should exist");
+    assert!(links_checked
+        .1
+        .contains(&"proof-checking-relation".to_string()));
+}
+
+#[test]
 fn detects_cyclic_proof_object_dependencies() {
     let src = r#"
 (rule identity

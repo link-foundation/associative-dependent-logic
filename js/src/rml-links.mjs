@@ -687,6 +687,7 @@ class Env {
           foundation: name,
           implementation: implName,
           status: 'host-primitive',
+          semanticStatus: 'host-trusted',
           dependsOn: [implName],
         });
       }
@@ -712,6 +713,7 @@ class Env {
           foundation: name,
           implementation: `truth-table:${name}/${opName}`,
           status: 'links-defined',
+          semanticStatus: 'links-checked',
           dependsOn: fallbackDeps,
         });
       }
@@ -805,14 +807,22 @@ class Env {
     const active = this.activeFoundation || 'default-rml';
     const foundation = this.foundations.get(active) || null;
     const byStatus = new Map();
+    const bySemanticStatus = new Map();
     for (const rc of this.listRootConstructs()) {
       const status = rc.status || 'unknown';
       if (!byStatus.has(status)) byStatus.set(status, []);
       byStatus.get(status).push(rc.name);
+      const semanticStatus = semanticStatusForDescriptor(rc) || 'unknown';
+      if (!bySemanticStatus.has(semanticStatus)) bySemanticStatus.set(semanticStatus, []);
+      bySemanticStatus.get(semanticStatus).push(rc.name);
     }
     const buckets = {};
     for (const [status, names] of byStatus.entries()) {
       buckets[status] = names.slice().sort();
+    }
+    const semanticBuckets = {};
+    for (const [status, names] of bySemanticStatus.entries()) {
+      semanticBuckets[status] = names.slice().sort();
     }
     return {
       activeFoundation: active,
@@ -823,6 +833,7 @@ class Env {
         name: rc.name,
         kind: rc.kind || null,
         status: rc.status || null,
+        semanticStatus: semanticStatusForDescriptor(rc),
         dependsOn: (rc.dependsOn || []).slice(),
         encodedAs: rc.encodedAs || null,
         pureLinksReady: typeof rc.pureLinksReady === 'boolean' ? rc.pureLinksReady : null,
@@ -830,6 +841,7 @@ class Env {
         plannedAs: rc.plannedAs || null,
       })),
       byStatus: buckets,
+      bySemanticStatus: semanticBuckets,
       foundations: [...this.foundations.values()].map(f => ({
         name: f.name,
         description: f.description || null,
@@ -860,6 +872,7 @@ class Env {
           foundation: impl.foundation || null,
           implementation: impl.implementation || null,
           status: impl.status || null,
+          semanticStatus: impl.semanticStatus || semanticStatusForTrustStatus(impl.status) || null,
           dependsOn: Array.isArray(impl.dependsOn) ? impl.dependsOn.slice() : [],
         }))
         .sort((a, b) => a.construct < b.construct ? -1 : a.construct > b.construct ? 1 : 0),
@@ -971,6 +984,7 @@ function mergeRootConstructDescriptors(previous, next) {
   const base = previous ? { ...previous } : {
     name: next.name,
     status: null,
+    semanticStatus: null,
     kind: null,
     dependsOn: [],
     encodedAs: null,
@@ -981,6 +995,7 @@ function mergeRootConstructDescriptors(previous, next) {
   };
   base.name = next.name;
   if (next.status !== undefined && next.status !== null) base.status = next.status;
+  if (next.semanticStatus !== undefined && next.semanticStatus !== null) base.semanticStatus = next.semanticStatus;
   if (next.kind !== undefined && next.kind !== null) base.kind = next.kind;
   if (Array.isArray(next.dependsOn) && next.dependsOn.length > 0) {
     const seen = new Set(base.dependsOn || []);
@@ -1001,6 +1016,37 @@ function mergeRootConstructDescriptors(previous, next) {
   if (next.plannedAs !== undefined && next.plannedAs !== null) base.plannedAs = next.plannedAs;
   if (next.foundation !== undefined && next.foundation !== null) base.foundation = next.foundation;
   return base;
+}
+
+const SEMANTIC_STATUS_ORDER = [
+  'host-trusted',
+  'links-described',
+  'links-checked',
+  'links-evaluated',
+  'self-hosted',
+];
+
+function semanticStatusForTrustStatus(status) {
+  switch (status) {
+    case 'host-primitive':
+    case 'host-derived':
+    case 'external-trusted':
+    case 'user-configurable':
+    case 'user-overridden':
+      return 'host-trusted';
+    case 'links-encoded':
+    case 'planned':
+      return 'links-described';
+    case 'links-defined':
+      return 'links-checked';
+    default:
+      return null;
+  }
+}
+
+function semanticStatusForDescriptor(descriptor) {
+  if (!descriptor) return null;
+  return descriptor.semanticStatus || semanticStatusForTrustStatus(descriptor.status) || null;
 }
 
 // ---------- Dependency graph traversal (issue #97, Phase 7) ----------
@@ -1432,6 +1478,10 @@ function seedBuiltinRootConstructs(env) {
     { name: 'coinductive', kind: 'declaration', status: 'host-primitive', dependsOn: ['Type', 'Pi'] },
     // Proof / tactics layer
     { name: 'proof-replay', kind: 'replay-checker', status: 'host-primitive', encodedAs: 'check.mjs' },
+    { name: 'proof-object', kind: 'proof-data', status: 'links-encoded', encodedAs: 'proof-object' },
+    { name: 'proof-rule-declaration', kind: 'proof-data', status: 'links-encoded', encodedAs: 'rule' },
+    { name: 'proof-checking-relation', kind: 'checking-relation', status: 'links-defined', dependsOn: ['proof-replay', 'structural-equality', 'proof-object'] },
+    { name: 'rule-application-check', kind: 'checking-relation', status: 'links-defined', dependsOn: ['proof-replay', 'structural-equality', 'proof-rule-declaration'] },
     { name: 'by', kind: 'proof-rule', status: 'host-primitive' },
     { name: 'smt-trusted', kind: 'external-decision', status: 'external-trusted' },
     { name: 'atp-trusted', kind: 'external-decision', status: 'external-trusted' },
@@ -1476,6 +1526,12 @@ function parseRootConstructForm(node) {
           throw new RmlError('E060', '(status ...) requires one symbol');
         }
         descriptor.status = rest[0];
+        break;
+      case 'semantic-status':
+        if (rest.length !== 1 || typeof rest[0] !== 'string') {
+          throw new RmlError('E060', '(semantic-status ...) requires one symbol');
+        }
+        descriptor.semanticStatus = rest[0];
         break;
       case 'kind':
         if (rest.length !== 1 || typeof rest[0] !== 'string') {
@@ -1702,6 +1758,24 @@ function formatFoundationReport(report) {
       for (const name of names) lines.push(`  - ${name}`);
     }
   }
+  if (report.bySemanticStatus && Object.keys(report.bySemanticStatus).length > 0) {
+    lines.push('');
+    lines.push('semantic statuses:');
+    const seenSemantic = new Set();
+    for (const status of SEMANTIC_STATUS_ORDER) {
+      const names = report.bySemanticStatus[status];
+      if (Array.isArray(names) && names.length > 0) {
+        lines.push(`  ${status}: ${names.join(', ')}`);
+        seenSemantic.add(status);
+      }
+    }
+    for (const [status, names] of Object.entries(report.bySemanticStatus)) {
+      if (seenSemantic.has(status)) continue;
+      if (Array.isArray(names) && names.length > 0) {
+        lines.push(`  ${status}: ${names.join(', ')}`);
+      }
+    }
+  }
   if (report.foundations && report.foundations.length > 0) {
     lines.push('');
     lines.push('foundations:');
@@ -1732,6 +1806,7 @@ function formatFoundationReport(report) {
     for (const impl of report.activeImplementations) {
       const parts = [];
       if (impl.status) parts.push(impl.status);
+      if (impl.semanticStatus) parts.push(`semantic ${impl.semanticStatus}`);
       if (impl.implementation) parts.push(`via ${impl.implementation}`);
       if (impl.foundation) parts.push(`foundation ${impl.foundation}`);
       if (Array.isArray(impl.dependsOn) && impl.dependsOn.length > 0) {

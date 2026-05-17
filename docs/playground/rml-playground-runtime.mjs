@@ -2436,6 +2436,26 @@ var Env = class {
       root: null,
       abits: null
     });
+    this.foundations.set("typed-kernel-links", {
+      name: "typed-kernel-links",
+      description: "links-defined typed-kernel fragment (Pi/lambda/apply/beta as proof rules)",
+      uses: [
+        "pi-formation",
+        "lambda-introduction",
+        "application-elimination",
+        "beta-conversion"
+      ],
+      defines: /* @__PURE__ */ new Map(),
+      extends: "default-rml",
+      numericDomain: "decimal-12",
+      truthDomain: "default-truth",
+      carrier: null,
+      strictCarrier: false,
+      truthTables: null,
+      experimental: false,
+      root: null,
+      abits: null
+    });
     seedBuiltinRootConstructs(this);
   }
   registerRootConstruct(descriptor) {
@@ -2492,6 +2512,7 @@ var Env = class {
           foundation: name,
           implementation: implName,
           status: "host-primitive",
+          semanticStatus: "host-trusted",
           dependsOn: [implName]
         });
       }
@@ -2502,16 +2523,20 @@ var Env = class {
           snapshot.set(opName, this.ops.has(opName) ? this.ops.get(opName) : null);
         }
         const previous = this.ops.has(opName) ? this.ops.get(opName) : null;
+        const previousImpl = this.activeImplementations.get(opName) || null;
         const fn = truthTableOpFromRows(this, opName, rows, previous);
         if (fn === null) continue;
         snapshotImplementation(opName);
+        const isTotal2 = truthTableRowsCompleteForCarrier(this, rows, foundation);
+        const fallbackDeps = isTotal2 ? [] : truthTableFallbackDependencies(this, opName, previousImpl);
         this.ops.set(opName, fn);
         this.activeImplementations.set(opName, {
           construct: opName,
           foundation: name,
           implementation: `truth-table:${name}/${opName}`,
           status: "links-defined",
-          dependsOn: []
+          semanticStatus: "links-checked",
+          dependsOn: fallbackDeps
         });
       }
     }
@@ -2596,14 +2621,22 @@ var Env = class {
     const active = this.activeFoundation || "default-rml";
     const foundation = this.foundations.get(active) || null;
     const byStatus = /* @__PURE__ */ new Map();
+    const bySemanticStatus = /* @__PURE__ */ new Map();
     for (const rc of this.listRootConstructs()) {
       const status = rc.status || "unknown";
       if (!byStatus.has(status)) byStatus.set(status, []);
       byStatus.get(status).push(rc.name);
+      const semanticStatus = semanticStatusForDescriptor(rc) || "unknown";
+      if (!bySemanticStatus.has(semanticStatus)) bySemanticStatus.set(semanticStatus, []);
+      bySemanticStatus.get(semanticStatus).push(rc.name);
     }
     const buckets = {};
     for (const [status, names] of byStatus.entries()) {
       buckets[status] = names.slice().sort();
+    }
+    const semanticBuckets = {};
+    for (const [status, names] of bySemanticStatus.entries()) {
+      semanticBuckets[status] = names.slice().sort();
     }
     return {
       activeFoundation: active,
@@ -2614,6 +2647,7 @@ var Env = class {
         name: rc.name,
         kind: rc.kind || null,
         status: rc.status || null,
+        semanticStatus: semanticStatusForDescriptor(rc),
         dependsOn: (rc.dependsOn || []).slice(),
         encodedAs: rc.encodedAs || null,
         pureLinksReady: typeof rc.pureLinksReady === "boolean" ? rc.pureLinksReady : null,
@@ -2621,6 +2655,7 @@ var Env = class {
         plannedAs: rc.plannedAs || null
       })),
       byStatus: buckets,
+      bySemanticStatus: semanticBuckets,
       foundations: [...this.foundations.values()].map((f) => ({
         name: f.name,
         description: f.description || null,
@@ -2644,6 +2679,7 @@ var Env = class {
         foundation: impl.foundation || null,
         implementation: impl.implementation || null,
         status: impl.status || null,
+        semanticStatus: impl.semanticStatus || semanticStatusForTrustStatus(impl.status) || null,
         dependsOn: Array.isArray(impl.dependsOn) ? impl.dependsOn.slice() : []
       })).sort((a, b) => a.construct < b.construct ? -1 : a.construct > b.construct ? 1 : 0),
       proofRules: [...this.proofRules.entries()].map(([name, r]) => ({
@@ -2734,6 +2770,7 @@ function mergeRootConstructDescriptors(previous, next) {
   const base = previous ? { ...previous } : {
     name: next.name,
     status: null,
+    semanticStatus: null,
     kind: null,
     dependsOn: [],
     encodedAs: null,
@@ -2744,6 +2781,7 @@ function mergeRootConstructDescriptors(previous, next) {
   };
   base.name = next.name;
   if (next.status !== void 0 && next.status !== null) base.status = next.status;
+  if (next.semanticStatus !== void 0 && next.semanticStatus !== null) base.semanticStatus = next.semanticStatus;
   if (next.kind !== void 0 && next.kind !== null) base.kind = next.kind;
   if (Array.isArray(next.dependsOn) && next.dependsOn.length > 0) {
     const seen = new Set(base.dependsOn || []);
@@ -2764,6 +2802,34 @@ function mergeRootConstructDescriptors(previous, next) {
   if (next.plannedAs !== void 0 && next.plannedAs !== null) base.plannedAs = next.plannedAs;
   if (next.foundation !== void 0 && next.foundation !== null) base.foundation = next.foundation;
   return base;
+}
+var SEMANTIC_STATUS_ORDER = [
+  "host-trusted",
+  "links-described",
+  "links-checked",
+  "links-evaluated",
+  "self-hosted"
+];
+function semanticStatusForTrustStatus(status) {
+  switch (status) {
+    case "host-primitive":
+    case "host-derived":
+    case "external-trusted":
+    case "user-configurable":
+    case "user-overridden":
+      return "host-trusted";
+    case "links-encoded":
+    case "planned":
+      return "links-described";
+    case "links-defined":
+      return "links-checked";
+    default:
+      return null;
+  }
+}
+function semanticStatusForDescriptor(descriptor) {
+  if (!descriptor) return null;
+  return descriptor.semanticStatus || semanticStatusForTrustStatus(descriptor.status) || null;
 }
 function closureFor(env, name) {
   if (!env.rootConstructs.has(name)) return null;
@@ -3002,6 +3068,65 @@ function truthTableOpFromRows(env, opName, rows, previous) {
     return env.lo;
   };
 }
+function _truthTableKey(values) {
+  return values.map((v) => Number(v).toPrecision(15)).join("");
+}
+function _resolvedCarrierValues(env, foundation) {
+  if (!foundation || foundation.strictCarrier !== true || !Array.isArray(foundation.carrier) || foundation.carrier.length === 0) {
+    return null;
+  }
+  const values = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const tok of foundation.carrier) {
+    const value = resolveTruthTableValue(env, tok);
+    if (value === null) return null;
+    const key = _truthTableKey([value]);
+    if (!seen.has(key)) {
+      seen.add(key);
+      values.push(value);
+    }
+  }
+  return values.length > 0 ? values : null;
+}
+function truthTableRowsCompleteForCarrier(env, rows, foundation) {
+  const carrier = _resolvedCarrierValues(env, foundation);
+  if (carrier === null) return false;
+  let arity = null;
+  const seenRows = /* @__PURE__ */ new Set();
+  for (const row of rows) {
+    if (!row || !Array.isArray(row.inputs)) return false;
+    if (arity === null) arity = row.inputs.length;
+    if (row.inputs.length !== arity) return false;
+    const inputs = row.inputs.map((t) => resolveTruthTableValue(env, t));
+    const output = resolveTruthTableValue(env, row.output);
+    if (inputs.some((v) => v === null) || output === null) return false;
+    seenRows.add(_truthTableKey(inputs));
+  }
+  if (arity === null) return false;
+  const required = carrier.length ** arity;
+  if (seenRows.size < required) return false;
+  const visit = (prefix, depth) => {
+    if (depth === arity) return seenRows.has(_truthTableKey(prefix));
+    for (const value of carrier) {
+      if (!visit(prefix.concat([value]), depth + 1)) return false;
+    }
+    return true;
+  };
+  return visit([], 0);
+}
+function truthTableFallbackDependencies(env, opName, previousImpl) {
+  const deps = [];
+  if (previousImpl && Array.isArray(previousImpl.dependsOn) && previousImpl.dependsOn.length > 0) {
+    deps.push(...previousImpl.dependsOn);
+  } else {
+    const rc = env.getRootConstruct(opName);
+    if (rc && Array.isArray(rc.dependsOn) && rc.dependsOn.length > 0) {
+      deps.push(...rc.dependsOn);
+    }
+  }
+  deps.push("truth-table-fallback");
+  return [...new Set(deps)];
+}
 function seedBuiltinRootConstructs(env) {
   const seeds = [
     // Parsing / LiNo layer
@@ -3030,6 +3155,7 @@ function seedBuiltinRootConstructs(env) {
     { name: "max", kind: "aggregator", status: "host-primitive" },
     { name: "product", kind: "aggregator", status: "host-primitive" },
     { name: "probabilistic_sum", kind: "aggregator", status: "host-primitive" },
+    { name: "truth-table-fallback", kind: "truth-table-fallback", status: "host-derived" },
     // Logical layer
     { name: "not", kind: "truth-operator", status: "user-configurable", dependsOn: ["truth-range", "decimal-12-arithmetic"] },
     { name: "and", kind: "truth-operator", status: "user-configurable", dependsOn: ["avg"] },
@@ -3059,6 +3185,10 @@ function seedBuiltinRootConstructs(env) {
     { name: "coinductive", kind: "declaration", status: "host-primitive", dependsOn: ["Type", "Pi"] },
     // Proof / tactics layer
     { name: "proof-replay", kind: "replay-checker", status: "host-primitive", encodedAs: "check.mjs" },
+    { name: "proof-object", kind: "proof-data", status: "links-encoded", encodedAs: "proof-object" },
+    { name: "proof-rule-declaration", kind: "proof-data", status: "links-encoded", encodedAs: "rule" },
+    { name: "proof-checking-relation", kind: "checking-relation", status: "links-defined", dependsOn: ["proof-replay", "structural-equality", "proof-object"] },
+    { name: "rule-application-check", kind: "checking-relation", status: "links-defined", dependsOn: ["proof-replay", "structural-equality", "proof-rule-declaration"] },
     { name: "by", kind: "proof-rule", status: "host-primitive" },
     { name: "smt-trusted", kind: "external-decision", status: "external-trusted" },
     { name: "atp-trusted", kind: "external-decision", status: "external-trusted" },
@@ -3100,6 +3230,12 @@ function parseRootConstructForm(node) {
           throw new RmlError("E060", "(status ...) requires one symbol");
         }
         descriptor.status = rest[0];
+        break;
+      case "semantic-status":
+        if (rest.length !== 1 || typeof rest[0] !== "string") {
+          throw new RmlError("E060", "(semantic-status ...) requires one symbol");
+        }
+        descriptor.semanticStatus = rest[0];
         break;
       case "kind":
         if (rest.length !== 1 || typeof rest[0] !== "string") {
@@ -3300,6 +3436,24 @@ function formatFoundationReport(report) {
       for (const name of names) lines.push(`  - ${name}`);
     }
   }
+  if (report.bySemanticStatus && Object.keys(report.bySemanticStatus).length > 0) {
+    lines.push("");
+    lines.push("semantic statuses:");
+    const seenSemantic = /* @__PURE__ */ new Set();
+    for (const status of SEMANTIC_STATUS_ORDER) {
+      const names = report.bySemanticStatus[status];
+      if (Array.isArray(names) && names.length > 0) {
+        lines.push(`  ${status}: ${names.join(", ")}`);
+        seenSemantic.add(status);
+      }
+    }
+    for (const [status, names] of Object.entries(report.bySemanticStatus)) {
+      if (seenSemantic.has(status)) continue;
+      if (Array.isArray(names) && names.length > 0) {
+        lines.push(`  ${status}: ${names.join(", ")}`);
+      }
+    }
+  }
   if (report.foundations && report.foundations.length > 0) {
     lines.push("");
     lines.push("foundations:");
@@ -3330,6 +3484,7 @@ function formatFoundationReport(report) {
     for (const impl of report.activeImplementations) {
       const parts = [];
       if (impl.status) parts.push(impl.status);
+      if (impl.semanticStatus) parts.push(`semantic ${impl.semanticStatus}`);
       if (impl.implementation) parts.push(`via ${impl.implementation}`);
       if (impl.foundation) parts.push(`foundation ${impl.foundation}`);
       if (Array.isArray(impl.dependsOn) && impl.dependsOn.length > 0) {

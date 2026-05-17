@@ -143,9 +143,23 @@ describe('foundation / root-construct registry', () => {
       assert.ok(Array.isArray(report.rootConstructs));
       assert.ok(report.rootConstructs.length > 0,
         'root constructs should be seeded by default');
+      const proofChecking = report.rootConstructs.find(rc => rc.name === 'proof-checking-relation');
+      assert.ok(proofChecking, 'proof-checking-relation should be registered');
+      assert.strictEqual(proofChecking.status, 'links-defined');
+      assert.strictEqual(proofChecking.semanticStatus, 'links-checked');
+      assert.ok(report.bySemanticStatus['links-checked'].includes('proof-checking-relation'));
+      assert.ok(report.bySemanticStatus['host-trusted'].includes('avg'));
+      for (const name of ['substitution', 'freshness', 'alpha-renaming', 'definitional-equality', 'normalization', 'whnf']) {
+        const boundary = report.rootConstructs.find(rc => rc.name === name);
+        assert.ok(boundary, `${name} should be registered`);
+        assert.strictEqual(boundary.semanticStatus, 'host-trusted',
+          `${name} should remain an explicit host boundary`);
+      }
       const text = formatFoundationReport(report);
       assert.match(text, /active foundation: tiny/);
       assert.match(text, /description: toy-foundation/);
+      assert.match(text, /semantic statuses:/);
+      assert.match(text, /links-checked: .*proof-checking-relation/);
     } finally {
       env.exitFoundation();
     }
@@ -561,11 +575,12 @@ describe('foundation carrier enforcement', () => {
     const activeAnd = report.activeImplementations.find(i => i.construct === 'and');
     assert.ok(activeAnd, 'active and implementation should be reported');
     assert.strictEqual(activeAnd.status, 'links-defined');
+    assert.strictEqual(activeAnd.semanticStatus, 'links-checked');
     assert.strictEqual(activeAnd.foundation, 'boolean-links');
     assert.strictEqual(activeAnd.implementation, 'truth-table:boolean-links/and');
     assert.deepStrictEqual(activeAnd.dependsOn, []);
     const printed = formatFoundationReport(report);
     assert.ok(printed.includes('active implementations:'));
-    assert.ok(printed.includes('and: links-defined; via truth-table:boolean-links/and; foundation boolean-links'));
+    assert.ok(printed.includes('and: links-defined; semantic links-checked; via truth-table:boolean-links/and; foundation boolean-links'));
   });
 });

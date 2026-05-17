@@ -1,8 +1,9 @@
 # Evidence — Foundation surface, requirement by requirement
 
-Line numbers below refer to file state at branch
-`issue-97-bbe597194dee`, head commit at the time this case study was
-compiled. The mapping resolves every requirement R1–R13 from
+Line numbers below started from branch `issue-97-bbe597194dee`, head
+commit at the time this case study was first compiled, and were extended
+on `issue-97-c24181022769` for PR #176. The mapping resolves every
+requirement R1–R16 from
 `docs/case-studies/issue-97/README.md` to concrete code, data, or
 documentation.
 
@@ -313,3 +314,59 @@ up without workflow changes. See
   this file.
 - `docs/case-studies/issue-97/evidence/cicd-template-review.md` —
   CI/CD template comparison.
+
+## R14 — Execution-boundary classification
+
+PR #176 adds `semantic-status` / `semanticStatus` /
+`semantic_status` alongside the existing trust `status`:
+
+- JS — `foundationReport()` fills `bySemanticStatus`, root
+  `semanticStatus`, and active implementation `semanticStatus`; the
+  formatter prints a `semantic statuses:` section and per-implementation
+  `semantic ...` text.
+- Rust — `FoundationReport` contains `by_semantic_status`, root
+  `semantic_status`, and active implementation `semantic_status`; the
+  formatter mirrors the JavaScript output.
+- Data/docs — `lib/self/foundations.lino` declares the semantic status
+  vocabulary; `docs/FOUNDATIONS.md` documents `host-trusted`,
+  `links-described`, `links-checked`, `links-evaluated`, and
+  `self-hosted`.
+- Tests — JS and Rust foundation-report tests assert the
+  `links-checked` proof-checking bucket and `host-trusted` host-boundary
+  bucket.
+
+## R15 — Links-level proof-checking relation
+
+`examples/proof-checking-relation.lino` represents a proof-checking
+judgement `( ?proof checks-as ?conclusion )` as links-level rule data.
+The `proof-checks-modus-ponens` rule has five premises: implication
+proof, antecedent proof, rule tag, and two proof-dependency edges. The
+final `(check-proof mp-rain-checks-wet)` returns `1`.
+
+Coverage:
+
+- `examples/expected.lino` pins the example output.
+- `js/tests/proof-substrate.test.mjs` checks the relation, report
+  metadata, and premise count.
+- `rust/tests/proof_substrate_tests.rs` mirrors the JavaScript test.
+- The shared-example harnesses replay the new `.lino` file in both
+  engines.
+
+## R16 — Host boundaries remain explicit
+
+The new semantic layer prevents `links-defined` from being read as
+self-hosted. The host-executed boundaries are visible in multiple places:
+
+- Truth tables are still active implementations with
+  `status: links-defined`, but `semanticStatus: links-checked`, because
+  JS/Rust perform lookup against links-level rows.
+- Proof rules and proof objects are links-level data, while structural
+  matching and recursive replay remain host-checked.
+- `lib/self/foundations.lino` explicitly marks substitution, freshness,
+  alpha-renaming, definitional equality, normalization, and WHNF as
+  `semantic-status host-trusted`.
+- JS/Rust foundation-report tests assert those host boundaries remain
+  `host-trusted`.
+- `docs/FOUNDATIONS.md` documents that truth-table lookup, substitution,
+  alpha-renaming, normalization, conversion, and proof-rule matching are
+  still host-executed.

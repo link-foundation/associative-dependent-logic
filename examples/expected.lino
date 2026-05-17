@@ -53,6 +53,8 @@
 
 (mtc-anum-theory.lino: 1 1 1)
 
+(proof-checking-relation.lino: 1)
+
 (propositional-logic.lino: 0.3 0.6 0.18 0.72 0.7 0.072 0.8320000000000001)
 
 (rocq-export.lino: 1 1 1 (type Natural))

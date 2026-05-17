@@ -355,6 +355,54 @@ describe('proof-object substrate as links', () => {
     assert.deepStrictEqual(out.results, [1]);
   });
 
+  it('checks a links-level proof-checking relation as data', () => {
+    const env = new Env();
+    const out = evaluate(`
+(root-construct proof-checking-relation
+  (kind checking-relation)
+  (status links-defined)
+  (semantic-status links-checked)
+  (depends-on proof-replay structural-equality proof-object))
+(rule proof-checks-modus-ponens
+  (premise (?implication-proof checks-as (?antecedent implies ?consequent)))
+  (premise (?antecedent-proof checks-as ?antecedent))
+  (premise (?proof applies-rule modus-ponens))
+  (premise (?proof uses-proof ?implication-proof))
+  (premise (?proof uses-proof ?antecedent-proof))
+  (conclusion (?proof checks-as ?consequent)))
+(axiom rain-implies-wet-proof
+  (judgement (rain-implies-wet checks-as (raining implies wet))))
+(axiom rain-proof
+  (judgement (rain-proof checks-as raining)))
+(axiom mp-rain-applies
+  (judgement (mp-rain applies-rule modus-ponens)))
+(axiom mp-rain-uses-implication
+  (judgement (mp-rain uses-proof rain-implies-wet)))
+(axiom mp-rain-uses-antecedent
+  (judgement (mp-rain uses-proof rain-proof)))
+(proof-object mp-rain-checks-wet
+  (applies proof-checks-modus-ponens)
+  (premise-by rain-implies-wet-proof)
+  (premise-by rain-proof)
+  (premise-by mp-rain-applies)
+  (premise-by mp-rain-uses-implication)
+  (premise-by mp-rain-uses-antecedent)
+  (conclusion (mp-rain checks-as wet)))
+(check-proof mp-rain-checks-wet)
+`, { env });
+    assert.deepStrictEqual(out.diagnostics, []);
+    assert.deepStrictEqual(out.results, [1]);
+
+    const report = env.foundationReport();
+    const proofChecking = report.rootConstructs.find(rc => rc.name === 'proof-checking-relation');
+    assert.ok(proofChecking);
+    assert.strictEqual(proofChecking.semanticStatus, 'links-checked');
+    const relationRule = report.proofRules.find(r => r.name === 'proof-checks-modus-ponens');
+    assert.ok(relationRule);
+    assert.strictEqual(relationRule.premises.length, 5);
+    assert.ok(report.bySemanticStatus['links-checked'].includes('proof-checking-relation'));
+  });
+
   it('detects cyclic proof-object dependencies', () => {
     const out = evaluate(`
 (rule identity
