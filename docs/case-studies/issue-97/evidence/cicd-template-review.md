@@ -200,8 +200,40 @@ remain captured in `docs/case-studies/issue-171/data/recommendations.md`.
 
 The CI workflow already runs `npm test` and `cargo test` on every push
 and PR; this can be confirmed by viewing recent runs of the `tests`
-workflow on the `issue-97-bbe597194dee` branch. The eight new JS
-tests in `foundations.test.mjs` and the eight new Rust tests in
-`foundations_tests.rs`, plus the extended self-evaluator coverage,
-all execute under the existing `tests` workflow. No additional
-workflow changes are needed for issue #97.
+workflow on the `issue-97-2fa46f510db9` branch. The extended JS
+coverage in `foundations.test.mjs`, `proof-substrate.test.mjs`, and
+`pure-links-strict.test.mjs`, plus the mirrored Rust coverage and
+self-evaluator checks, all execute under the existing `tests`
+workflow. No additional workflow changes are needed for issue #97.
+
+### 8.1 Phase 2–9 follow-up coverage (PR #175)
+
+The subsequent phases that landed on PR #175 add the following test
+files to the same suite — no workflow changes required:
+
+| Phase | JS test file | Rust test file |
+|-------|--------------|----------------|
+| 2 — equality provenance | `js/tests/foundations.test.mjs` (extended) | `rust/tests/foundations_tests.rs` (extended) |
+| 3 — proof-object replay | `js/tests/proof-substrate.test.mjs` | `rust/tests/proof_substrate_tests.rs` |
+| 4 — links-defined truth tables | `js/tests/foundations.test.mjs` (extended) | `rust/tests/foundations_tests.rs` (extended) |
+| 5 — links-defined typed-kernel fragment | `js/tests/typed-kernel-links.test.mjs` | `rust/tests/typed_kernel_links_tests.rs` |
+| 6 — pure-links strict mode | `js/tests/pure-links-strict.test.mjs` | `rust/tests/pure_links_strict_tests.rs` |
+| 7 — dependency-graph traversal | `js/tests/dependency-graph.test.mjs` | `rust/tests/dependency_graph_tests.rs` |
+| 8 — carrier enforcement | `js/tests/foundations.test.mjs` (extended) | `rust/tests/foundations_tests.rs` (extended) |
+| 9 — `mtc-anum` experimental profile + MTC theory fragment + serialization invariants | `js/tests/mtc-anum.test.mjs` (extended) | `rust/tests/mtc_anum_tests.rs` (extended) |
+
+All of these are picked up automatically by `npm test` and
+`cargo test --all-targets`, which the existing `tests.yml` workflow
+already runs on every push and PR.
+
+### 8.2 Re-audit findings (2026-05-16)
+
+A second pass against the four templates (described in this file
+plus a fresh independent review documented in this PR) confirms no
+new gaps were introduced by the Phase 2–9 work. The reportable
+findings remain T-1, T-2, T-3, and the pre-existing CI-debt items
+tracked in `docs/case-studies/issue-171/data/recommendations.md`.
+The pattern of *path-filtered triggers + safer concurrency
+(`!= 'refs/heads/main'`)* this repo has on its `tests.yml` and
+`api-docs.yml` is still ahead of all four templates and is worth
+contributing upstream once the foundation PR has merged.

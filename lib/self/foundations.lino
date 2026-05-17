@@ -4,7 +4,7 @@
 # Every entry is data. Evaluating this file with the host evaluator
 # populates `Env.rootConstructs` and `Env.foundations` with the same
 # descriptors that the host seeds on construction, plus the named
-# alternative foundations (boolean-classical, kleene-three-valued).
+# alternative foundations (boolean-classical, kleene-three-valued, boolean-links).
 #
 # Foundations are scopes that swap operator semantics without altering
 # the kernel: `(with-foundation <name> ...)` evaluates a body under the
@@ -128,6 +128,9 @@
 (root-construct max     (kind aggregator) (status host-primitive))
 (root-construct product (kind aggregator) (status host-primitive))
 (root-construct probabilistic_sum (kind aggregator) (status host-primitive))
+(root-construct truth-table-fallback
+  (kind truth-table-fallback)
+  (status host-derived))
 
 # Logical operators are bound to aggregators via `(<op>: <aggregator>)`
 # top-level declarations, so a foundation can pick e.g. Łukasiewicz vs.
@@ -136,7 +139,7 @@
 (root-construct not
   (kind truth-operator)
   (status user-configurable)
-  (depends-on truth-range))
+  (depends-on truth-range decimal-12-arithmetic))
 
 (root-construct and
   (kind truth-operator)
@@ -188,14 +191,19 @@
   (depends-on beta-reduction structural-equality))
 
 # ---------------------------------------------------------------------------
-# Typed kernel layer.
+# Typed kernel layer. The host primitives remain in place, but Phase 5 of
+# issue #97 also publishes a parallel links-defined replay via the
+# `typed-kernel-links` foundation (see below): the proof rules
+# `pi-formation`, `lambda-introduction`, `application-elimination`, and
+# `beta-conversion` mirror each kernel construct as data.
 # ---------------------------------------------------------------------------
 
 (root-construct Type
   (kind universe-form)
   (status host-primitive)
   (pure-links-ready no)
-  (planned-as links-defined))
+  (planned-as links-defined)
+  (links-defined-via typed-kernel-links))
 
 (root-construct Prop
   (kind universe-form)
@@ -205,22 +213,49 @@
 (root-construct Pi
   (kind binder)
   (status host-primitive)
-  (depends-on Type substitution freshness))
+  (depends-on Type substitution freshness)
+  (links-defined-via pi-formation))
 
 (root-construct lambda
   (kind binder)
   (status host-primitive)
-  (depends-on Pi substitution))
+  (depends-on Pi substitution)
+  (links-defined-via lambda-introduction))
 
 (root-construct apply
   (kind eliminator)
   (status host-primitive)
-  (depends-on lambda beta-reduction))
+  (depends-on lambda beta-reduction)
+  (links-defined-via application-elimination))
 
 (root-construct beta-reduction
   (kind reduction-rule)
   (status host-primitive)
-  (depends-on substitution freshness alpha-renaming))
+  (depends-on substitution freshness alpha-renaming)
+  (links-defined-via beta-conversion))
+
+# Phase 5 proof-substrate rules that play the role of the typed kernel
+# constructs above when the active foundation is `typed-kernel-links`.
+
+(root-construct pi-formation
+  (kind typing-rule)
+  (status links-defined)
+  (depends-on Pi))
+
+(root-construct lambda-introduction
+  (kind typing-rule)
+  (status links-defined)
+  (depends-on lambda))
+
+(root-construct application-elimination
+  (kind typing-rule)
+  (status links-defined)
+  (depends-on apply))
+
+(root-construct beta-conversion
+  (kind reduction-rule)
+  (status links-defined)
+  (depends-on beta-reduction))
 
 (root-construct substitution
   (kind meta-operation)
@@ -335,6 +370,34 @@
   (defines neither product))
 
 # ---------------------------------------------------------------------------
+# Two-valued Boolean logic whose connectives are finite truth-table rows.
+# The host still executes the table machinery, but the active operator
+# descriptors are marked `links-defined` because the rows below provide the
+# behaviour being selected by the foundation.
+# ---------------------------------------------------------------------------
+
+(foundation boolean-links
+  (description links-defined-two-valued-boolean-logic)
+  (numeric-domain boolean-zero-one)
+  (truth-domain boolean-two-valued)
+  (extends default-rml)
+  (carrier 0 1)
+  (strict-carrier)
+  (truth-table and
+    (1 1 -> 1)
+    (1 0 -> 0)
+    (0 1 -> 0)
+    (0 0 -> 0))
+  (truth-table or
+    (1 1 -> 1)
+    (1 0 -> 1)
+    (0 1 -> 1)
+    (0 0 -> 0))
+  (truth-table not
+    (1 -> 0)
+    (0 -> 1)))
+
+# ---------------------------------------------------------------------------
 # Two-valued classical Boolean logic. Numeric domain is {0,1}; operators
 # coincide with `min` / `max` / mirror-around-midpoint, recovering the
 # Łukasiewicz/Boolean strong connectives.
@@ -365,3 +428,27 @@
   (defines or max)
   (defines both min)
   (defines neither product))
+
+# ---------------------------------------------------------------------------
+# Links-defined typed-kernel fragment (issue #97, Phase 5). The four
+# proof-substrate rules below replay Pi-formation, lambda-introduction,
+# application-elimination, and beta-conversion as ordinary
+# `(rule ...)` / `(proof-object ...)` data; the trust audit therefore
+# reports `links-defined` derivations for the typed kernel surface even
+# though the host kernel continues to drive evaluation.
+#
+# A concrete derivation lives in `examples/typed-kernel-links.lino`,
+# and the JS test in `js/tests/typed-kernel-links.test.mjs` plus the
+# Rust mirror in `rust/tests/typed_kernel_links_tests.rs` replay it
+# through `(check-proof ...)`.
+# ---------------------------------------------------------------------------
+
+(foundation typed-kernel-links
+  (description links-defined-typed-kernel-fragment)
+  (numeric-domain decimal-12)
+  (truth-domain default-truth)
+  (extends default-rml)
+  (uses pi-formation)
+  (uses lambda-introduction)
+  (uses application-elimination)
+  (uses beta-conversion))

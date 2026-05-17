@@ -11,6 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import {
+  checkProofObject,
   decRound,
   evaluateFile,
   isNum,
@@ -19,6 +20,9 @@ import {
   parseBinding,
   parseLino,
   parseOne,
+  parseProofAssumptionForm,
+  parseProofObjectForm,
+  parseRuleForm,
   quantize,
   run,
   subst,
@@ -79,6 +83,37 @@ const REQUIRED_EVAL_RULES = [
   '(eval (type of expression))',
   '(eval (expression of type))',
   '(eval (domain name request))',
+  '(eval (root-construct name details))',
+  '(eval (foundation name details))',
+  '(eval (with-foundation name body))',
+  '(eval (foundation-report))',
+  '(eval (strict-foundation pure-links))',
+  '(eval (allow-host-primitive names))',
+  '(eval (assumption name (judgement judgement)))',
+  '(eval (axiom name (judgement judgement)))',
+  '(eval (proof-object name clauses))',
+  '(eval (check-proof name))',
+  '(eval (encodeAnum node))',
+  '(eval (decodeAnum payload))',
+];
+
+const REQUIRED_SURFACE_RULES = [
+  '(foundation-clause (description text))',
+  '(foundation-clause (uses name))',
+  '(foundation-clause (defines operator implementation))',
+  '(foundation-clause (extends name))',
+  '(foundation-clause (numeric-domain name))',
+  '(foundation-clause (truth-domain name))',
+  '(foundation-clause (carrier values))',
+  '(foundation-clause strict-carrier)',
+  '(foundation-clause (truth-table operator rows))',
+  '(foundation-clause experimental)',
+  '(foundation-clause (root symbol))',
+  '(foundation-clause (abit symbol bits))',
+  '(proof-object-clause (premise judgement))',
+  '(proof-object-clause (premise-by name))',
+  '(proof-object-clause (uses names))',
+  '(equality-provenance left right)',
 ];
 
 const REQUIRED_OPERATORS = [
@@ -91,6 +126,16 @@ function parseForms(source) {
 
 function evaluatorForms() {
   return parseForms(readFileSync(evaluatorPath, 'utf8'));
+}
+
+function rulePatterns(forms) {
+  const patterns = new Set();
+  for (const form of forms) {
+    if (Array.isArray(form) && form[0] === 'rule') {
+      patterns.add(keyOf(form[1]));
+    }
+  }
+  return patterns;
 }
 
 function evalRulePatterns(forms) {
@@ -122,6 +167,16 @@ function desugarHoas(node) {
   return mapped;
 }
 
+function isProofRuleShape(node) {
+  return Array.isArray(node) &&
+    node[0] === 'rule' &&
+    typeof node[1] === 'string' &&
+    node[1] &&
+    node.length >= 3 &&
+    node.slice(2).every(c => Array.isArray(c) && (c[0] === 'premise' || c[0] === 'conclusion')) &&
+    node.slice(2).some(c => c[0] === 'conclusion');
+}
+
 class EncodedEvaluator {
   constructor(rulePatterns) {
     this.rulePatterns = rulePatterns;
@@ -141,7 +196,23 @@ class EncodedEvaluator {
     this.foundations = new Map();
     this.foundationStack = [];
     this.activeFoundation = 'default-rml';
+    this.proofRules = new Map();
+    this.proofAssumptions = new Map();
+    this.proofObjects = new Map();
     this.reinitOps();
+    this.registerBuiltinFoundations();
+  }
+
+  getProofRule(name) {
+    return this.proofRules.get(name) || null;
+  }
+
+  getProofAssumption(name) {
+    return this.proofAssumptions.get(name) || null;
+  }
+
+  getProofObject(name) {
+    return this.proofObjects.get(name) || null;
   }
 
   requireRule(pattern) {
@@ -163,6 +234,31 @@ class EncodedEvaluator {
     this.ops.set('<', (a, b) => a < b ? this.hi : this.lo);
     this.ops.set('<=', (a, b) => a <= b ? this.hi : this.lo);
     this.initTruthConstants();
+  }
+
+  registerBuiltinFoundations() {
+    this.foundations.set('boolean-links', {
+      name: 'boolean-links',
+      defines: new Map(),
+      truthTables: new Map([
+        ['and', [
+          { inputs: ['1', '1'], output: '1' },
+          { inputs: ['1', '0'], output: '0' },
+          { inputs: ['0', '1'], output: '0' },
+          { inputs: ['0', '0'], output: '0' },
+        ]],
+        ['or', [
+          { inputs: ['1', '1'], output: '1' },
+          { inputs: ['1', '0'], output: '1' },
+          { inputs: ['0', '1'], output: '1' },
+          { inputs: ['0', '0'], output: '0' },
+        ]],
+        ['not', [
+          { inputs: ['1'], output: '0' },
+          { inputs: ['0'], output: '1' },
+        ]],
+      ]),
+    });
   }
 
   initTruthConstants() {
@@ -241,6 +337,73 @@ class EncodedEvaluator {
       this.requireRule('(eval (root-construct name details))');
       return;
     }
+    if (Array.isArray(form) && form[0] === 'foundation-report') {
+      this.requireRule('(eval (foundation-report))');
+      return;
+    }
+    if (Array.isArray(form) && form[0] === 'strict-foundation') {
+      this.requireRule('(eval (strict-foundation pure-links))');
+      return;
+    }
+    if (Array.isArray(form) && form[0] === 'allow-host-primitive') {
+      this.requireRule('(eval (allow-host-primitive names))');
+      return;
+    }
+    if (Array.isArray(form) && form[0] === 'rule' && isProofRuleShape(form)) {
+      try {
+        const rule = parseRuleForm(form);
+        this.proofRules.set(rule.name, {
+          name: rule.name,
+          premises: rule.premises ? rule.premises.slice() : [],
+          conclusion: rule.conclusion,
+        });
+      } catch {
+        // Ignore malformed declarations; host evaluator emits diagnostics
+        // separately and we only care about parity for `(check-proof ...)`.
+      }
+      return;
+    }
+    if (Array.isArray(form) && (form[0] === 'assumption' || form[0] === 'axiom')) {
+      this.requireRule(`(eval (${form[0]} name (judgement judgement)))`);
+      try {
+        const assumption = parseProofAssumptionForm(form);
+        this.proofAssumptions.set(assumption.name, {
+          name: assumption.name,
+          kind: assumption.kind || 'assumption',
+          judgement: assumption.judgement,
+        });
+      } catch {
+        // Same rationale as `(rule ...)` above.
+      }
+      return;
+    }
+    if (Array.isArray(form) && form[0] === 'proof-object') {
+      this.requireRule('(eval (proof-object name clauses))');
+      try {
+        const po = parseProofObjectForm(form);
+        this.proofObjects.set(po.name, {
+          name: po.name,
+          rule: po.rule,
+          premises: po.premises ? po.premises.slice() : [],
+          premiseRefs: po.premiseRefs ? po.premiseRefs.slice() : [],
+          conclusion: po.conclusion,
+        });
+      } catch {
+        // Same rationale as `(rule ...)` above.
+      }
+      return;
+    }
+    if (Array.isArray(form) && form[0] === 'check-proof') {
+      this.requireRule('(eval (check-proof name))');
+      if (form.length !== 2 || typeof form[1] !== 'string') return;
+      const verdict = checkProofObject(this, form[1]);
+      results.push(verdict.ok ? 1 : 0);
+      return;
+    }
+    if (Array.isArray(form) && (form[0] === 'encodeAnum' || form[0] === 'decodeAnum')) {
+      this.requireRule(`(eval (${form[0]} ${form[0] === 'encodeAnum' ? 'node' : 'payload'}))`);
+      return;
+    }
     const value = this.evalNode(form);
     if (value && typeof value === 'object' && value.query) {
       results.push(value.value);
@@ -250,12 +413,21 @@ class EncodedEvaluator {
   registerFoundation(form) {
     if (!Array.isArray(form) || form.length < 2 || typeof form[1] !== 'string') return;
     const name = form[1];
-    const entry = { name, defines: new Map() };
+    const entry = { name, defines: new Map(), truthTables: new Map() };
     for (let i = 2; i < form.length; i++) {
       const part = form[i];
       if (!Array.isArray(part) || part.length === 0) continue;
       if (part[0] === 'defines' && typeof part[1] === 'string' && typeof part[2] === 'string') {
         entry.defines.set(part[1], part[2]);
+      } else if (part[0] === 'truth-table' && typeof part[1] === 'string') {
+        const rows = [];
+        for (const row of part.slice(2)) {
+          if (!Array.isArray(row)) continue;
+          const arrow = row.indexOf('->');
+          if (arrow <= 0 || arrow !== row.length - 2) continue;
+          rows.push({ inputs: row.slice(0, arrow), output: row[row.length - 1] });
+        }
+        if (rows.length > 0) entry.truthTables.set(part[1], rows);
       } else if (part[0] === 'description' && typeof part[1] === 'string') {
         entry.description = part[1];
       } else if (part[0] === 'numeric-domain' && typeof part[1] === 'string') {
@@ -269,9 +441,13 @@ class EncodedEvaluator {
     const foundation = this.foundations.get(name);
     if (!foundation) return false;
     const snapshot = [];
-    for (const [opName, implName] of foundation.defines) {
+    const remember = (opName) => {
+      if (snapshot.some(([name]) => name === opName)) return;
       const prev = this.ops.has(opName) ? this.ops.get(opName) : null;
       snapshot.push([opName, prev]);
+    };
+    for (const [opName, implName] of foundation.defines) {
+      remember(opName);
       let impl;
       try {
         impl = this.aggregator(implName);
@@ -284,9 +460,45 @@ class EncodedEvaluator {
       }
       this.ops.set(opName, impl);
     }
+    if (foundation.truthTables instanceof Map) {
+      for (const [opName, rows] of foundation.truthTables) {
+        remember(opName);
+        const previous = this.ops.has(opName) ? this.ops.get(opName) : null;
+        this.ops.set(opName, this.truthTableOp(rows, previous));
+      }
+    }
     this.foundationStack.push({ previous: this.activeFoundation, snapshot });
     this.activeFoundation = name;
     return true;
+  }
+
+  truthTokenValue(token) {
+    if (typeof token !== 'string') return null;
+    if (isNum(token)) return this.clamp(parseFloat(token));
+    if (this.symbolProb.has(token)) return this.getSymbolProb(token);
+    return null;
+  }
+
+  truthTableOp(rows, previous) {
+    return (...args) => {
+      for (const row of rows) {
+        if (row.inputs.length !== args.length) continue;
+        let ok = true;
+        for (let i = 0; i < args.length; i++) {
+          if (row.inputs[i] === '_') continue;
+          const expected = this.truthTokenValue(row.inputs[i]);
+          if (expected === null || Math.abs(args[i] - expected) >= 1e-9) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) {
+          const out = this.truthTokenValue(row.output);
+          return out === null ? this.lo : out;
+        }
+      }
+      return previous ? previous(...args) : this.lo;
+    };
   }
 
   exitFoundation() {
@@ -881,6 +1093,14 @@ describe('self evaluator', () => {
     const operators = builtInOperators(forms);
     for (const operator of REQUIRED_OPERATORS) {
       assert.ok(operators.has(operator), `missing built-in operator ${operator}`);
+    }
+  });
+
+  it('declares the Phase 2-9 foundation and proof clauses as links', () => {
+    const forms = evaluatorForms();
+    const rules = rulePatterns(forms);
+    for (const pattern of REQUIRED_SURFACE_RULES) {
+      assert.ok(rules.has(pattern), `missing surface rule ${pattern}`);
     }
   });
 

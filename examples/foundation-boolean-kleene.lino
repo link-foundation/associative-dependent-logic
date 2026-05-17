@@ -6,9 +6,10 @@
 # See: https://en.wikipedia.org/wiki/Three-valued_logic
 #      https://en.wikipedia.org/wiki/Boolean_algebra
 
-# Two foundations: Boolean classical (both `and` and `or` collapse to
-# `min`/`max` over {0,1}-style values) and strong Kleene (same `min`/
-# `max` shape but over the unit interval).
+# Two host-backed foundations: Boolean classical (both `and` and `or`
+# collapse to `min`/`max` over {0,1}-style values) and strong Kleene
+# (same `min`/`max` shape but over the unit interval). A bundled
+# `boolean-links` foundation below uses finite truth-table rows instead.
 (foundation boolean-classical
   (description two-valued-classical-boolean-logic)
   (defines and min)
@@ -40,6 +41,18 @@
   (? ((a = true) and (b = true))))
 (with-foundation kleene-three-valued
   (? ((a = true) or (b = true))))
+
+# Bundled truth-table foundation: exact two-valued rows for `and`, `or`,
+# and `not`, with a strict {0,1} carrier.
+(t: t is t)
+(f: f is f)
+((t = true) has probability 1)
+((f = true) has probability 0)
+
+(with-foundation boolean-links
+  (? ((t = true) and (f = true)))
+  (? ((t = true) or (f = true)))
+  (? (not (f = true))))
 
 # Default foundation is restored on exit → still 0.5/0.6
 (? ((a = true) and (b = true)))

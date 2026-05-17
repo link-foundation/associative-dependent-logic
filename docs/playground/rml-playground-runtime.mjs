@@ -2203,6 +2203,15 @@ var Env = class {
     this.foundations = /* @__PURE__ */ new Map();
     this.activeFoundation = "default-rml";
     this._foundationStack = [];
+    this.activeImplementations = /* @__PURE__ */ new Map();
+    this.proofRules = /* @__PURE__ */ new Map();
+    this.proofAssumptions = /* @__PURE__ */ new Map();
+    this.proofObjects = /* @__PURE__ */ new Map();
+    this._strictCarrier = false;
+    this._carrier = null;
+    this._carrierLabel = null;
+    this.strictPureLinks = false;
+    this.allowedHostPrimitives = /* @__PURE__ */ new Set();
     this._registerDefaultFoundation();
     this._tracer = null;
     this._currentSpan = null;
@@ -2375,6 +2384,58 @@ var Env = class {
       numericDomain: "decimal-12",
       truthDomain: "default-truth"
     });
+    this.foundations.set("mtc-anum", {
+      name: "mtc-anum",
+      description: "experimental metatheory-of-links foundation (anum serialization)",
+      uses: [],
+      defines: /* @__PURE__ */ new Map(),
+      extends: null,
+      numericDomain: null,
+      truthDomain: "mtc-abits",
+      carrier: null,
+      strictCarrier: false,
+      truthTables: null,
+      experimental: true,
+      root: "\u221E",
+      abits: [
+        { symbol: "[", meaning: "start-of-meaning" },
+        { symbol: "]", meaning: "end-of-meaning" },
+        { symbol: "1", meaning: "unit-of-meaning" },
+        { symbol: "0", meaning: "zero-of-meaning" }
+      ]
+    });
+    this.foundations.set("boolean-links", {
+      name: "boolean-links",
+      description: "links-defined two-valued Boolean logic via finite truth tables",
+      uses: [],
+      defines: /* @__PURE__ */ new Map(),
+      extends: null,
+      numericDomain: "boolean-zero-one",
+      truthDomain: "boolean-two-valued",
+      carrier: ["0", "1"],
+      strictCarrier: true,
+      truthTables: /* @__PURE__ */ new Map([
+        ["and", [
+          { inputs: ["1", "1"], output: "1" },
+          { inputs: ["1", "0"], output: "0" },
+          { inputs: ["0", "1"], output: "0" },
+          { inputs: ["0", "0"], output: "0" }
+        ]],
+        ["or", [
+          { inputs: ["1", "1"], output: "1" },
+          { inputs: ["1", "0"], output: "1" },
+          { inputs: ["0", "1"], output: "1" },
+          { inputs: ["0", "0"], output: "0" }
+        ]],
+        ["not", [
+          { inputs: ["1"], output: "0" },
+          { inputs: ["0"], output: "1" }
+        ]]
+      ]),
+      experimental: false,
+      root: null,
+      abits: null
+    });
     seedBuiltinRootConstructs(this);
   }
   registerRootConstruct(descriptor) {
@@ -2410,20 +2471,80 @@ var Env = class {
       throw new RmlError("E062", `Unknown foundation: ${name}`);
     }
     const snapshot = /* @__PURE__ */ new Map();
+    const implementationSnapshot = /* @__PURE__ */ new Map();
+    const snapshotImplementation = (opName) => {
+      if (implementationSnapshot.has(opName)) return;
+      const current = this.activeImplementations.get(opName);
+      implementationSnapshot.set(opName, current ? {
+        ...current,
+        dependsOn: Array.isArray(current.dependsOn) ? current.dependsOn.slice() : []
+      } : null);
+    };
     if (foundation.defines && foundation.defines.size > 0) {
       for (const [opName, implName] of foundation.defines.entries()) {
         const fn = aggregatorOpFromName(this, implName);
         if (fn === null) continue;
+        snapshotImplementation(opName);
         snapshot.set(opName, this.ops.has(opName) ? this.ops.get(opName) : null);
         this.ops.set(opName, fn);
+        this.activeImplementations.set(opName, {
+          construct: opName,
+          foundation: name,
+          implementation: implName,
+          status: "host-primitive",
+          dependsOn: [implName]
+        });
       }
     }
-    this._foundationStack.push({ name: this.activeFoundation, snapshot });
+    if (foundation.truthTables instanceof Map && foundation.truthTables.size > 0) {
+      for (const [opName, rows] of foundation.truthTables.entries()) {
+        if (!snapshot.has(opName)) {
+          snapshot.set(opName, this.ops.has(opName) ? this.ops.get(opName) : null);
+        }
+        const previous = this.ops.has(opName) ? this.ops.get(opName) : null;
+        const fn = truthTableOpFromRows(this, opName, rows, previous);
+        if (fn === null) continue;
+        snapshotImplementation(opName);
+        this.ops.set(opName, fn);
+        this.activeImplementations.set(opName, {
+          construct: opName,
+          foundation: name,
+          implementation: `truth-table:${name}/${opName}`,
+          status: "links-defined",
+          dependsOn: []
+        });
+      }
+    }
+    const carrierFrame = {
+      strictCarrier: this._strictCarrier === true,
+      carrier: this._carrier instanceof Set ? new Set(this._carrier) : null,
+      carrierLabel: this._carrierLabel || null
+    };
+    if (foundation.strictCarrier === true && Array.isArray(foundation.carrier) && foundation.carrier.length > 0) {
+      this._strictCarrier = true;
+      this._carrier = /* @__PURE__ */ new Set();
+      this._carrierLabel = foundation.carrier.join(" ");
+      for (const tok of foundation.carrier) {
+        const num = Number(tok);
+        if (Number.isFinite(num)) {
+          this._carrier.add(num);
+          continue;
+        }
+        if (this.symbolProb.has(tok)) {
+          this._carrier.add(this.symbolProb.get(tok));
+        }
+      }
+    }
+    this._foundationStack.push({ name: this.activeFoundation, snapshot, implementationSnapshot, carrierFrame });
     this.activeFoundation = name;
   }
   exitFoundation() {
     if (this._foundationStack.length === 0) {
       this.activeFoundation = "default-rml";
+      this.activeImplementations.clear();
+      this._strictCarrier = false;
+      this._carrier = null;
+      this._carrierLabel = null;
       return;
     }
     const frame = this._foundationStack.pop();
@@ -2436,7 +2557,37 @@ var Env = class {
         }
       }
     }
+    if (frame && frame.implementationSnapshot) {
+      for (const [opName, impl] of frame.implementationSnapshot.entries()) {
+        if (impl === null) {
+          this.activeImplementations.delete(opName);
+        } else {
+          this.activeImplementations.set(opName, impl);
+        }
+      }
+    }
+    if (frame && frame.carrierFrame) {
+      this._strictCarrier = frame.carrierFrame.strictCarrier === true;
+      this._carrier = frame.carrierFrame.carrier instanceof Set ? frame.carrierFrame.carrier : null;
+      this._carrierLabel = frame.carrierFrame.carrierLabel || null;
+    } else {
+      this._strictCarrier = false;
+      this._carrier = null;
+      this._carrierLabel = null;
+    }
     this.activeFoundation = frame && typeof frame.name === "string" ? frame.name : "default-rml";
+  }
+  // Check `value` against the active foundation's carrier. Returns null when
+  // the carrier is inactive or the value is legal, or a human-readable
+  // message otherwise (consumed by the caller to build an E063 diagnostic).
+  checkCarrierValue(value) {
+    if (this._strictCarrier !== true || !(this._carrier instanceof Set) || this._carrier.size === 0) {
+      return null;
+    }
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    if (this._carrier.has(value)) return null;
+    const allowed = [...this._carrier].sort((a, b) => a - b).join(", ");
+    return `value ${formatTraceValue(value)} is not in active carrier {${allowed}}`;
   }
   // Build a structured trust / foundation report. The shape is intentionally
   // plain so callers can stringify it (CLI, docs) or test against it (unit
@@ -2477,9 +2628,106 @@ var Env = class {
         defines: [...(f.defines || /* @__PURE__ */ new Map()).entries()].map(([k, v]) => ({ construct: k, implementation: v })),
         extends: f.extends || null,
         numericDomain: f.numericDomain || null,
-        truthDomain: f.truthDomain || null
-      })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+        truthDomain: f.truthDomain || null,
+        carrier: Array.isArray(f.carrier) ? f.carrier.slice() : null,
+        strictCarrier: f.strictCarrier === true,
+        truthTables: f.truthTables instanceof Map && f.truthTables.size > 0 ? [...f.truthTables.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([op, rows]) => ({
+          op,
+          rows: rows.map((r) => ({ inputs: r.inputs.slice(), output: r.output }))
+        })) : null,
+        experimental: f.experimental === true,
+        root: f.root || null,
+        abits: Array.isArray(f.abits) && f.abits.length > 0 ? f.abits.map((a) => ({ symbol: a.symbol, meaning: a.meaning })) : null
+      })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      activeImplementations: [...this.activeImplementations.entries()].map(([construct, impl]) => ({
+        construct,
+        foundation: impl.foundation || null,
+        implementation: impl.implementation || null,
+        status: impl.status || null,
+        dependsOn: Array.isArray(impl.dependsOn) ? impl.dependsOn.slice() : []
+      })).sort((a, b) => a.construct < b.construct ? -1 : a.construct > b.construct ? 1 : 0),
+      proofRules: [...this.proofRules.entries()].map(([name, r]) => ({
+        name,
+        premises: r.premises.map((p) => keyOf(p)),
+        conclusion: keyOf(r.conclusion)
+      })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      proofAssumptions: [...this.proofAssumptions.entries()].map(([name, a]) => ({
+        name,
+        kind: a.kind,
+        judgement: keyOf(a.judgement)
+      })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      proofObjects: [...this.proofObjects.entries()].map(([name, po]) => ({
+        name,
+        rule: po.rule,
+        premises: po.premises.map((p) => keyOf(p)),
+        premiseRefs: (po.premiseRefs || []).slice(),
+        conclusion: keyOf(po.conclusion)
+      })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      strictPureLinks: this.strictPureLinks === true,
+      allowedHostPrimitives: [...this.allowedHostPrimitives].sort(),
+      dependencyGraph: buildDependencyGraph(this)
     };
+  }
+  // Return the transitive closure of a construct's dependencies, breadth-first
+  // and deterministically sorted at every level. Unknown construct names
+  // return `null`. Missing intermediate deps are silently skipped so a
+  // foundation that references a construct it has not yet registered can
+  // still report cleanly.
+  dependencyClosure(name) {
+    if (typeof name !== "string" || !name) return null;
+    if (!this.rootConstructs.has(name)) return null;
+    return closureFor(this, name);
+  }
+  // ---------- Proof-object substrate (issue #97, Phase 3) ----------
+  registerProofRule(rule) {
+    if (!rule || typeof rule.name !== "string" || !rule.name) {
+      throw new RmlError("E064", "rule declaration requires a name");
+    }
+    this.proofRules.set(rule.name, {
+      name: rule.name,
+      premises: rule.premises ? rule.premises.slice() : [],
+      conclusion: rule.conclusion
+    });
+    return this.proofRules.get(rule.name);
+  }
+  getProofRule(name) {
+    return this.proofRules.get(name) || null;
+  }
+  registerProofAssumption(assumption) {
+    if (!assumption || typeof assumption.name !== "string" || !assumption.name) {
+      throw new RmlError("E064", "proof assumption declaration requires a name");
+    }
+    if (assumption.judgement === null || assumption.judgement === void 0) {
+      throw new RmlError("E064", `${assumption.kind || "assumption"} ${assumption.name} requires a judgement`);
+    }
+    this.proofAssumptions.set(assumption.name, {
+      name: assumption.name,
+      kind: assumption.kind || "assumption",
+      judgement: assumption.judgement
+    });
+    return this.proofAssumptions.get(assumption.name);
+  }
+  getProofAssumption(name) {
+    return this.proofAssumptions.get(name) || null;
+  }
+  registerProofObject(po) {
+    if (!po || typeof po.name !== "string" || !po.name) {
+      throw new RmlError("E064", "proof-object declaration requires a name");
+    }
+    if (typeof po.rule !== "string" || !po.rule) {
+      throw new RmlError("E064", `proof-object ${po.name} must include (applies <rule>)`);
+    }
+    this.proofObjects.set(po.name, {
+      name: po.name,
+      rule: po.rule,
+      premises: po.premises ? po.premises.slice() : [],
+      premiseRefs: po.premiseRefs ? po.premiseRefs.slice() : [],
+      conclusion: po.conclusion
+    });
+    return this.proofObjects.get(po.name);
+  }
+  getProofObject(name) {
+    return this.proofObjects.get(name) || null;
   }
 };
 function mergeRootConstructDescriptors(previous, next) {
@@ -2517,6 +2765,126 @@ function mergeRootConstructDescriptors(previous, next) {
   if (next.foundation !== void 0 && next.foundation !== null) base.foundation = next.foundation;
   return base;
 }
+function closureFor(env, name) {
+  if (!env.rootConstructs.has(name)) return null;
+  const seen = /* @__PURE__ */ new Set();
+  const order = [];
+  const queue = [name];
+  while (queue.length > 0) {
+    const next = queue.shift();
+    if (seen.has(next)) continue;
+    seen.add(next);
+    if (next !== name) order.push(next);
+    const rc = env.rootConstructs.get(next);
+    if (!rc) continue;
+    const deps = Array.isArray(rc.dependsOn) ? rc.dependsOn.slice().sort() : [];
+    for (const dep of deps) {
+      if (!seen.has(dep)) queue.push(dep);
+    }
+  }
+  return order.sort();
+}
+function buildDependencyGraph(env) {
+  const entries = [...env.rootConstructs.keys()].sort();
+  const out = {};
+  for (const name of entries) {
+    out[name] = closureFor(env, name) || [];
+  }
+  return out;
+}
+function encodeAnum(node) {
+  if (Array.isArray(node)) {
+    let out = "[1";
+    for (const child of node) out += encodeAnum(child);
+    return out + "]";
+  }
+  if (typeof node === "string") {
+    return "[0" + stringToBitstring(node) + "]";
+  }
+  if (typeof node === "number") {
+    return "[0" + stringToBitstring(String(node)) + "]";
+  }
+  throw new RmlError("E066", `cannot anum-encode value of type ${typeof node}`);
+}
+function stringToBitstring(s) {
+  const bytes = new TextEncoder().encode(s);
+  let bits = "";
+  for (const byte of bytes) bits += byte.toString(2).padStart(8, "0");
+  return bits;
+}
+function bitstringToString(bits) {
+  if (bits.length % 8 !== 0) {
+    throw new RmlError(
+      "E066",
+      `anum-decode: leaf bit-count ${bits.length} is not byte-aligned`
+    );
+  }
+  const bytes = new Uint8Array(bits.length / 8);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(bits.substring(i * 8, i * 8 + 8), 2);
+  }
+  return new TextDecoder().decode(bytes);
+}
+function decodeAnum(s) {
+  if (typeof s !== "string") {
+    throw new RmlError("E066", "anum-decode requires a string input");
+  }
+  const { node, pos } = decodeAnumAt(s, 0);
+  if (pos !== s.length) {
+    throw new RmlError("E066", `anum-decode: trailing data at position ${pos}`);
+  }
+  return node;
+}
+function decodeAnumAt(s, pos) {
+  if (s[pos] !== "[") {
+    throw new RmlError("E066", `anum-decode: expected '[' at position ${pos}`);
+  }
+  pos++;
+  const tag = s[pos];
+  if (tag === "0") {
+    pos++;
+    let bits = "";
+    while (pos < s.length && s[pos] !== "]") {
+      if (s[pos] !== "0" && s[pos] !== "1") {
+        throw new RmlError(
+          "E066",
+          `anum-decode: leaf payload may only contain '0' or '1' (got '${s[pos]}' at ${pos})`
+        );
+      }
+      bits += s[pos];
+      pos++;
+    }
+    if (s[pos] !== "]") {
+      throw new RmlError("E066", `anum-decode: unterminated leaf starting before position ${pos}`);
+    }
+    pos++;
+    return { node: bitstringToString(bits), pos };
+  }
+  if (tag === "1") {
+    pos++;
+    const items = [];
+    while (pos < s.length && s[pos] !== "]") {
+      if (s[pos] !== "[") {
+        throw new RmlError(
+          "E066",
+          `anum-decode: list child must start with '[' (got '${s[pos]}' at ${pos})`
+        );
+      }
+      const { node, pos: next } = decodeAnumAt(s, pos);
+      items.push(node);
+      pos = next;
+    }
+    if (s[pos] !== "]") {
+      throw new RmlError("E066", `anum-decode: unterminated list starting before position ${pos}`);
+    }
+    pos++;
+    return { node: items, pos };
+  }
+  throw new RmlError(
+    "E066",
+    `anum-decode: expected tag '0' or '1' after '[' at position ${pos}`
+  );
+}
 function mergeFoundationDescriptors(previous, next) {
   const base = previous ? {
     name: previous.name,
@@ -2525,7 +2893,13 @@ function mergeFoundationDescriptors(previous, next) {
     defines: new Map(previous.defines || []),
     extends: previous.extends || null,
     numericDomain: previous.numericDomain || null,
-    truthDomain: previous.truthDomain || null
+    truthDomain: previous.truthDomain || null,
+    carrier: Array.isArray(previous.carrier) ? previous.carrier.slice() : null,
+    strictCarrier: previous.strictCarrier === true,
+    truthTables: previous.truthTables instanceof Map ? new Map([...previous.truthTables.entries()].map(([k, rows]) => [k, rows.map((r) => ({ inputs: r.inputs.slice(), output: r.output }))])) : null,
+    experimental: previous.experimental === true,
+    root: previous.root || null,
+    abits: Array.isArray(previous.abits) ? previous.abits.map((a) => ({ symbol: a.symbol, meaning: a.meaning })) : null
   } : {
     name: next.name,
     description: null,
@@ -2533,7 +2907,13 @@ function mergeFoundationDescriptors(previous, next) {
     defines: /* @__PURE__ */ new Map(),
     extends: null,
     numericDomain: null,
-    truthDomain: null
+    truthDomain: null,
+    carrier: null,
+    strictCarrier: false,
+    truthTables: null,
+    experimental: false,
+    root: null,
+    abits: null
   };
   base.name = next.name;
   if (next.description) base.description = next.description;
@@ -2552,6 +2932,28 @@ function mergeFoundationDescriptors(previous, next) {
   if (next.extends) base.extends = next.extends;
   if (next.numericDomain) base.numericDomain = next.numericDomain;
   if (next.truthDomain) base.truthDomain = next.truthDomain;
+  if (Array.isArray(next.carrier) && next.carrier.length > 0) {
+    base.carrier = next.carrier.slice();
+  }
+  if (next.strictCarrier === true) base.strictCarrier = true;
+  if (next.truthTables instanceof Map && next.truthTables.size > 0) {
+    if (!(base.truthTables instanceof Map)) base.truthTables = /* @__PURE__ */ new Map();
+    for (const [k, rows] of next.truthTables.entries()) {
+      base.truthTables.set(k, rows.map((r) => ({ inputs: r.inputs.slice(), output: r.output })));
+    }
+  }
+  if (next.experimental === true) base.experimental = true;
+  if (next.root) base.root = next.root;
+  if (Array.isArray(next.abits) && next.abits.length > 0) {
+    if (!Array.isArray(base.abits)) base.abits = [];
+    const seen = new Set(base.abits.map((a) => a.symbol));
+    for (const a of next.abits) {
+      if (!seen.has(a.symbol)) {
+        seen.add(a.symbol);
+        base.abits.push({ symbol: a.symbol, meaning: a.meaning });
+      }
+    }
+  }
   return base;
 }
 function aggregatorOpFromName(env, sel) {
@@ -2560,6 +2962,45 @@ function aggregatorOpFromName(env, sel) {
   const agg = sel === "avg" ? (xs) => xs.reduce((a, b) => a + b, 0) / xs.length : sel === "min" ? (xs) => xs.length ? Math.min(...xs) : lo : sel === "max" ? (xs) => xs.length ? Math.max(...xs) : lo : sel === "product" || sel === "prod" ? (xs) => xs.reduce((a, b) => a * b, 1) : sel === "probabilistic_sum" || sel === "ps" ? (xs) => 1 - xs.reduce((a, b) => a * (1 - b), 1) : null;
   if (!agg) return null;
   return (...xs) => xs.length ? agg(xs) : lo;
+}
+function resolveTruthTableValue(env, tok) {
+  if (typeof tok !== "string") return null;
+  const num = Number(tok);
+  if (Number.isFinite(num)) return num;
+  if (env.symbolProb.has(tok)) return env.symbolProb.get(tok);
+  return null;
+}
+function truthTableOpFromRows(env, opName, rows, previous) {
+  const resolved = [];
+  for (const row of rows) {
+    const inputs = row.inputs.map((t) => resolveTruthTableValue(env, t));
+    const output = resolveTruthTableValue(env, row.output);
+    if (inputs.some((v) => v === null) || output === null) {
+      continue;
+    }
+    resolved.push({ inputs, output });
+  }
+  if (resolved.length === 0) return null;
+  const fallback = typeof previous === "function" ? previous : null;
+  return (...xs) => {
+    for (const row of resolved) {
+      if (row.inputs.length !== xs.length) continue;
+      let match = true;
+      for (let i = 0; i < xs.length; i++) {
+        if (typeof xs[i] !== "number" || !Number.isFinite(xs[i])) {
+          match = false;
+          break;
+        }
+        if (Math.abs(xs[i] - row.inputs[i]) > 1e-12) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return row.output;
+    }
+    if (fallback) return fallback(...xs);
+    return env.lo;
+  };
 }
 function seedBuiltinRootConstructs(env) {
   const seeds = [
@@ -2590,7 +3031,7 @@ function seedBuiltinRootConstructs(env) {
     { name: "product", kind: "aggregator", status: "host-primitive" },
     { name: "probabilistic_sum", kind: "aggregator", status: "host-primitive" },
     // Logical layer
-    { name: "not", kind: "truth-operator", status: "user-configurable", dependsOn: ["truth-range"] },
+    { name: "not", kind: "truth-operator", status: "user-configurable", dependsOn: ["truth-range", "decimal-12-arithmetic"] },
     { name: "and", kind: "truth-operator", status: "user-configurable", dependsOn: ["avg"] },
     { name: "or", kind: "truth-operator", status: "user-configurable", dependsOn: ["max"] },
     { name: "both", kind: "truth-operator", status: "user-configurable", dependsOn: ["avg"] },
@@ -2747,9 +3188,71 @@ function parseFoundationForm(node) {
         }
         foundation.truthDomain = rest[0];
         break;
+      case "carrier":
+        if (rest.length === 0) {
+          throw new RmlError("E061", "(carrier ...) requires at least one value");
+        }
+        foundation.carrier = rest.map((t) => Array.isArray(t) ? keyOf(t) : String(t));
+        break;
+      case "strict-carrier":
+        foundation.strictCarrier = true;
+        break;
+      case "truth-table": {
+        if (rest.length < 1 || typeof rest[0] !== "string") {
+          throw new RmlError("E061", "(truth-table <op> ...) requires an operator name");
+        }
+        const tableOp = rest[0];
+        const rows = [];
+        for (const raw of rest.slice(1)) {
+          if (!Array.isArray(raw)) {
+            throw new RmlError(
+              "E061",
+              `(truth-table ${tableOp} ...) rows must be lists like (in1 in2 -> out)`
+            );
+          }
+          const arrowAt = raw.findIndex((t) => t === "->");
+          if (arrowAt < 1 || arrowAt !== raw.length - 2) {
+            throw new RmlError(
+              "E061",
+              `(truth-table ${tableOp} ...) row must be (input ... -> output)`
+            );
+          }
+          const inputs = raw.slice(0, arrowAt).map((t) => Array.isArray(t) ? keyOf(t) : String(t));
+          const output = Array.isArray(raw[arrowAt + 1]) ? keyOf(raw[arrowAt + 1]) : String(raw[arrowAt + 1]);
+          rows.push({ inputs, output });
+        }
+        if (rows.length === 0) {
+          throw new RmlError(
+            "E061",
+            `(truth-table ${tableOp} ...) requires at least one row`
+          );
+        }
+        if (!(foundation.truthTables instanceof Map)) foundation.truthTables = /* @__PURE__ */ new Map();
+        foundation.truthTables.set(tableOp, rows);
+        break;
+      }
       case "description":
         foundation.description = rest.map((t) => Array.isArray(t) ? keyOf(t) : String(t)).join(" ");
         break;
+      case "experimental":
+        foundation.experimental = true;
+        break;
+      case "root":
+        if (rest.length !== 1) {
+          throw new RmlError("E061", "(root <symbol>) requires exactly one value");
+        }
+        foundation.root = Array.isArray(rest[0]) ? keyOf(rest[0]) : String(rest[0]);
+        break;
+      case "abit": {
+        if (rest.length < 1) {
+          throw new RmlError("E061", "(abit <symbol> <meaning>) requires a symbol");
+        }
+        const symbol = Array.isArray(rest[0]) ? keyOf(rest[0]) : String(rest[0]);
+        const meaning = rest.slice(1).map((t) => Array.isArray(t) ? keyOf(t) : String(t)).join(" ");
+        if (!Array.isArray(foundation.abits)) foundation.abits = [];
+        foundation.abits.push({ symbol, meaning });
+        break;
+      }
       default:
         break;
     }
@@ -2801,17 +3304,416 @@ function formatFoundationReport(report) {
     lines.push("");
     lines.push("foundations:");
     for (const f of report.foundations) {
-      lines.push(`  - ${f.name}${f.description ? ` \u2014 ${f.description}` : ""}`);
+      const tag = f.experimental === true ? " [experimental]" : "";
+      lines.push(`  - ${f.name}${tag}${f.description ? ` \u2014 ${f.description}` : ""}`);
       if (f.numericDomain) lines.push(`      numeric domain: ${f.numericDomain}`);
       if (f.truthDomain) lines.push(`      truth domain: ${f.truthDomain}`);
+      if (f.root) lines.push(`      root: ${f.root}`);
+      if (Array.isArray(f.abits) && f.abits.length > 0) {
+        const abitStrs = f.abits.map((a) => `${a.symbol}=${a.meaning}`);
+        lines.push(`      abits: ${abitStrs.join(", ")}`);
+      }
       if (f.uses && f.uses.length) lines.push(`      uses: ${f.uses.join(", ")}`);
       if (f.defines && f.defines.length) {
         const defStrs = f.defines.map((d) => `${d.construct}=${d.implementation}`);
         lines.push(`      defines: ${defStrs.join(", ")}`);
       }
+      if (Array.isArray(f.truthTables) && f.truthTables.length > 0) {
+        const tt = f.truthTables.map((t) => `${t.op}(${t.rows.length} rows)`);
+        lines.push(`      truth tables: ${tt.join(", ")}`);
+      }
+    }
+  }
+  if (Array.isArray(report.activeImplementations) && report.activeImplementations.length > 0) {
+    lines.push("");
+    lines.push("active implementations:");
+    for (const impl of report.activeImplementations) {
+      const parts = [];
+      if (impl.status) parts.push(impl.status);
+      if (impl.implementation) parts.push(`via ${impl.implementation}`);
+      if (impl.foundation) parts.push(`foundation ${impl.foundation}`);
+      if (Array.isArray(impl.dependsOn) && impl.dependsOn.length > 0) {
+        parts.push(`depends on ${impl.dependsOn.join(", ")}`);
+      }
+      lines.push(`  - ${impl.construct}: ${parts.join("; ")}`);
+    }
+  }
+  if (Array.isArray(report.proofRules) && report.proofRules.length > 0) {
+    lines.push("");
+    lines.push("proof rules:");
+    for (const r of report.proofRules) {
+      lines.push(`  - ${r.name} (${r.premises.length} premises \u2192 ${r.conclusion})`);
+    }
+  }
+  if (Array.isArray(report.proofAssumptions) && report.proofAssumptions.length > 0) {
+    lines.push("");
+    lines.push("proof assumptions:");
+    for (const a of report.proofAssumptions) {
+      lines.push(`  - ${a.name} [${a.kind}] : ${a.judgement}`);
+    }
+  }
+  if (Array.isArray(report.proofObjects) && report.proofObjects.length > 0) {
+    lines.push("");
+    lines.push("proof objects:");
+    for (const po of report.proofObjects) {
+      const refs = Array.isArray(po.premiseRefs) && po.premiseRefs.length > 0 ? ` using ${po.premiseRefs.join(", ")}` : "";
+      lines.push(`  - ${po.name} : applies ${po.rule} (${po.premises.length} premises${refs} \u2192 ${po.conclusion})`);
+    }
+  }
+  if (report.strictPureLinks === true) {
+    lines.push("");
+    lines.push("pure-links strict mode: on");
+    if (Array.isArray(report.allowedHostPrimitives) && report.allowedHostPrimitives.length > 0) {
+      lines.push(`  allowed host primitives: ${report.allowedHostPrimitives.join(", ")}`);
+    }
+  }
+  if (report.dependencyGraph && typeof report.dependencyGraph === "object") {
+    const names = Object.keys(report.dependencyGraph).sort();
+    const nonEmpty = names.filter((n) => {
+      const deps = report.dependencyGraph[n];
+      return Array.isArray(deps) && deps.length > 0;
+    });
+    if (nonEmpty.length > 0) {
+      lines.push("");
+      lines.push("dependency graph (transitive):");
+      for (const name of nonEmpty) {
+        lines.push(`  - ${name} \u2192 ${report.dependencyGraph[name].join(", ")}`);
+      }
     }
   }
   return lines.join("\n");
+}
+function isProofRuleShape(node) {
+  return Array.isArray(node) && node[0] === "rule" && typeof node[1] === "string" && node[1] && node.length >= 3 && node.slice(2).every((c) => Array.isArray(c) && (c[0] === "premise" || c[0] === "conclusion")) && node.slice(2).some((c) => c[0] === "conclusion");
+}
+function parseRuleForm(node) {
+  if (!Array.isArray(node) || node[0] !== "rule" || node.length < 2) {
+    throw new RmlError("E064", "rule form must be `(rule <name> (premise <pat>)... (conclusion <pat>))`");
+  }
+  if (typeof node[1] !== "string" || !node[1]) {
+    throw new RmlError("E064", "rule name must be a non-empty identifier");
+  }
+  const rule = { name: node[1], premises: [], conclusion: null };
+  for (const child of node.slice(2)) {
+    if (!Array.isArray(child) || child.length < 1 || typeof child[0] !== "string") {
+      throw new RmlError("E064", `rule ${rule.name}: clauses must be lists led by a keyword`);
+    }
+    const key = child[0];
+    if (key === "premise") {
+      if (child.length !== 2) {
+        throw new RmlError("E064", `rule ${rule.name}: (premise <pat>) requires exactly one pattern`);
+      }
+      rule.premises.push(child[1]);
+    } else if (key === "conclusion") {
+      if (child.length !== 2) {
+        throw new RmlError("E064", `rule ${rule.name}: (conclusion <pat>) requires exactly one pattern`);
+      }
+      if (rule.conclusion !== null) {
+        throw new RmlError("E064", `rule ${rule.name}: only one (conclusion ...) clause is allowed`);
+      }
+      rule.conclusion = child[1];
+    } else {
+      throw new RmlError("E064", `rule ${rule.name}: unknown clause keyword ${key}`);
+    }
+  }
+  if (rule.conclusion === null) {
+    throw new RmlError("E064", `rule ${rule.name}: at least one (conclusion <pat>) clause is required`);
+  }
+  return rule;
+}
+function parseProofAssumptionForm(node) {
+  if (!Array.isArray(node) || node[0] !== "assumption" && node[0] !== "axiom" || node.length < 2) {
+    throw new RmlError("E064", "proof assumption form must be `(assumption <name> (judgement <j>))` or `(axiom <name> (judgement <j>))`");
+  }
+  const kind = node[0];
+  if (typeof node[1] !== "string" || !node[1]) {
+    throw new RmlError("E064", `${kind} name must be a non-empty identifier`);
+  }
+  const assumption = { name: node[1], kind, judgement: null };
+  for (const child of node.slice(2)) {
+    if (!Array.isArray(child) || child.length < 1 || typeof child[0] !== "string") {
+      throw new RmlError("E064", `${kind} ${assumption.name}: clauses must be lists led by a keyword`);
+    }
+    if (child[0] !== "judgement") {
+      throw new RmlError("E064", `${kind} ${assumption.name}: unknown clause keyword ${child[0]}`);
+    }
+    if (child.length !== 2) {
+      throw new RmlError("E064", `${kind} ${assumption.name}: (judgement <j>) requires one argument`);
+    }
+    if (assumption.judgement !== null) {
+      throw new RmlError("E064", `${kind} ${assumption.name}: only one (judgement ...) clause is allowed`);
+    }
+    assumption.judgement = child[1];
+  }
+  if (assumption.judgement === null) {
+    throw new RmlError("E064", `${kind} ${assumption.name}: (judgement <j>) clause is required`);
+  }
+  return assumption;
+}
+function parseProofObjectForm(node) {
+  if (!Array.isArray(node) || node[0] !== "proof-object" || node.length < 2) {
+    throw new RmlError("E064", "proof-object form must be `(proof-object <name> (applies <rule>) ...)`");
+  }
+  if (typeof node[1] !== "string" || !node[1]) {
+    throw new RmlError("E064", "proof-object name must be a non-empty identifier");
+  }
+  const po = { name: node[1], rule: null, premises: [], premiseRefs: [], conclusion: null };
+  for (const child of node.slice(2)) {
+    if (!Array.isArray(child) || child.length < 1 || typeof child[0] !== "string") {
+      throw new RmlError("E064", `proof-object ${po.name}: clauses must be lists led by a keyword`);
+    }
+    const key = child[0];
+    if (key === "applies") {
+      if (child.length !== 2 || typeof child[1] !== "string") {
+        throw new RmlError("E064", `proof-object ${po.name}: (applies <rule>) requires a rule name`);
+      }
+      po.rule = child[1];
+    } else if (key === "premise") {
+      if (child.length !== 2) {
+        throw new RmlError("E064", `proof-object ${po.name}: (premise <judgement>) requires one argument`);
+      }
+      po.premises.push(child[1]);
+    } else if (key === "premise-by") {
+      if (child.length !== 2 || typeof child[1] !== "string" || !child[1]) {
+        throw new RmlError("E064", `proof-object ${po.name}: (premise-by <name>) requires a dependency name`);
+      }
+      po.premiseRefs.push(child[1]);
+    } else if (key === "uses") {
+      if (child.length < 2) {
+        throw new RmlError("E064", `proof-object ${po.name}: (uses <name>...) requires at least one dependency name`);
+      }
+      for (const ref of child.slice(1)) {
+        if (typeof ref !== "string" || !ref) {
+          throw new RmlError("E064", `proof-object ${po.name}: (uses ...) dependencies must be names`);
+        }
+        po.premiseRefs.push(ref);
+      }
+    } else if (key === "conclusion") {
+      if (child.length !== 2) {
+        throw new RmlError("E064", `proof-object ${po.name}: (conclusion <judgement>) requires one argument`);
+      }
+      if (po.conclusion !== null) {
+        throw new RmlError("E064", `proof-object ${po.name}: only one (conclusion ...) clause is allowed`);
+      }
+      po.conclusion = child[1];
+    } else {
+      throw new RmlError("E064", `proof-object ${po.name}: unknown clause keyword ${key}`);
+    }
+  }
+  if (po.rule === null) {
+    throw new RmlError("E064", `proof-object ${po.name}: (applies <rule>) clause is required`);
+  }
+  if (po.conclusion === null) {
+    throw new RmlError("E064", `proof-object ${po.name}: (conclusion <judgement>) clause is required`);
+  }
+  return po;
+}
+function matchProofPattern(pattern, candidate, subs) {
+  if (typeof pattern === "string") {
+    if (pattern.startsWith("?")) {
+      if (Object.prototype.hasOwnProperty.call(subs, pattern)) {
+        return keyOf(subs[pattern]) === keyOf(candidate);
+      }
+      subs[pattern] = candidate;
+      return true;
+    }
+    return typeof candidate === "string" && candidate === pattern;
+  }
+  if (!Array.isArray(pattern) || !Array.isArray(candidate)) return false;
+  if (pattern.length !== candidate.length) return false;
+  for (let i = 0; i < pattern.length; i++) {
+    if (!matchProofPattern(pattern[i], candidate[i], subs)) return false;
+  }
+  return true;
+}
+function _resolveProofDependency(env, ref, stack) {
+  const assumption = env.getProofAssumption(ref);
+  if (assumption) {
+    return { ok: true, judgement: assumption.judgement, kind: assumption.kind };
+  }
+  const po = env.getProofObject(ref);
+  if (!po) {
+    return { ok: false, error: `unknown proof dependency ${ref}` };
+  }
+  const verdict = checkProofObject(env, ref, stack);
+  if (!verdict.ok) return verdict;
+  return { ok: true, judgement: po.conclusion, kind: "proof-object" };
+}
+function checkProofObject(env, name, stack = []) {
+  if (stack.includes(name)) {
+    return { ok: false, error: `cyclic proof dependency: ${stack.concat([name]).join(" -> ")}` };
+  }
+  const po = env.getProofObject(name);
+  if (!po) return { ok: false, error: `unknown proof-object ${name}` };
+  const rule = env.getProofRule(po.rule);
+  if (!rule) return { ok: false, error: `proof-object ${name} references unknown rule ${po.rule}` };
+  const refs = Array.isArray(po.premiseRefs) ? po.premiseRefs : [];
+  let effectivePremises = po.premises.slice();
+  const dependencyStack = stack.concat([name]);
+  if (refs.length > 0) {
+    effectivePremises = [];
+    for (let i = 0; i < refs.length; i++) {
+      const resolved = _resolveProofDependency(env, refs[i], dependencyStack);
+      if (!resolved.ok) return resolved;
+      effectivePremises.push(resolved.judgement);
+      if (po.premises.length > 0 && po.premises[i] !== void 0 && !isStructurallySame(po.premises[i], resolved.judgement)) {
+        return {
+          ok: false,
+          error: `proof-object ${name}: premise ${i + 1} does not match referenced judgement ${refs[i]}`
+        };
+      }
+    }
+    if (po.premises.length > 0 && po.premises.length !== refs.length) {
+      return {
+        ok: false,
+        error: `proof-object ${name}: has ${po.premises.length} explicit premise(s) but ${refs.length} proof dependency reference(s)`
+      };
+    }
+  } else if (po.premises.length > 0) {
+    return {
+      ok: false,
+      error: `proof-object ${name}: premise 1 is unjustified; use (premise-by <name>) or declare an assumption/axiom`
+    };
+  }
+  if (effectivePremises.length !== rule.premises.length) {
+    return {
+      ok: false,
+      error: `proof-object ${name}: expected ${rule.premises.length} premise(s) for rule ${po.rule}, got ${effectivePremises.length}`
+    };
+  }
+  const subs = {};
+  for (let i = 0; i < rule.premises.length; i++) {
+    if (!matchProofPattern(rule.premises[i], effectivePremises[i], subs)) {
+      return {
+        ok: false,
+        error: `proof-object ${name}: premise ${i + 1} does not match rule ${po.rule}`
+      };
+    }
+  }
+  if (!matchProofPattern(rule.conclusion, po.conclusion, subs)) {
+    return { ok: false, error: `proof-object ${name}: conclusion does not match rule ${po.rule}` };
+  }
+  return { ok: true, substitution: subs, dependencies: refs.slice() };
+}
+function parseStrictFoundationForm(node) {
+  if (!Array.isArray(node) || node[0] !== "strict-foundation") {
+    throw new RmlError("E065", "(strict-foundation <profile>) is required");
+  }
+  if (node.length !== 2 || typeof node[1] !== "string" || !node[1]) {
+    throw new RmlError("E065", "(strict-foundation <profile>) requires a single profile name");
+  }
+  if (node[1] !== "pure-links") {
+    throw new RmlError("E065", `unknown strict-foundation profile: ${node[1]} (expected pure-links)`);
+  }
+  return { profile: node[1] };
+}
+function parseAllowHostPrimitiveForm(node) {
+  if (!Array.isArray(node) || node[0] !== "allow-host-primitive") {
+    throw new RmlError("E065", "(allow-host-primitive <name>...) is required");
+  }
+  if (node.length < 2) {
+    throw new RmlError("E065", "(allow-host-primitive <name>...) requires at least one construct name");
+  }
+  const names = [];
+  for (const tok of node.slice(1)) {
+    if (typeof tok !== "string" || !tok) {
+      throw new RmlError("E065", "(allow-host-primitive ...) names must be non-empty identifiers");
+    }
+    names.push(tok);
+  }
+  return { names };
+}
+var PURE_LINKS_SCANNER_IGNORED = /* @__PURE__ */ new Set([
+  "?",
+  "with",
+  "proof",
+  "by",
+  "because",
+  "let",
+  "in",
+  "where",
+  ":",
+  "::",
+  "has",
+  "probability",
+  "is",
+  "a",
+  "an",
+  "sequence",
+  "normalizes-to",
+  "applies",
+  "premise",
+  "premise-by",
+  "conclusion",
+  "uses",
+  "judgement",
+  "assumption",
+  "axiom",
+  "rule",
+  "proof-object",
+  "check-proof",
+  "foundation",
+  "with-foundation",
+  "foundation-report",
+  "foundation-report?",
+  "root-construct",
+  "strict-carrier",
+  "truth-table",
+  "strict-foundation",
+  "allow-host-primitive"
+]);
+function _isStrictlyOffendingStatus(status) {
+  return status === "host-primitive" || status === "host-derived";
+}
+function _strictDependencyOffenders(env, name, path2 = []) {
+  const allow = env.allowedHostPrimitives instanceof Set ? env.allowedHostPrimitives : /* @__PURE__ */ new Set();
+  if (allow.has(name)) return [];
+  if (path2.includes(name)) return [];
+  const currentPath = path2.concat([name]);
+  const active = env.activeImplementations instanceof Map ? env.activeImplementations.get(name) : null;
+  const rc = env.getRootConstruct(name);
+  const status = active && active.status ? active.status : rc && rc.status;
+  const deps = active && Array.isArray(active.dependsOn) ? active.dependsOn : rc && Array.isArray(rc.dependsOn) ? rc.dependsOn : [];
+  if (active && active.status === "links-defined" && deps.length === 0) {
+    return [];
+  }
+  if (_isStrictlyOffendingStatus(status) && deps.length === 0) {
+    return [`${currentPath.join(" -> ")} -> ${status}`];
+  }
+  const offenders = [];
+  for (const dep of deps) {
+    if (allow.has(dep)) continue;
+    offenders.push(..._strictDependencyOffenders(env, dep, currentPath));
+  }
+  if (_isStrictlyOffendingStatus(status) && offenders.length === 0) {
+    offenders.push(`${currentPath.join(" -> ")} -> ${status}`);
+  }
+  return offenders;
+}
+function scanPureLinksOffenders(node, env) {
+  if (env.strictPureLinks !== true) return [];
+  const offenders = /* @__PURE__ */ new Set();
+  const allow = env.allowedHostPrimitives instanceof Set ? env.allowedHostPrimitives : /* @__PURE__ */ new Set();
+  const check2 = (name) => {
+    if (PURE_LINKS_SCANNER_IGNORED.has(name) || allow.has(name)) return;
+    for (const offender of _strictDependencyOffenders(env, name)) offenders.add(offender);
+  };
+  const visit = (n) => {
+    if (Array.isArray(n)) {
+      const head = n[0];
+      if (typeof head === "string") check2(head);
+      for (let i = 0; i < n.length; i++) visit(n[i]);
+      if (n.length === 3 && typeof n[1] === "string") {
+        check2(n[1]);
+      }
+      return;
+    }
+    if (typeof n === "string") {
+      check2(n);
+    }
+  };
+  visit(node);
+  return [...offenders].sort();
 }
 function desugarHoas(node) {
   if (!Array.isArray(node)) return node;
@@ -3174,6 +4076,51 @@ function formatTraceValue(v) {
 function _wrap(rule, ...subs) {
   return ["by", rule, ...subs];
 }
+function _containsLambdaOrApply(node) {
+  if (!Array.isArray(node)) return false;
+  if (node[0] === "lambda" || node[0] === "apply") return true;
+  for (const child of node) if (_containsLambdaOrApply(child)) return true;
+  return false;
+}
+function classifyEqualityRule(L, R, op, env) {
+  const isInequality = op === "!=";
+  const kPrefix = keyOf(["=", L, R]);
+  const kInfix = keyOf([L, "=", R]);
+  if (env.assign.has(kPrefix) || env.assign.has(kInfix)) {
+    return isInequality ? "assigned-inequality" : "assigned-equality";
+  }
+  if (isStructurallySame(L, R)) {
+    return isInequality ? "structural-inequality" : "structural-equality";
+  }
+  if (_containsLambdaOrApply(L) || _containsLambdaOrApply(R)) {
+    try {
+      const Ln = normalizeTerm(L, env);
+      const Rn = normalizeTerm(R, env);
+      if (isStructurallySame(Ln, Rn) && !isStructurallySame(L, R)) {
+        return isInequality ? "definitional-inequality" : "definitional-equality";
+      }
+    } catch (_) {
+    }
+  }
+  return isInequality ? "numeric-inequality" : "numeric-equality";
+}
+function _queryBody(queryForm) {
+  if (!Array.isArray(queryForm) || queryForm[0] !== "?") return null;
+  const stripped = _stripWithProof(queryForm.slice(1));
+  let body = stripped.length === 1 ? stripped[0] : stripped;
+  while (Array.isArray(body) && body.length === 1 && Array.isArray(body[0])) {
+    body = body[0];
+  }
+  return body;
+}
+function equalityProvenanceForQuery(queryForm, env) {
+  const body = _queryBody(queryForm);
+  if (!Array.isArray(body)) return null;
+  if (body.length === 3 && typeof body[1] === "string" && (body[1] === "=" || body[1] === "!=")) {
+    return classifyEqualityRule(body[0], body[2], body[1], env);
+  }
+  return null;
+}
 function buildProof(node, env) {
   if (typeof node === "string") {
     if (isNum(node)) {
@@ -3226,16 +4173,7 @@ function buildProof(node, env) {
   if (node.length === 3 && typeof node[1] === "string" && (node[1] === "=" || node[1] === "!=")) {
     const L = node[0];
     const R = node[2];
-    const kPrefix = keyOf(["=", L, R]);
-    const kInfix = keyOf([L, "=", R]);
-    let rule;
-    if (env.assign.has(kPrefix) || env.assign.has(kInfix)) {
-      rule = node[1] === "!=" ? "assigned-inequality" : "assigned-equality";
-    } else if (isStructurallySame(L, R)) {
-      rule = node[1] === "!=" ? "structural-inequality" : "structural-equality";
-    } else {
-      rule = node[1] === "!=" ? "numeric-inequality" : "numeric-equality";
-    }
+    const rule = classifyEqualityRule(L, R, node[1], env);
     return _wrap(rule, [L, R]);
   }
   if (node.length === 2 && node[0] === "Type") {
@@ -5497,6 +6435,13 @@ function evalNode(node, env) {
   }
   if (node.length === 4 && node[1] === "has" && node[2] === "probability" && isNum(node[3])) {
     const p = parseFloat(node[3]);
+    const carrierErr = env.checkCarrierValue(env.clamp(p));
+    if (carrierErr) {
+      throw new RmlError(
+        "E063",
+        `Probability assignment ${keyOf(node[0])} = ${formatTraceValue(env.clamp(p))} violates active foundation carrier: ${carrierErr}`
+      );
+    }
     env.setExprProb(node[0], p);
     env.trace("assign", `${keyOf(node[0])} \u2190 ${formatTraceValue(env.clamp(p))}`);
     return env.toNum(node[3]);
@@ -6293,6 +7238,21 @@ function evaluate(code, options) {
   }
   const proofsEnabled = !!opts.withProofs;
   let proofs = proofsEnabled ? [] : null;
+  let provenance = null;
+  const recordProvenance = (expandedForm, expandedSpan) => {
+    const rule = equalityProvenanceForQuery(expandedForm, env);
+    if (rule === null) {
+      if (provenance !== null) provenance.push(null);
+      return;
+    }
+    if (provenance === null) {
+      provenance = results.slice(0, -1).map(() => null);
+    }
+    provenance.push(rule);
+    if (traceEnabled && trace) {
+      trace.push(new TraceEvent({ kind: "equality-layer", detail: rule, span: expandedSpan }));
+    }
+  };
   const importStack = opts._importStack || [];
   const importedFiles = opts._importedFiles || /* @__PURE__ */ new Set();
   if (!Array.isArray(env._shadowDiagnostics)) env._shadowDiagnostics = [];
@@ -6306,6 +7266,7 @@ function evaluate(code, options) {
     const out2 = { results, diagnostics };
     if (traceEnabled) out2.trace = trace;
     if (proofs !== null) out2.proofs = proofs;
+    if (provenance !== null) out2.provenance = provenance;
     return out2;
   }
   const runWithFoundation = (form, span) => {
@@ -6346,12 +7307,85 @@ function evaluate(code, options) {
             if (traceEnabled && trace) {
               trace.push(new TraceEvent({ kind: "foundation", detail: foundation.name, span }));
             }
+          } else if (Array.isArray(body) && body[0] === "root-construct") {
+            const descriptor = parseRootConstructForm(body);
+            env.registerRootConstruct(descriptor);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: "root-construct", detail: descriptor.name, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === "rule" && isProofRuleShape(body)) {
+            const rule = parseRuleForm(body);
+            env.registerProofRule(rule);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: "rule", detail: rule.name, span }));
+            }
+          } else if (Array.isArray(body) && (body[0] === "assumption" || body[0] === "axiom")) {
+            const assumption = parseProofAssumptionForm(body);
+            env.registerProofAssumption(assumption);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: assumption.kind, detail: assumption.name, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === "proof-object") {
+            const po = parseProofObjectForm(body);
+            env.registerProofObject(po);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: "proof-object", detail: po.name, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === "check-proof") {
+            if (body.length !== 2 || typeof body[1] !== "string" || !body[1]) {
+              throw new RmlError("E064", "(check-proof <name>) requires a proof-object name");
+            }
+            const target = body[1];
+            const verdict = checkProofObject(env, target);
+            const value = verdict.ok ? 1 : 0;
+            results.push(value);
+            if (proofs !== null) proofs.push(null);
+            if (provenance !== null) provenance.push(null);
+            if (!verdict.ok) {
+              diagnostics.push(new Diagnostic({ code: "E064", message: verdict.error, span }));
+            }
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: "check-proof", detail: `${target} -> ${verdict.ok ? "ok" : "fail"}`, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === "strict-foundation") {
+            const decl = parseStrictFoundationForm(body);
+            env.strictPureLinks = true;
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: "strict-foundation", detail: decl.profile, span }));
+            }
+          } else if (Array.isArray(body) && body[0] === "allow-host-primitive") {
+            const decl = parseAllowHostPrimitiveForm(body);
+            for (const name of decl.names) env.allowedHostPrimitives.add(name);
+            if (traceEnabled && trace) {
+              trace.push(new TraceEvent({ kind: "allow-host-primitive", detail: decl.names.join(" "), span }));
+            }
           } else {
             const expanded = expandTemplates(body, env);
             const res = evalNode(expanded, env);
             if (res && res.query) {
               results.push(res.value);
               if (proofs !== null) proofs.push(null);
+              recordProvenance(expanded, span);
+              const carrierErr = env.checkCarrierValue(res.value);
+              if (carrierErr) {
+                diagnostics.push(new Diagnostic({
+                  code: "E063",
+                  message: `Query result ${formatTraceValue(res.value)} violates active foundation carrier: ${carrierErr}`,
+                  span
+                }));
+              }
+              if (env.strictPureLinks === true) {
+                const innerExp = _stripWithProof(expanded.slice(1));
+                const targetExp = innerExp.length === 1 ? innerExp[0] : innerExp;
+                const offenders = scanPureLinksOffenders(targetExp, env);
+                if (offenders.length > 0) {
+                  diagnostics.push(new Diagnostic({
+                    code: "E065",
+                    message: `Query depends on host-primitive construct(s) under pure-links strict mode: ${offenders.join(", ")}`,
+                    span
+                  }));
+                }
+              }
             }
           }
         } catch (innerErr) {
@@ -6475,6 +7509,114 @@ function evaluate(code, options) {
       }
       continue;
     }
+    if (isProofRuleShape(form)) {
+      try {
+        const rule = parseRuleForm(form);
+        env.registerProofRule(rule);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: "rule", detail: rule.name, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: err && err.code || "E064",
+          message: err && err.message ? err.message : String(err),
+          span: err && err.span || span
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && (form[0] === "assumption" || form[0] === "axiom")) {
+      try {
+        const assumption = parseProofAssumptionForm(form);
+        env.registerProofAssumption(assumption);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: assumption.kind, detail: assumption.name, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: err && err.code || "E064",
+          message: err && err.message ? err.message : String(err),
+          span: err && err.span || span
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === "proof-object") {
+      try {
+        const po = parseProofObjectForm(form);
+        env.registerProofObject(po);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: "proof-object", detail: po.name, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: err && err.code || "E064",
+          message: err && err.message ? err.message : String(err),
+          span: err && err.span || span
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === "strict-foundation") {
+      try {
+        const decl = parseStrictFoundationForm(form);
+        env.strictPureLinks = true;
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: "strict-foundation", detail: decl.profile, span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: err && err.code || "E065",
+          message: err && err.message ? err.message : String(err),
+          span: err && err.span || span
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === "allow-host-primitive") {
+      try {
+        const decl = parseAllowHostPrimitiveForm(form);
+        for (const n of decl.names) env.allowedHostPrimitives.add(n);
+        if (traceEnabled && trace) {
+          trace.push(new TraceEvent({ kind: "allow-host-primitive", detail: decl.names.join(","), span }));
+        }
+      } catch (err) {
+        diagnostics.push(new Diagnostic({
+          code: err && err.code || "E065",
+          message: err && err.message ? err.message : String(err),
+          span: err && err.span || span
+        }));
+      }
+      continue;
+    }
+    if (Array.isArray(form) && form[0] === "check-proof") {
+      if (form.length !== 2 || typeof form[1] !== "string") {
+        diagnostics.push(new Diagnostic({
+          code: "E064",
+          message: "(check-proof <name>) requires a proof-object name",
+          span
+        }));
+        continue;
+      }
+      const verdict = checkProofObject(env, form[1]);
+      results.push(verdict.ok ? 1 : 0);
+      if (proofs !== null) proofs.push(null);
+      if (!verdict.ok) {
+        diagnostics.push(new Diagnostic({
+          code: "E064",
+          message: verdict.error,
+          span
+        }));
+      }
+      if (traceEnabled && trace) {
+        trace.push(new TraceEvent({
+          kind: "check-proof",
+          detail: `${form[1]} \u2192 ${verdict.ok ? "ok" : "fail"}`,
+          span
+        }));
+      }
+      continue;
+    }
     try {
       const expandedForm = expandTemplates(form, env);
       const res = evalNode(expandedForm, env);
@@ -6504,6 +7646,27 @@ function evaluate(code, options) {
         } else if (proofs !== null) {
           proofs.push(null);
         }
+        recordProvenance(expandedForm, span);
+        const carrierErr = env.checkCarrierValue(res.value);
+        if (carrierErr) {
+          diagnostics.push(new Diagnostic({
+            code: "E063",
+            message: `Query result ${formatTraceValue(res.value)} violates active foundation carrier: ${carrierErr}`,
+            span
+          }));
+        }
+        if (env.strictPureLinks === true) {
+          const inner = _stripWithProof(expandedForm.slice(1));
+          const target = inner.length === 1 ? inner[0] : inner;
+          const offenders = scanPureLinksOffenders(target, env);
+          if (offenders.length > 0) {
+            diagnostics.push(new Diagnostic({
+              code: "E065",
+              message: `Query depends on host-primitive construct(s) under pure-links strict mode: ${offenders.join(", ")}`,
+              span
+            }));
+          }
+        }
       }
     } catch (err) {
       const diagSpan = err && err.span || span;
@@ -6521,6 +7684,10 @@ function evaluate(code, options) {
   const out = { results, diagnostics };
   if (traceEnabled) out.trace = trace;
   if (proofs !== null) out.proofs = proofs;
+  if (provenance !== null) {
+    while (provenance.length < results.length) provenance.push(null);
+    out.provenance = provenance;
+  }
   return out;
 }
 function _unquotePath(s) {
@@ -7531,12 +8698,16 @@ export {
   TraceEvent,
   automaticSequencesDomainPlugin,
   buildCorecursorType,
+  buildDependencyGraph,
   buildEliminatorType,
   buildProof,
   check,
+  checkProofObject,
   computeFormSpans,
   decRound,
   decideAutomaticSequenceTheorem,
+  decodeAnum,
+  encodeAnum,
   evalNode,
   evaluate,
   evaluateFile,
@@ -7556,7 +8727,9 @@ export {
   isTerminating,
   isTotal,
   keyOf,
+  matchProofPattern,
   nf,
+  parseAllowHostPrimitiveForm,
   parseAtpStatus,
   parseBinding,
   parseBindings,
@@ -7567,11 +8740,16 @@ export {
   parseLino,
   parseModeFlag,
   parseOne,
+  parseProofAssumptionForm,
+  parseProofObjectForm,
   parseRootConstructForm,
+  parseRuleForm,
+  parseStrictFoundationForm,
   quantize,
   rewrite,
   run,
   runTactics,
+  scanPureLinksOffenders,
   simplify,
   subst,
   substitute,

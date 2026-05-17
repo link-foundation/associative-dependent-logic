@@ -91,6 +91,13 @@ pub struct EvaluateResult {
     pub diagnostics: Vec<Diagnostic>,
     pub trace: Vec<TraceEvent>,
     pub proofs: Vec<Option<Node>>,
+    /// Equality-layer provenance (issue #97). For every query that is a
+    /// direct equality (`(? (L = R))`), records which of the four equality
+    /// layers fired: `assigned-equality`, `structural-equality`,
+    /// `definitional-equality`, or `numeric-equality`. Non-equality queries
+    /// get `None`. The vec is empty when no equality query was observed,
+    /// matching JavaScript's lazy `out.provenance` shape.
+    pub provenance: Vec<Option<String>>,
 }
 
 /// Options for `evaluate_with_options` — bundles environment settings with
@@ -713,6 +720,126 @@ impl Aggregator {
     }
 }
 
+/// Resolve a truth-table token (input or output) to its numeric value.
+/// Numeric literals stay numeric; symbolic constants flow through
+/// `env.symbol_prob` so user-declared truth constants like `(true: 1)` or
+/// `(unknown: 0.5)` are honoured. Returns `None` when the token cannot
+/// be resolved so the caller can skip the row.
+fn resolve_truth_table_value(env: &Env, tok: &str) -> Option<f64> {
+    if let Ok(num) = tok.parse::<f64>() {
+        if num.is_finite() {
+            return Some(num);
+        }
+    }
+    env.symbol_prob.get(tok).copied()
+}
+
+fn truth_table_key(values: &[f64]) -> String {
+    values
+        .iter()
+        .map(|v| format!("{:.15}", v))
+        .collect::<Vec<_>>()
+        .join("\u{1}")
+}
+
+fn resolved_carrier_values(env: &Env, foundation: &FoundationDescriptor) -> Option<Vec<f64>> {
+    if !foundation.strict_carrier || foundation.carrier.is_empty() {
+        return None;
+    }
+    let mut values = Vec::new();
+    let mut seen = HashSet::new();
+    for tok in &foundation.carrier {
+        let value = resolve_truth_table_value(env, tok)?;
+        let key = truth_table_key(&[value]);
+        if seen.insert(key) {
+            values.push(value);
+        }
+    }
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
+fn truth_table_rows_complete_for_carrier(
+    env: &Env,
+    rows: &[TruthTableRow],
+    foundation: &FoundationDescriptor,
+) -> bool {
+    let carrier = match resolved_carrier_values(env, foundation) {
+        Some(values) => values,
+        None => return false,
+    };
+    let mut arity: Option<usize> = None;
+    let mut seen_rows: HashSet<String> = HashSet::new();
+    for row in rows {
+        if arity.is_none() {
+            arity = Some(row.inputs.len());
+        }
+        if Some(row.inputs.len()) != arity {
+            return false;
+        }
+        let mut inputs = Vec::with_capacity(row.inputs.len());
+        for tok in &row.inputs {
+            match resolve_truth_table_value(env, tok) {
+                Some(v) => inputs.push(v),
+                None => return false,
+            }
+        }
+        if resolve_truth_table_value(env, &row.output).is_none() {
+            return false;
+        }
+        seen_rows.insert(truth_table_key(&inputs));
+    }
+    let arity = match arity {
+        Some(a) => a,
+        None => return false,
+    };
+    let required = carrier.len().pow(arity as u32);
+    if seen_rows.len() < required {
+        return false;
+    }
+    fn visit(
+        carrier: &[f64],
+        seen_rows: &HashSet<String>,
+        arity: usize,
+        prefix: &mut Vec<f64>,
+    ) -> bool {
+        if prefix.len() == arity {
+            return seen_rows.contains(&truth_table_key(prefix));
+        }
+        for value in carrier {
+            prefix.push(*value);
+            if !visit(carrier, seen_rows, arity, prefix) {
+                prefix.pop();
+                return false;
+            }
+            prefix.pop();
+        }
+        true
+    }
+    visit(&carrier, &seen_rows, arity, &mut Vec::new())
+}
+
+fn truth_table_fallback_dependencies(
+    env: &Env,
+    op_name: &str,
+    previous_impl: Option<&ActiveImplementationDescriptor>,
+) -> Vec<String> {
+    let mut deps = Vec::new();
+    if let Some(implementation) = previous_impl {
+        deps.extend(implementation.depends_on.iter().cloned());
+    } else if let Some(rc) = env.root_constructs.get(op_name) {
+        deps.extend(rc.depends_on.iter().cloned());
+    }
+    deps.push("truth-table-fallback".to_string());
+    let mut seen = HashSet::new();
+    deps.into_iter()
+        .filter(|dep| seen.insert(dep.clone()))
+        .collect()
+}
+
 // ========== Operator ==========
 
 /// Operator types supported by the environment.
@@ -739,6 +866,25 @@ pub enum Op {
     /// Numeric comparisons: <, <=
     Less,
     LessOrEqual,
+    /// Links-defined finite truth table (issue #97, Section 3 of
+    /// netkeep80's punch-list). When invoked the evaluator looks up the
+    /// first row whose inputs match `xs` (±1e-12 tolerance) and returns
+    /// the row's output. If no row matches, the call delegates to
+    /// `fallback` so partial tables overlay cleanly onto the host
+    /// default. `rows` carries values pre-resolved against
+    /// `env.symbol_prob` at activation time.
+    TruthTable {
+        rows: Vec<TruthTableEntry>,
+        fallback: Option<Box<Op>>,
+    },
+}
+
+/// One resolved row inside an `Op::TruthTable`. Inputs and output are
+/// stored as `f64` after symbolic constants have been looked up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TruthTableEntry {
+    pub inputs: Vec<f64>,
+    pub output: f64,
 }
 
 // ========== Environment ==========
@@ -891,17 +1037,48 @@ pub struct Env {
     pub foundations: HashMap<String, FoundationDescriptor>,
     pub active_foundation: String,
     pub foundation_stack: Vec<FoundationFrame>,
+    pub active_implementations: HashMap<String, ActiveImplementationDescriptor>,
+    /// Carrier enforcement state (issue #97, Section 2). Off by default so
+    /// legacy programs are not constrained; flipped on by an enclosing
+    /// `(with-foundation <name>)` whose descriptor includes both
+    /// `(carrier ...)` and `(strict-carrier)` clauses.
+    pub strict_carrier: bool,
+    pub carrier: Option<Vec<f64>>,
+    pub carrier_label: Option<String>,
+    /// Proof-object substrate (issue #97, Phase 3 of netkeep80's punch-list).
+    /// `proof_rules` maps a declared rule name to its premise patterns and
+    /// conclusion pattern (with `?meta` leaves as metavariables). The map
+    /// `proof_objects` records concrete derivations consumed by
+    /// `(check-proof <name>)`. Both are data-only: declaring a rule never
+    /// alters evaluator behaviour. The CLI's foundation report surfaces them.
+    pub proof_rules: HashMap<String, ProofRule>,
+    pub proof_assumptions: HashMap<String, ProofAssumption>,
+    pub proof_objects: HashMap<String, ProofObject>,
+    /// Pure-links strict mode (issue #97, Phase 6 of netkeep80's punch-list).
+    /// When `strict_pure_links` is true, every queried form is audited
+    /// against the root-construct registry; any operator whose status is
+    /// `host-primitive` or `host-derived` triggers an E065 diagnostic unless
+    /// the construct is in `allowed_host_primitives`. Off by default so
+    /// legacy programs run unchanged.
+    pub strict_pure_links: bool,
+    pub allowed_host_primitives: HashSet<String>,
 }
 
 /// Stack frame pushed when entering a foundation scope. Stores the previous
 /// active foundation name plus a snapshot of any operators the foundation
 /// rebinds, so `exit_foundation` can restore the prior semantics exactly.
 /// `snapshot` maps operator name -> previous Op (None if the op did not
-/// exist before).
+/// exist before). Carrier snapshot fields (issue #97 Section 2) preserve the
+/// strict-carrier state of the enclosing scope so nested `(with-foundation
+/// ...)` bodies roll back cleanly when their inner scope exits.
 #[derive(Debug, Clone)]
 pub struct FoundationFrame {
     pub previous_active: String,
     pub snapshot: Vec<(String, Option<Op>)>,
+    pub previous_active_implementations: Vec<(String, Option<ActiveImplementationDescriptor>)>,
+    pub previous_strict_carrier: bool,
+    pub previous_carrier: Option<Vec<f64>>,
+    pub previous_carrier_label: Option<String>,
 }
 
 /// A root-construct descriptor. Stored on the `Env` for the foundation
@@ -935,6 +1112,58 @@ pub struct FoundationDescriptor {
     pub extends: Option<String>,
     pub numeric_domain: Option<String>,
     pub truth_domain: Option<String>,
+    /// Carrier (issue #97, Section 2): the explicit set of values the
+    /// foundation considers legal for queries and probability assignments.
+    /// Each entry is stored as a string so `enter_foundation` can resolve
+    /// symbolic constants (`true`, `false`, `unknown`) through
+    /// `env.symbol_prob` at activation time. Numeric literals stay literal.
+    pub carrier: Vec<String>,
+    /// When true, the active `with-foundation` scope enforces the carrier
+    /// at runtime: out-of-carrier query results and probability
+    /// assignments raise an `E063` diagnostic instead of being silently
+    /// clamped. Defaults to `false` for backward compatibility — declaring
+    /// `(carrier ...)` alone is informational.
+    pub strict_carrier: bool,
+    /// Links-defined finite truth tables (issue #97, Section 3 of
+    /// netkeep80's punch-list). Each entry rebinds the named operator to
+    /// the listed row set for the duration of `(with-foundation ...)`.
+    /// Inputs and outputs are stored as strings so `enter_foundation` can
+    /// resolve symbolic truth constants (`true`, `false`, `unknown`)
+    /// through `env.symbol_prob` at activation time. Numeric literals stay
+    /// literal. A row whose inputs don't match falls through to the
+    /// previously installed op so partial tables remain backward-
+    /// compatible.
+    pub truth_tables: Vec<(String, Vec<TruthTableRow>)>,
+    /// Experimental MTC/anum foundation profile metadata (issue #97,
+    /// Phase 9). When `experimental` is true the trust audit prints an
+    /// `[experimental]` tag next to the foundation name so consumers can
+    /// see it carries no stability guarantees. `root` is the foundation's
+    /// root symbol (e.g. `∞` for mtc-anum) and `abits` lists its
+    /// foundational alphabet pairs (symbol → meaning).
+    pub experimental: bool,
+    pub root: Option<String>,
+    pub abits: Vec<(String, String)>,
+}
+
+/// Active implementation selected by the current foundation scope for a
+/// construct such as `and` or `not`. This is the behaviour-facing counterpart
+/// to the global root-construct descriptor: strict pure-links mode consults
+/// it before falling back to the global registry.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ActiveImplementationDescriptor {
+    pub construct: String,
+    pub foundation: Option<String>,
+    pub implementation: Option<String>,
+    pub status: Option<String>,
+    pub depends_on: Vec<String>,
+}
+
+/// One row of a `(truth-table <op> ...)` declaration: a sequence of input
+/// tokens and the output token. See `FoundationDescriptor::truth_tables`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TruthTableRow {
+    pub inputs: Vec<String>,
+    pub output: String,
 }
 
 /// Snapshot of the foundation/root-construct state for the trust report.
@@ -947,6 +1176,84 @@ pub struct FoundationReport {
     pub root_constructs: Vec<RootConstructDescriptor>,
     pub by_status: Vec<(String, Vec<String>)>,
     pub foundations: Vec<FoundationDescriptor>,
+    pub active_implementations: Vec<ActiveImplementationDescriptor>,
+    /// Proof-object substrate (issue #97, Phase 3). Surfaced on the report so
+    /// the trust audit can list every declared rule and concrete derivation.
+    /// Names are kept sorted for stable output across runs.
+    pub proof_rules: Vec<ProofRuleSnapshot>,
+    pub proof_assumptions: Vec<ProofAssumptionSnapshot>,
+    pub proof_objects: Vec<ProofObjectSnapshot>,
+    /// Pure-links strict mode state (issue #97, Phase 6). Surfaced so the
+    /// trust audit can prove the engine is running in strict mode and list
+    /// every host primitive that was explicitly allow-listed.
+    pub strict_pure_links: bool,
+    pub allowed_host_primitives: Vec<String>,
+    /// Dependency-graph traversal (issue #97, Phase 7). For every registered
+    /// root-construct, the transitive closure of its `depends_on` chain,
+    /// sorted deterministically. Leaf constructs map to an empty vector.
+    /// Pairs are kept sorted by name so the report is reproducible.
+    pub dependency_graph: Vec<(String, Vec<String>)>,
+}
+
+/// A declared rule of inference. Premises and the conclusion are stored as
+/// AST nodes; leaves whose token starts with `?` are metavariables that
+/// bind during `check_proof_object`. Repeated metavariables must
+/// structurally match.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofRule {
+    pub name: String,
+    pub premises: Vec<Node>,
+    pub conclusion: Node,
+}
+
+/// An explicit proof leaf. Proof objects cite these with `(premise-by name)`
+/// or `(uses name)` so assumptions and axioms are visible in the proof graph.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofAssumption {
+    pub name: String,
+    pub kind: String,
+    pub judgement: Node,
+}
+
+/// A concrete derivation that claims to be an instance of a rule. Stored
+/// alongside the rule so `(check-proof <name>)` can re-validate it on
+/// demand without re-parsing the source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofObject {
+    pub name: String,
+    pub rule: String,
+    pub premises: Vec<Node>,
+    pub premise_refs: Vec<String>,
+    pub conclusion: Node,
+}
+
+/// Printed view of a `ProofRule` for `foundation_report()`. Patterns are
+/// stringified via `key_of` so consumers can pretty-print without owning
+/// the AST representation.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProofRuleSnapshot {
+    pub name: String,
+    pub premises: Vec<String>,
+    pub conclusion: String,
+}
+
+/// Printed view of a proof assumption/axiom for `foundation_report()`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProofAssumptionSnapshot {
+    pub name: String,
+    pub kind: String,
+    pub judgement: String,
+}
+
+/// Printed view of a `ProofObject` for `foundation_report()`. Mirrors
+/// `ProofRuleSnapshot` and additionally records the referenced rule.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProofObjectSnapshot {
+    pub name: String,
+    pub rule: String,
+    pub premises: Vec<String>,
+    pub premise_refs: Vec<String>,
+    pub conclusion: String,
 }
 
 /// One constructor of an inductive datatype.
@@ -1098,6 +1405,15 @@ impl Env {
             foundations: HashMap::new(),
             active_foundation: "default-rml".to_string(),
             foundation_stack: Vec::new(),
+            active_implementations: HashMap::new(),
+            strict_carrier: false,
+            carrier: None,
+            carrier_label: None,
+            proof_rules: HashMap::new(),
+            proof_assumptions: HashMap::new(),
+            proof_objects: HashMap::new(),
+            strict_pure_links: false,
+            allowed_host_primitives: HashSet::new(),
         };
 
         // Initialize truth constants: true, false, unknown, undefined
@@ -1171,8 +1487,150 @@ impl Env {
             extends: None,
             numeric_domain: Some("decimal-12".to_string()),
             truth_domain: Some("default-truth".to_string()),
+            carrier: Vec::new(),
+            strict_carrier: false,
+            truth_tables: Vec::new(),
+            experimental: false,
+            root: None,
+            abits: Vec::new(),
         };
         self.foundations.insert(default.name.clone(), default);
+        // Pre-seed the experimental MTC/anum foundation (issue #97, Phase
+        // 9). Opt-in only — never activated implicitly. Selecting it via
+        // `(with-foundation mtc-anum ...)` does NOT rewire host arithmetic;
+        // it is descriptive metadata plus a serialization alphabet.
+        let mtc_anum = FoundationDescriptor {
+            name: "mtc-anum".to_string(),
+            description: Some(
+                "experimental metatheory-of-links foundation (anum serialization)".to_string(),
+            ),
+            uses: Vec::new(),
+            defines: Vec::new(),
+            extends: None,
+            numeric_domain: None,
+            truth_domain: Some("mtc-abits".to_string()),
+            carrier: Vec::new(),
+            strict_carrier: false,
+            truth_tables: Vec::new(),
+            experimental: true,
+            root: Some("∞".to_string()),
+            abits: vec![
+                ("[".to_string(), "start-of-meaning".to_string()),
+                ("]".to_string(), "end-of-meaning".to_string()),
+                ("1".to_string(), "unit-of-meaning".to_string()),
+                ("0".to_string(), "zero-of-meaning".to_string()),
+            ],
+        };
+        self.foundations.insert(mtc_anum.name.clone(), mtc_anum);
+        let boolean_links = FoundationDescriptor {
+            name: "boolean-links".to_string(),
+            description: Some(
+                "links-defined two-valued Boolean logic via finite truth tables".to_string(),
+            ),
+            uses: Vec::new(),
+            defines: Vec::new(),
+            extends: None,
+            numeric_domain: Some("boolean-zero-one".to_string()),
+            truth_domain: Some("boolean-two-valued".to_string()),
+            carrier: vec!["0".to_string(), "1".to_string()],
+            strict_carrier: true,
+            truth_tables: vec![
+                (
+                    "and".to_string(),
+                    vec![
+                        TruthTableRow {
+                            inputs: vec!["1".to_string(), "1".to_string()],
+                            output: "1".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["1".to_string(), "0".to_string()],
+                            output: "0".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string(), "1".to_string()],
+                            output: "0".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string(), "0".to_string()],
+                            output: "0".to_string(),
+                        },
+                    ],
+                ),
+                (
+                    "or".to_string(),
+                    vec![
+                        TruthTableRow {
+                            inputs: vec!["1".to_string(), "1".to_string()],
+                            output: "1".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["1".to_string(), "0".to_string()],
+                            output: "1".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string(), "1".to_string()],
+                            output: "1".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string(), "0".to_string()],
+                            output: "0".to_string(),
+                        },
+                    ],
+                ),
+                (
+                    "not".to_string(),
+                    vec![
+                        TruthTableRow {
+                            inputs: vec!["1".to_string()],
+                            output: "0".to_string(),
+                        },
+                        TruthTableRow {
+                            inputs: vec!["0".to_string()],
+                            output: "1".to_string(),
+                        },
+                    ],
+                ),
+            ],
+            experimental: false,
+            root: None,
+            abits: Vec::new(),
+        };
+        self.foundations
+            .insert(boolean_links.name.clone(), boolean_links);
+        // Pre-seed the links-defined typed-kernel foundation (issue #97,
+        // Phase 5). Selecting it via
+        // `(with-foundation typed-kernel-links ...)` records the proof
+        // substrate rules `pi-formation`, `lambda-introduction`,
+        // `application-elimination`, and `beta-conversion` as the
+        // canonical links-defined replacements for the host kernel's
+        // typing judgements. Evaluation still runs through the host kernel;
+        // the foundation is selected so the trust audit can list the four
+        // rules as the active derivations.
+        let typed_kernel_links = FoundationDescriptor {
+            name: "typed-kernel-links".to_string(),
+            description: Some(
+                "links-defined typed-kernel fragment (Pi/lambda/apply/beta as proof rules)"
+                    .to_string(),
+            ),
+            uses: vec![
+                "pi-formation".to_string(),
+                "lambda-introduction".to_string(),
+                "application-elimination".to_string(),
+                "beta-conversion".to_string(),
+            ],
+            defines: Vec::new(),
+            extends: Some("default-rml".to_string()),
+            numeric_domain: Some("decimal-12".to_string()),
+            truth_domain: Some("default-truth".to_string()),
+            carrier: Vec::new(),
+            strict_carrier: false,
+            truth_tables: Vec::new(),
+            experimental: false,
+            root: None,
+            abits: Vec::new(),
+        };
+        self.foundations
+            .insert(typed_kernel_links.name.clone(), typed_kernel_links);
         seed_builtin_root_constructs(self);
     }
 
@@ -1185,7 +1643,8 @@ impl Env {
         }
         let prev = self.root_constructs.get(&descriptor.name).cloned();
         let merged = merge_root_construct_descriptors(prev, descriptor);
-        self.root_constructs.insert(merged.name.clone(), merged.clone());
+        self.root_constructs
+            .insert(merged.name.clone(), merged.clone());
         Ok(merged)
     }
 
@@ -1194,8 +1653,7 @@ impl Env {
     }
 
     pub fn list_root_constructs(&self) -> Vec<RootConstructDescriptor> {
-        let mut v: Vec<RootConstructDescriptor> =
-            self.root_constructs.values().cloned().collect();
+        let mut v: Vec<RootConstructDescriptor> = self.root_constructs.values().cloned().collect();
         v.sort_by(|a, b| a.name.cmp(&b.name));
         v
     }
@@ -1227,16 +1685,132 @@ impl Env {
         // entries that name a known truth aggregator are applied (avg, min,
         // max, product, probabilistic_sum); other entries are data-only.
         let mut snapshot: Vec<(String, Option<Op>)> = Vec::new();
+        let mut previous_active_implementations: Vec<(
+            String,
+            Option<ActiveImplementationDescriptor>,
+        )> = Vec::new();
+        let snapshot_impl = |env: &Env,
+                             store: &mut Vec<(String, Option<ActiveImplementationDescriptor>)>,
+                             op_name: &str| {
+            if store.iter().any(|(n, _)| n == op_name) {
+                return;
+            }
+            store.push((
+                op_name.to_string(),
+                env.active_implementations.get(op_name).cloned(),
+            ));
+        };
         for (op_name, impl_name) in &foundation.defines {
             if let Some(agg) = Aggregator::from_name(impl_name) {
+                snapshot_impl(self, &mut previous_active_implementations, op_name);
                 let prev = self.ops.get(op_name).cloned();
                 snapshot.push((op_name.clone(), prev));
                 self.ops.insert(op_name.clone(), Op::Agg(agg));
+                self.active_implementations.insert(
+                    op_name.clone(),
+                    ActiveImplementationDescriptor {
+                        construct: op_name.clone(),
+                        foundation: Some(name.to_string()),
+                        implementation: Some(impl_name.clone()),
+                        status: Some("host-primitive".to_string()),
+                        depends_on: vec![impl_name.clone()],
+                    },
+                );
             }
+        }
+        // Truth tables (issue #97, Section 3 of netkeep80's punch-list).
+        // Layered on top of `(defines ...)` so a foundation can pin a
+        // finite slice of an operator and let the aggregator-based default
+        // handle the rest.
+        for (op_name, rows) in &foundation.truth_tables {
+            let mut resolved: Vec<TruthTableEntry> = Vec::new();
+            for row in rows {
+                let mut inputs: Vec<f64> = Vec::with_capacity(row.inputs.len());
+                let mut row_ok = true;
+                for tok in &row.inputs {
+                    match resolve_truth_table_value(self, tok) {
+                        Some(v) => inputs.push(v),
+                        None => {
+                            row_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if !row_ok {
+                    continue;
+                }
+                let output = match resolve_truth_table_value(self, &row.output) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                resolved.push(TruthTableEntry { inputs, output });
+            }
+            if resolved.is_empty() {
+                continue;
+            }
+            if !snapshot.iter().any(|(n, _)| n == op_name) {
+                let prev = self.ops.get(op_name).cloned();
+                snapshot.push((op_name.clone(), prev));
+            }
+            snapshot_impl(self, &mut previous_active_implementations, op_name);
+            let previous_impl = self.active_implementations.get(op_name).cloned();
+            let is_total = truth_table_rows_complete_for_carrier(self, rows, &foundation);
+            let depends_on = if is_total {
+                Vec::new()
+            } else {
+                truth_table_fallback_dependencies(self, op_name, previous_impl.as_ref())
+            };
+            let fallback = self.ops.get(op_name).cloned().map(Box::new);
+            self.ops.insert(
+                op_name.clone(),
+                Op::TruthTable {
+                    rows: resolved,
+                    fallback,
+                },
+            );
+            self.active_implementations.insert(
+                op_name.clone(),
+                ActiveImplementationDescriptor {
+                    construct: op_name.clone(),
+                    foundation: Some(name.to_string()),
+                    implementation: Some(format!("truth-table:{}/{}", name, op_name)),
+                    status: Some("links-defined".to_string()),
+                    depends_on,
+                },
+            );
+        }
+        // Carrier snapshot for opt-in enforcement (issue #97, Section 2).
+        // `strict_carrier` is what the evaluator hot path checks; `carrier`
+        // is the resolved numeric set. Symbolic carrier values (`true`,
+        // `false`, `unknown`, ...) resolve through `symbol_prob` so
+        // user-defined truth constants flow in.
+        let previous_strict_carrier = self.strict_carrier;
+        let previous_carrier = self.carrier.clone();
+        let previous_carrier_label = self.carrier_label.clone();
+        if foundation.strict_carrier && !foundation.carrier.is_empty() {
+            let mut resolved: Vec<f64> = Vec::new();
+            for tok in &foundation.carrier {
+                if let Ok(num) = tok.parse::<f64>() {
+                    if num.is_finite() {
+                        resolved.push(num);
+                        continue;
+                    }
+                }
+                if let Some(p) = self.symbol_prob.get(tok) {
+                    resolved.push(*p);
+                }
+            }
+            self.strict_carrier = true;
+            self.carrier = Some(resolved);
+            self.carrier_label = Some(foundation.carrier.join(" "));
         }
         let frame = FoundationFrame {
             previous_active: std::mem::take(&mut self.active_foundation),
             snapshot,
+            previous_active_implementations,
+            previous_strict_carrier,
+            previous_carrier,
+            previous_carrier_label,
         };
         self.foundation_stack.push(frame);
         self.active_foundation = name.to_string();
@@ -1255,10 +1829,55 @@ impl Env {
                     }
                 }
             }
+            for (op_name, prev) in frame.previous_active_implementations.into_iter().rev() {
+                match prev {
+                    Some(implementation) => {
+                        self.active_implementations.insert(op_name, implementation);
+                    }
+                    None => {
+                        self.active_implementations.remove(&op_name);
+                    }
+                }
+            }
             self.active_foundation = frame.previous_active;
+            self.strict_carrier = frame.previous_strict_carrier;
+            self.carrier = frame.previous_carrier;
+            self.carrier_label = frame.previous_carrier_label;
         } else {
             self.active_foundation = "default-rml".to_string();
+            self.active_implementations.clear();
+            self.strict_carrier = false;
+            self.carrier = None;
+            self.carrier_label = None;
         }
+    }
+
+    /// Check `value` against the active foundation's carrier. Returns `None`
+    /// when the carrier is inactive or the value is legal, or a
+    /// human-readable message otherwise (consumed by the caller to build an
+    /// `E063` diagnostic). Mirrors the JS `Env.checkCarrierValue` helper.
+    pub fn check_carrier_value(&self, value: f64) -> Option<String> {
+        if !self.strict_carrier {
+            return None;
+        }
+        let carrier = self.carrier.as_ref()?;
+        if carrier.is_empty() {
+            return None;
+        }
+        if !value.is_finite() {
+            return None;
+        }
+        if carrier.iter().any(|c| (*c - value).abs() < 1e-12) {
+            return None;
+        }
+        let mut sorted = carrier.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let allowed: Vec<String> = sorted.iter().map(|v| format_trace_value(*v)).collect();
+        Some(format!(
+            "value {} is not in active carrier {{{}}}",
+            format_trace_value(value),
+            allowed.join(", ")
+        ))
     }
 
     pub fn foundation_report(&self) -> FoundationReport {
@@ -1282,6 +1901,44 @@ impl Env {
         let mut foundations: Vec<FoundationDescriptor> =
             self.foundations.values().cloned().collect();
         foundations.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut active_implementations: Vec<ActiveImplementationDescriptor> =
+            self.active_implementations.values().cloned().collect();
+        active_implementations.sort_by(|a, b| a.construct.cmp(&b.construct));
+        let mut proof_rules: Vec<ProofRuleSnapshot> = self
+            .proof_rules
+            .values()
+            .map(|r| ProofRuleSnapshot {
+                name: r.name.clone(),
+                premises: r.premises.iter().map(key_of).collect(),
+                conclusion: key_of(&r.conclusion),
+            })
+            .collect();
+        proof_rules.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut proof_assumptions: Vec<ProofAssumptionSnapshot> = self
+            .proof_assumptions
+            .values()
+            .map(|a| ProofAssumptionSnapshot {
+                name: a.name.clone(),
+                kind: a.kind.clone(),
+                judgement: key_of(&a.judgement),
+            })
+            .collect();
+        proof_assumptions.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut proof_objects: Vec<ProofObjectSnapshot> = self
+            .proof_objects
+            .values()
+            .map(|po| ProofObjectSnapshot {
+                name: po.name.clone(),
+                rule: po.rule.clone(),
+                premises: po.premises.iter().map(key_of).collect(),
+                premise_refs: po.premise_refs.clone(),
+                conclusion: key_of(&po.conclusion),
+            })
+            .collect();
+        proof_objects.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut allowed: Vec<String> = self.allowed_host_primitives.iter().cloned().collect();
+        allowed.sort();
+        let dependency_graph = build_dependency_graph(self);
         FoundationReport {
             active_foundation: active,
             description: foundation.as_ref().and_then(|f| f.description.clone()),
@@ -1290,7 +1947,60 @@ impl Env {
             root_constructs: constructs,
             by_status,
             foundations,
+            active_implementations,
+            proof_rules,
+            proof_assumptions,
+            proof_objects,
+            strict_pure_links: self.strict_pure_links,
+            allowed_host_primitives: allowed,
+            dependency_graph,
         }
+    }
+
+    /// Return the transitive closure of a construct's dependencies,
+    /// breadth-first and deterministically sorted at every level.
+    /// Missing intermediate deps are silently retained (so a downstream
+    /// caller can detect dangling names by intersecting against
+    /// `root_constructs.keys()`). Returns `None` if the root itself is
+    /// unknown.
+    pub fn dependency_closure(&self, name: &str) -> Option<Vec<String>> {
+        if name.is_empty() {
+            return None;
+        }
+        if !self.root_constructs.contains_key(name) {
+            return None;
+        }
+        Some(closure_for(self, name))
+    }
+
+    /// Register a declared rule of inference. Data-only.
+    pub fn register_proof_rule(&mut self, rule: ProofRule) {
+        self.proof_rules.insert(rule.name.clone(), rule);
+    }
+
+    /// Register an explicit proof assumption/axiom. Data-only; proof objects
+    /// cite these leaves via `(premise-by <name>)` or `(uses <name>...)`.
+    pub fn register_proof_assumption(&mut self, assumption: ProofAssumption) {
+        self.proof_assumptions
+            .insert(assumption.name.clone(), assumption);
+    }
+
+    /// Register a concrete derivation. Data-only; verification runs lazily
+    /// when `(check-proof <name>)` evaluates.
+    pub fn register_proof_object(&mut self, po: ProofObject) {
+        self.proof_objects.insert(po.name.clone(), po);
+    }
+
+    pub fn get_proof_rule(&self, name: &str) -> Option<&ProofRule> {
+        self.proof_rules.get(name)
+    }
+
+    pub fn get_proof_assumption(&self, name: &str) -> Option<&ProofAssumption> {
+        self.proof_assumptions.get(name)
+    }
+
+    pub fn get_proof_object(&self, name: &str) -> Option<&ProofObject> {
+        self.proof_objects.get(name)
     }
 
     pub fn get_op(&self, name: &str) -> Option<&Op> {
@@ -1391,8 +2101,7 @@ impl Env {
             .current_span
             .clone()
             .unwrap_or_else(|| self.default_span.clone());
-        self.trace_events
-            .push(TraceEvent::new(kind, detail, span));
+        self.trace_events.push(TraceEvent::new(kind, detail, span));
     }
 
     pub fn set_type(&mut self, expr: &str, type_expr: &str) {
@@ -1498,6 +2207,111 @@ impl Env {
                     self.hi
                 } else {
                     self.lo
+                }
+            }
+            Op::TruthTable {
+                ref rows,
+                ref fallback,
+            } => {
+                for row in rows {
+                    if row.inputs.len() != vals.len() {
+                        continue;
+                    }
+                    if row
+                        .inputs
+                        .iter()
+                        .zip(vals.iter())
+                        .all(|(a, b)| (*a - *b).abs() < 1e-12)
+                    {
+                        return row.output;
+                    }
+                }
+                match fallback {
+                    Some(prev) => self.apply_op_inner(prev, vals),
+                    None => self.lo,
+                }
+            }
+        }
+    }
+
+    /// Internal helper used by `Op::TruthTable` fallback dispatch so a
+    /// table can delegate to a previously installed op without going
+    /// through the name lookup path again.
+    fn apply_op_inner(&self, op: &Op, vals: &[f64]) -> f64 {
+        let owned = op.clone();
+        match owned {
+            Op::Not => {
+                if vals.is_empty() {
+                    self.lo
+                } else {
+                    self.hi - (vals[0] - self.lo)
+                }
+            }
+            Op::Agg(agg) => dec_round(agg.apply(vals, self.lo)),
+            Op::Eq | Op::Neq => self.lo,
+            Op::Compose { outer, inner } => {
+                let inner_result = self.apply_op(&inner, vals);
+                self.apply_op(&outer, &[inner_result])
+            }
+            Op::Add => {
+                if vals.len() >= 2 {
+                    dec_round(vals[0] + vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Sub => {
+                if vals.len() >= 2 {
+                    dec_round(vals[0] - vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Mul => {
+                if vals.len() >= 2 {
+                    dec_round(vals[0] * vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Div => {
+                if vals.len() >= 2 && vals[1] != 0.0 {
+                    dec_round(vals[0] / vals[1])
+                } else {
+                    0.0
+                }
+            }
+            Op::Less => {
+                if vals.len() >= 2 && vals[0] < vals[1] {
+                    self.hi
+                } else {
+                    self.lo
+                }
+            }
+            Op::LessOrEqual => {
+                if vals.len() >= 2 && vals[0] <= vals[1] {
+                    self.hi
+                } else {
+                    self.lo
+                }
+            }
+            Op::TruthTable { rows, fallback } => {
+                for row in &rows {
+                    if row.inputs.len() != vals.len() {
+                        continue;
+                    }
+                    if row
+                        .inputs
+                        .iter()
+                        .zip(vals.iter())
+                        .all(|(a, b)| (*a - *b).abs() < 1e-12)
+                    {
+                        return row.output;
+                    }
+                }
+                match fallback {
+                    Some(prev) => self.apply_op_inner(&prev, vals),
+                    None => self.lo,
                 }
             }
         }
@@ -2167,7 +2981,227 @@ fn merge_foundation_descriptors(
     if next.truth_domain.is_some() {
         base.truth_domain = next.truth_domain;
     }
+    // Carrier (issue #97 Section 2): a later registration with the same name
+    // replaces the carrier list but only flips `strict_carrier` to true
+    // (never silently back off).
+    if !next.carrier.is_empty() {
+        base.carrier = next.carrier;
+    }
+    if next.strict_carrier {
+        base.strict_carrier = true;
+    }
+    // Truth tables (issue #97, Section 3 of netkeep80's punch-list). A later
+    // registration adds/overwrites table entries operator-by-operator so the
+    // user can extend a previously declared foundation with more tables.
+    for (op_name, rows) in next.truth_tables {
+        if let Some(existing) = base
+            .truth_tables
+            .iter_mut()
+            .find(|(name, _)| name == &op_name)
+        {
+            existing.1 = rows;
+        } else {
+            base.truth_tables.push((op_name, rows));
+        }
+    }
+    // Experimental foundation profile metadata (issue #97, Phase 9). A later
+    // registration can flip `experimental` to true (never silently back to
+    // false), set or replace the root symbol, and append additional abits.
+    if next.experimental {
+        base.experimental = true;
+    }
+    if next.root.is_some() {
+        base.root = next.root;
+    }
+    if !next.abits.is_empty() {
+        let mut seen: std::collections::HashSet<String> =
+            base.abits.iter().map(|(s, _)| s.clone()).collect();
+        for (symbol, meaning) in next.abits {
+            if !seen.contains(&symbol) {
+                seen.insert(symbol.clone());
+                base.abits.push((symbol, meaning));
+            }
+        }
+    }
     base
+}
+
+// ---------- Dependency graph traversal (issue #97, Phase 7) ----------
+//
+// Compute the transitive closure of a single root-construct's dependencies,
+// breadth-first. Missing intermediate deps are silently retained (so the
+// final closure can surface dangling names for downstream tools to detect
+// against the registry). The traversal uses a seen-set so the helper does
+// not loop forever in the presence of cycles. The result is sorted so two
+// invocations against the same registry yield byte-identical output.
+fn closure_for(env: &Env, name: &str) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    queue.push_back(name.to_string());
+    while let Some(next) = queue.pop_front() {
+        if seen.contains(&next) {
+            continue;
+        }
+        seen.insert(next.clone());
+        if next != name {
+            order.push(next.clone());
+        }
+        if let Some(rc) = env.root_constructs.get(&next) {
+            let mut deps = rc.depends_on.clone();
+            deps.sort();
+            for dep in deps {
+                if !seen.contains(&dep) {
+                    queue.push_back(dep);
+                }
+            }
+        }
+    }
+    order.sort();
+    order
+}
+
+/// Build a `[(name, [dep, ...]), ...]` listing covering every registered
+/// root-construct in deterministic, sorted order at every level.
+/// Constructs with no dependencies map to an empty vector so the trust
+/// audit can still see them. Complement of `Env::dependency_closure(name)`
+/// which gives a per-construct slice.
+pub fn build_dependency_graph(env: &Env) -> Vec<(String, Vec<String>)> {
+    let mut names: Vec<String> = env.root_constructs.keys().cloned().collect();
+    names.sort();
+    let mut out: Vec<(String, Vec<String>)> = Vec::with_capacity(names.len());
+    for name in names {
+        let closure = closure_for(env, &name);
+        out.push((name, closure));
+    }
+    out
+}
+
+// ---------- MTC/anum serialization (issue #97, Phase 9) ----------
+//
+// Encode a link expression into a string using only the four abits of the
+// experimental `mtc-anum` foundation: `[`, `]`, `0`, `1`. Each Node is
+// wrapped in `[ ... ]`; the first character after `[` is a tag — `0` for a
+// leaf, `1` for a list. A leaf's payload is its UTF-8 bytes encoded
+// most-significant-bit-first, 8 bits per byte. A list's payload is the
+// concatenated encoding of its children. Round-trippable via `decode_anum`.
+pub fn encode_anum(node: &Node) -> String {
+    let mut out = String::new();
+    encode_anum_into(node, &mut out);
+    out
+}
+
+fn encode_anum_into(node: &Node, out: &mut String) {
+    match node {
+        Node::Leaf(s) => {
+            out.push('[');
+            out.push('0');
+            for byte in s.as_bytes() {
+                for shift in (0..8).rev() {
+                    out.push(if (byte >> shift) & 1 == 1 { '1' } else { '0' });
+                }
+            }
+            out.push(']');
+        }
+        Node::List(children) => {
+            out.push('[');
+            out.push('1');
+            for child in children {
+                encode_anum_into(child, out);
+            }
+            out.push(']');
+        }
+    }
+}
+
+/// Decode an anum-encoded string into a Node. Strictly enforces the
+/// `[tag payload]` shape; any character outside the four-abit alphabet
+/// raises an error. Returns the decoded Node; errors if trailing content
+/// remains after the top-level frame.
+pub fn decode_anum(s: &str) -> Result<Node, String> {
+    let bytes = s.as_bytes();
+    let (node, pos) = decode_anum_at(bytes, 0)?;
+    if pos != bytes.len() {
+        return Err(format!("anum-decode: trailing data at position {}", pos));
+    }
+    Ok(node)
+}
+
+fn decode_anum_at(bytes: &[u8], mut pos: usize) -> Result<(Node, usize), String> {
+    if pos >= bytes.len() || bytes[pos] != b'[' {
+        return Err(format!("anum-decode: expected '[' at position {}", pos));
+    }
+    pos += 1;
+    if pos >= bytes.len() {
+        return Err("anum-decode: truncated input after '['".to_string());
+    }
+    let tag = bytes[pos];
+    if tag == b'0' {
+        pos += 1;
+        let mut bits = String::new();
+        while pos < bytes.len() && bytes[pos] != b']' {
+            let b = bytes[pos];
+            if b != b'0' && b != b'1' {
+                return Err(format!(
+                    "anum-decode: leaf payload may only contain '0' or '1' (got '{}' at {})",
+                    b as char, pos
+                ));
+            }
+            bits.push(b as char);
+            pos += 1;
+        }
+        if pos >= bytes.len() || bytes[pos] != b']' {
+            return Err(format!(
+                "anum-decode: unterminated leaf starting before position {}",
+                pos
+            ));
+        }
+        pos += 1;
+        if bits.len() % 8 != 0 {
+            return Err(format!(
+                "anum-decode: leaf bit-count {} is not byte-aligned",
+                bits.len()
+            ));
+        }
+        let mut payload: Vec<u8> = Vec::with_capacity(bits.len() / 8);
+        for chunk in bits.as_bytes().chunks(8) {
+            let mut byte: u8 = 0;
+            for &c in chunk {
+                byte = (byte << 1) | (if c == b'1' { 1 } else { 0 });
+            }
+            payload.push(byte);
+        }
+        let s = String::from_utf8(payload)
+            .map_err(|e| format!("anum-decode: invalid UTF-8 in leaf ({})", e))?;
+        Ok((Node::Leaf(s), pos))
+    } else if tag == b'1' {
+        pos += 1;
+        let mut items: Vec<Node> = Vec::new();
+        while pos < bytes.len() && bytes[pos] != b']' {
+            if bytes[pos] != b'[' {
+                return Err(format!(
+                    "anum-decode: list child must start with '[' (got '{}' at {})",
+                    bytes[pos] as char, pos
+                ));
+            }
+            let (child, next) = decode_anum_at(bytes, pos)?;
+            items.push(child);
+            pos = next;
+        }
+        if pos >= bytes.len() || bytes[pos] != b']' {
+            return Err(format!(
+                "anum-decode: unterminated list starting before position {}",
+                pos
+            ));
+        }
+        pos += 1;
+        Ok((Node::List(items), pos))
+    } else {
+        Err(format!(
+            "anum-decode: expected tag '0' or '1' after '[' at position {}",
+            pos
+        ))
+    }
 }
 
 /// Seed the registry with the built-in descriptors that describe what the
@@ -2200,7 +3234,8 @@ fn seed_builtin_root_constructs(env: &mut Env) {
         ("max", "aggregator", "host-primitive", vec![], None, None),
         ("product", "aggregator", "host-primitive", vec![], None, None),
         ("probabilistic_sum", "aggregator", "host-primitive", vec![], None, None),
-        ("not", "truth-operator", "user-configurable", vec!["truth-range"], None, None),
+        ("truth-table-fallback", "truth-table-fallback", "host-derived", vec![], None, None),
+        ("not", "truth-operator", "user-configurable", vec!["truth-range", "decimal-12-arithmetic"], None, None),
         ("and", "truth-operator", "user-configurable", vec!["avg"], None, None),
         ("or", "truth-operator", "user-configurable", vec!["max"], None, None),
         ("both", "truth-operator", "user-configurable", vec!["avg"], None, None),
@@ -2413,28 +3448,26 @@ fn parse_foundation_form(node: &Node) -> Result<FoundationDescriptor, String> {
         ..Default::default()
     };
     for child in &children[2..] {
-        let clause = match child {
-            Node::List(items) => items,
+        // LiNo collapses single-element parenthesized clauses such as
+        // `(strict-carrier)` into a bare `Leaf("strict-carrier")` because
+        // `Link::to_string()` strips the parens around a single token.
+        // Treat a bare leaf as a zero-argument clause.
+        let (key, rest): (&str, Vec<&Node>) = match child {
+            Node::Leaf(s) if !s.is_empty() => (s.as_str(), Vec::new()),
+            Node::List(items) if !items.is_empty() => match &items[0] {
+                Node::Leaf(s) => (s.as_str(), items.iter().skip(1).collect()),
+                _ => {
+                    return Err(
+                        "foundation child clauses must be lists led by a keyword".to_string(),
+                    );
+                }
+            },
             _ => {
                 return Err(
                     "foundation child clauses must be lists led by a keyword".to_string(),
                 );
             }
         };
-        if clause.is_empty() {
-            return Err(
-                "foundation child clauses must be lists led by a keyword".to_string(),
-            );
-        }
-        let key = match &clause[0] {
-            Node::Leaf(s) => s.as_str(),
-            _ => {
-                return Err(
-                    "foundation child clauses must be lists led by a keyword".to_string(),
-                );
-            }
-        };
-        let rest: Vec<&Node> = clause.iter().skip(1).collect();
         match key {
             "uses" => {
                 for r in &rest {
@@ -2498,6 +3531,83 @@ fn parse_foundation_form(node: &Node) -> Result<FoundationDescriptor, String> {
                     return Err("(truth-domain …) requires one name".to_string());
                 }
             }
+            "carrier" => {
+                // `(carrier <val1> <val2> ...)` — list the values the active
+                // foundation considers legal. Each value is kept as a string
+                // so `enter_foundation` can resolve symbolic constants
+                // (`true`, `false`, `unknown`) through `env.symbol_prob` at
+                // activation time. Numeric literals stay literal.
+                if rest.is_empty() {
+                    return Err("(carrier ...) requires at least one value".to_string());
+                }
+                foundation.carrier = rest.iter().map(|n| key_of(n)).collect();
+            }
+            "strict-carrier" => {
+                // `(strict-carrier)` opts the foundation into runtime
+                // enforcement. Without this clause, `(carrier ...)` is
+                // informational only and the evaluator stays
+                // backward-compatible.
+                foundation.strict_carrier = true;
+            }
+            "truth-table" => {
+                // `(truth-table <op> (in1 in2 ... -> out) ...)` — links-defined
+                // finite truth table that rebinds `<op>` for the duration of
+                // the foundation. Inputs and outputs are kept as strings so
+                // `enter_foundation` can resolve symbolic constants through
+                // `env.symbol_prob` at activation time.
+                if rest.is_empty() {
+                    return Err(
+                        "(truth-table <op> ...) requires an operator name".to_string(),
+                    );
+                }
+                let op_name = match rest[0] {
+                    Node::Leaf(ref s) if !s.is_empty() => s.clone(),
+                    _ => {
+                        return Err(
+                            "(truth-table <op> ...) requires an operator name".to_string(),
+                        );
+                    }
+                };
+                let mut table_rows: Vec<TruthTableRow> = Vec::new();
+                for raw in rest.iter().skip(1) {
+                    let row_items = match raw {
+                        Node::List(items) => items,
+                        _ => {
+                            return Err(format!(
+                                "(truth-table {} ...) rows must be lists like (in1 in2 -> out)",
+                                op_name
+                            ));
+                        }
+                    };
+                    let arrow_at = row_items
+                        .iter()
+                        .position(|n| matches!(n, Node::Leaf(s) if s == "->"));
+                    let arrow_at = match arrow_at {
+                        Some(idx) if idx >= 1 && idx == row_items.len() - 2 => idx,
+                        _ => {
+                            return Err(format!(
+                                "(truth-table {} ...) row must be (input ... -> output)",
+                                op_name
+                            ));
+                        }
+                    };
+                    let inputs: Vec<String> = row_items[..arrow_at]
+                        .iter()
+                        .map(|n| key_of(n))
+                        .collect();
+                    let output = key_of(&row_items[arrow_at + 1]);
+                    table_rows.push(TruthTableRow { inputs, output });
+                }
+                if table_rows.is_empty() {
+                    return Err(format!(
+                        "(truth-table {} ...) requires at least one row",
+                        op_name
+                    ));
+                }
+                foundation
+                    .truth_tables
+                    .push((op_name, table_rows));
+            }
             "description" => {
                 foundation.description = Some(
                     rest.iter()
@@ -2506,12 +3616,771 @@ fn parse_foundation_form(node: &Node) -> Result<FoundationDescriptor, String> {
                         .join(" "),
                 );
             }
+            "experimental" => {
+                // `(experimental)` flags the foundation as experimental so
+                // the trust audit can call it out (issue #97, Phase 9).
+                // Data-only.
+                foundation.experimental = true;
+            }
+            "root" => {
+                // `(root <symbol>)` records the foundation's root concept
+                // (e.g. `∞` for mtc-anum). Informational; surfaced on the
+                // report.
+                if rest.len() != 1 {
+                    return Err("(root <symbol>) requires exactly one value".to_string());
+                }
+                foundation.root = Some(key_of(rest[0]));
+            }
+            "abit" => {
+                // `(abit <symbol> <meaning...>)` records one atomic bit of
+                // the foundation's alphabet. The mtc-anum profile lists
+                // four abits: `[`, `]`, `1`, `0`. Informational; surfaced
+                // on the report.
+                if rest.is_empty() {
+                    return Err("(abit <symbol> <meaning>) requires a symbol".to_string());
+                }
+                let symbol = key_of(rest[0]);
+                let meaning = rest
+                    .iter()
+                    .skip(1)
+                    .map(|n| key_of(n))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                foundation.abits.push((symbol, meaning));
+            }
             _ => {
                 // Unknown clauses are accepted for forward compatibility.
             }
         }
     }
     Ok(foundation)
+}
+
+// ---------- Proof-object substrate (issue #97, Phase 3) ----------
+
+/// Returns true when the `(rule ...)` form looks like a proof-substrate
+/// rule (every non-name child is `(premise ...)` or `(conclusion ...)`, and
+/// at least one `conclusion` is present). Data-only `(rule <name>
+/// (sequence ...) ...)` forms used by self-bootstrap grammar files fall
+/// through to the legacy data path because they do not pass this guard.
+fn is_proof_rule_shape(children: &[Node]) -> bool {
+    if children.len() < 3 {
+        return false;
+    }
+    if !matches!(&children[1], Node::Leaf(s) if !s.is_empty()) {
+        return false;
+    }
+    let mut saw_conclusion = false;
+    for c in &children[2..] {
+        let clause = match c {
+            Node::List(items) => items,
+            _ => return false,
+        };
+        let key = match clause.first() {
+            Some(Node::Leaf(k)) => k.as_str(),
+            _ => return false,
+        };
+        match key {
+            "premise" => {}
+            "conclusion" => {
+                saw_conclusion = true;
+            }
+            _ => return false,
+        }
+    }
+    saw_conclusion
+}
+
+//
+// Parse `(rule <name> (premise <pat>)... (conclusion <pat>))`. Patterns are
+// plain `Node`s; leaves beginning with `?` are metavariables and bind during
+// `check_proof_object` matching. The form's clauses must be lists led by
+// `premise`/`conclusion`; this distinguishes the proof-substrate shape from
+// the data-only `(rule <name> (sequence ...) ...)` forms used by the
+// self-bootstrap grammar files, which fall through to the legacy data path.
+pub fn parse_rule_form(node: &Node) -> Result<ProofRule, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => {
+            return Err(
+                "rule form must be `(rule <name> (premise <pat>)... (conclusion <pat>))`".to_string(),
+            );
+        }
+    };
+    if children.len() < 3 || !matches!(children.first(), Some(Node::Leaf(h)) if h == "rule") {
+        return Err(
+            "rule form must be `(rule <name> (premise <pat>)... (conclusion <pat>))`".to_string(),
+        );
+    }
+    let name = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err("rule name must be a non-empty identifier".to_string()),
+    };
+    let mut premises: Vec<Node> = Vec::new();
+    let mut conclusion: Option<Node> = None;
+    for child in &children[2..] {
+        let clause = match child {
+            Node::List(c) => c,
+            _ => {
+                return Err(format!(
+                    "rule {}: clauses must be lists led by a keyword",
+                    name
+                ));
+            }
+        };
+        let key = match clause.first() {
+            Some(Node::Leaf(k)) => k.as_str(),
+            _ => {
+                return Err(format!(
+                    "rule {}: clauses must be lists led by a keyword",
+                    name
+                ));
+            }
+        };
+        match key {
+            "premise" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "rule {}: (premise <pat>) requires exactly one pattern",
+                        name
+                    ));
+                }
+                premises.push(clause[1].clone());
+            }
+            "conclusion" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "rule {}: (conclusion <pat>) requires exactly one pattern",
+                        name
+                    ));
+                }
+                if conclusion.is_some() {
+                    return Err(format!(
+                        "rule {}: only one (conclusion ...) clause is allowed",
+                        name
+                    ));
+                }
+                conclusion = Some(clause[1].clone());
+            }
+            other => {
+                return Err(format!(
+                    "rule {}: unknown clause keyword {}",
+                    name, other
+                ));
+            }
+        }
+    }
+    let conclusion = conclusion.ok_or_else(|| {
+        format!(
+            "rule {}: at least one (conclusion <pat>) clause is required",
+            name
+        )
+    })?;
+    Ok(ProofRule {
+        name,
+        premises,
+        conclusion,
+    })
+}
+
+// Parse `(proof-object <name> (applies <rule>) (premise <judgement>)...
+// (conclusion <judgement>))` into a descriptor stored on the env.
+pub fn parse_proof_assumption_form(node: &Node) -> Result<ProofAssumption, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => {
+            return Err(
+                "proof assumption form must be `(assumption <name> (judgement <j>))` or `(axiom <name> (judgement <j>))`".to_string(),
+            );
+        }
+    };
+    if children.len() < 2 {
+        return Err(
+            "proof assumption form must be `(assumption <name> (judgement <j>))` or `(axiom <name> (judgement <j>))`".to_string(),
+        );
+    }
+    let kind = match &children[0] {
+        Node::Leaf(s) if s == "assumption" || s == "axiom" => s.clone(),
+        _ => {
+            return Err(
+                "proof assumption form must be `(assumption <name> (judgement <j>))` or `(axiom <name> (judgement <j>))`".to_string(),
+            );
+        }
+    };
+    let name = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err(format!("{} name must be a non-empty identifier", kind)),
+    };
+    let mut judgement: Option<Node> = None;
+    for child in &children[2..] {
+        let clause = match child {
+            Node::List(c) => c,
+            _ => {
+                return Err(format!(
+                    "{} {}: clauses must be lists led by a keyword",
+                    kind, name
+                ));
+            }
+        };
+        let key = match clause.first() {
+            Some(Node::Leaf(k)) => k.as_str(),
+            _ => {
+                return Err(format!(
+                    "{} {}: clauses must be lists led by a keyword",
+                    kind, name
+                ));
+            }
+        };
+        match key {
+            "judgement" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "{} {}: (judgement <j>) requires one argument",
+                        kind, name
+                    ));
+                }
+                if judgement.is_some() {
+                    return Err(format!(
+                        "{} {}: only one (judgement ...) clause is allowed",
+                        kind, name
+                    ));
+                }
+                judgement = Some(clause[1].clone());
+            }
+            other => {
+                return Err(format!(
+                    "{} {}: unknown clause keyword {}",
+                    kind, name, other
+                ));
+            }
+        }
+    }
+    let judgement = judgement
+        .ok_or_else(|| format!("{} {}: (judgement <j>) clause is required", kind, name))?;
+    Ok(ProofAssumption {
+        name,
+        kind,
+        judgement,
+    })
+}
+
+// Parse `(proof-object <name> (applies <rule>) (premise <judgement>)...
+// (premise-by <dependency>)... (uses <dependency>...) (conclusion <judgement>))`
+// into a descriptor stored on the env.
+pub fn parse_proof_object_form(node: &Node) -> Result<ProofObject, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => {
+            return Err(
+                "proof-object form must be `(proof-object <name> (applies <rule>) ...)`"
+                    .to_string(),
+            );
+        }
+    };
+    if children.len() < 2 || !matches!(children.first(), Some(Node::Leaf(h)) if h == "proof-object")
+    {
+        return Err(
+            "proof-object form must be `(proof-object <name> (applies <rule>) ...)`".to_string(),
+        );
+    }
+    let name = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err("proof-object name must be a non-empty identifier".to_string()),
+    };
+    let mut rule: Option<String> = None;
+    let mut premises: Vec<Node> = Vec::new();
+    let mut premise_refs: Vec<String> = Vec::new();
+    let mut conclusion: Option<Node> = None;
+    for child in &children[2..] {
+        let clause = match child {
+            Node::List(c) => c,
+            _ => {
+                return Err(format!(
+                    "proof-object {}: clauses must be lists led by a keyword",
+                    name
+                ));
+            }
+        };
+        let key = match clause.first() {
+            Some(Node::Leaf(k)) => k.as_str(),
+            _ => {
+                return Err(format!(
+                    "proof-object {}: clauses must be lists led by a keyword",
+                    name
+                ));
+            }
+        };
+        match key {
+            "applies" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "proof-object {}: (applies <rule>) requires a rule name",
+                        name
+                    ));
+                }
+                rule = match &clause[1] {
+                    Node::Leaf(s) if !s.is_empty() => Some(s.clone()),
+                    _ => {
+                        return Err(format!(
+                            "proof-object {}: (applies <rule>) requires a rule name",
+                            name
+                        ));
+                    }
+                };
+            }
+            "premise" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "proof-object {}: (premise <judgement>) requires one argument",
+                        name
+                    ));
+                }
+                premises.push(clause[1].clone());
+            }
+            "premise-by" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "proof-object {}: (premise-by <name>) requires a dependency name",
+                        name
+                    ));
+                }
+                match &clause[1] {
+                    Node::Leaf(s) if !s.is_empty() => premise_refs.push(s.clone()),
+                    _ => {
+                        return Err(format!(
+                            "proof-object {}: (premise-by <name>) requires a dependency name",
+                            name
+                        ));
+                    }
+                }
+            }
+            "uses" => {
+                if clause.len() < 2 {
+                    return Err(format!(
+                        "proof-object {}: (uses <name>...) requires at least one dependency name",
+                        name
+                    ));
+                }
+                for dep in &clause[1..] {
+                    match dep {
+                        Node::Leaf(s) if !s.is_empty() => premise_refs.push(s.clone()),
+                        _ => {
+                            return Err(format!(
+                                "proof-object {}: (uses ...) dependencies must be names",
+                                name
+                            ));
+                        }
+                    }
+                }
+            }
+            "conclusion" => {
+                if clause.len() != 2 {
+                    return Err(format!(
+                        "proof-object {}: (conclusion <judgement>) requires one argument",
+                        name
+                    ));
+                }
+                if conclusion.is_some() {
+                    return Err(format!(
+                        "proof-object {}: only one (conclusion ...) clause is allowed",
+                        name
+                    ));
+                }
+                conclusion = Some(clause[1].clone());
+            }
+            other => {
+                return Err(format!(
+                    "proof-object {}: unknown clause keyword {}",
+                    name, other
+                ));
+            }
+        }
+    }
+    let rule =
+        rule.ok_or_else(|| format!("proof-object {}: (applies <rule>) clause is required", name))?;
+    let conclusion = conclusion.ok_or_else(|| {
+        format!(
+            "proof-object {}: (conclusion <judgement>) clause is required",
+            name
+        )
+    })?;
+    Ok(ProofObject {
+        name,
+        rule,
+        premises,
+        premise_refs,
+        conclusion,
+    })
+}
+
+// Structural matcher mirroring the JS `matchProofPattern`. `?meta` leaves
+// bind into `subs`; repeated metavariables must structurally match via
+// `key_of`. Lists must have equal length and match pair-wise. Returns true
+// on success and mutates `subs` in place.
+pub fn match_proof_pattern(
+    pattern: &Node,
+    candidate: &Node,
+    subs: &mut HashMap<String, Node>,
+) -> bool {
+    match pattern {
+        Node::Leaf(token) if token.starts_with('?') => {
+            if let Some(prev) = subs.get(token) {
+                key_of(prev) == key_of(candidate)
+            } else {
+                subs.insert(token.clone(), candidate.clone());
+                true
+            }
+        }
+        Node::Leaf(token) => matches!(candidate, Node::Leaf(c) if c == token),
+        Node::List(pat_children) => match candidate {
+            Node::List(cand_children) => {
+                if pat_children.len() != cand_children.len() {
+                    return false;
+                }
+                for (p, c) in pat_children.iter().zip(cand_children.iter()) {
+                    if !match_proof_pattern(p, c, subs) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => false,
+        },
+    }
+}
+
+/// Result of validating a proof-object against its declared rule. On success
+/// the substitution map records each metavariable's witness; on failure the
+/// error string is suitable for surfacing as an E064 diagnostic.
+pub enum CheckProofVerdict {
+    Ok(HashMap<String, Node>),
+    Err(String),
+}
+
+pub fn check_proof_object(env: &Env, name: &str) -> CheckProofVerdict {
+    match check_proof_object_inner(env, name, &[]) {
+        Ok(subs) => CheckProofVerdict::Ok(subs),
+        Err(message) => CheckProofVerdict::Err(message),
+    }
+}
+
+fn resolve_proof_dependency(env: &Env, name: &str, stack: &[String]) -> Result<Node, String> {
+    if let Some(assumption) = env.get_proof_assumption(name) {
+        return Ok(assumption.judgement.clone());
+    }
+    let po = env
+        .get_proof_object(name)
+        .ok_or_else(|| format!("unknown proof dependency {}", name))?;
+    check_proof_object_inner(env, name, stack)?;
+    Ok(po.conclusion.clone())
+}
+
+fn check_proof_object_inner(
+    env: &Env,
+    name: &str,
+    stack: &[String],
+) -> Result<HashMap<String, Node>, String> {
+    if stack.iter().any(|n| n == name) {
+        let mut cycle = stack.to_vec();
+        cycle.push(name.to_string());
+        return Err(format!("cyclic proof dependency: {}", cycle.join(" -> ")));
+    }
+    let po = match env.get_proof_object(name) {
+        Some(po) => po,
+        None => return Err(format!("unknown proof-object {}", name)),
+    };
+    let rule = match env.get_proof_rule(&po.rule) {
+        Some(r) => r,
+        None => {
+            return Err(format!(
+                "proof-object {} references unknown rule {}",
+                name, po.rule
+            ));
+        }
+    };
+
+    let mut effective_premises = po.premises.clone();
+    if !po.premise_refs.is_empty() {
+        effective_premises.clear();
+        let mut dependency_stack = stack.to_vec();
+        dependency_stack.push(name.to_string());
+        for (idx, dep) in po.premise_refs.iter().enumerate() {
+            let judgement = resolve_proof_dependency(env, dep, &dependency_stack)?;
+            if let Some(explicit) = po.premises.get(idx) {
+                if key_of(explicit) != key_of(&judgement) {
+                    return Err(format!(
+                        "proof-object {}: premise {} does not match referenced judgement {}",
+                        name,
+                        idx + 1,
+                        dep
+                    ));
+                }
+            }
+            effective_premises.push(judgement);
+        }
+        if !po.premises.is_empty() && po.premises.len() != po.premise_refs.len() {
+            return Err(format!(
+                "proof-object {}: has {} explicit premise(s) but {} proof dependency reference(s)",
+                name,
+                po.premises.len(),
+                po.premise_refs.len()
+            ));
+        }
+    } else if !po.premises.is_empty() {
+        return Err(format!(
+            "proof-object {}: premise 1 is unjustified; use (premise-by <name>) or declare an assumption/axiom",
+            name
+        ));
+    }
+
+    if effective_premises.len() != rule.premises.len() {
+        return Err(format!(
+            "proof-object {}: expected {} premise(s) for rule {}, got {}",
+            name,
+            rule.premises.len(),
+            po.rule,
+            effective_premises.len()
+        ));
+    }
+    let mut subs: HashMap<String, Node> = HashMap::new();
+    for (i, (pat, cand)) in rule
+        .premises
+        .iter()
+        .zip(effective_premises.iter())
+        .enumerate()
+    {
+        if !match_proof_pattern(pat, cand, &mut subs) {
+            return Err(format!(
+                "proof-object {}: premise {} does not match rule {}",
+                name,
+                i + 1,
+                po.rule
+            ));
+        }
+    }
+    if !match_proof_pattern(&rule.conclusion, &po.conclusion, &mut subs) {
+        return Err(format!(
+            "proof-object {}: conclusion does not match rule {}",
+            name, po.rule
+        ));
+    }
+    Ok(subs)
+}
+
+// ---------- Pure-links strict mode (issue #97, Phase 6) ----------
+//
+// Mirrors the JS implementation in `js/src/rml-links.mjs`. The forms
+// `(strict-foundation pure-links)` and `(allow-host-primitive <name>...)`
+// flip the audit on and whitelist specific constructs respectively. Every
+// query is then scanned: any operator leaf whose registered root-construct
+// status is `host-primitive` or `host-derived` raises an E065 diagnostic
+// unless the construct name is in `env.allowed_host_primitives`.
+
+/// Parsed `(strict-foundation <profile>)` directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrictFoundationDecl {
+    pub profile: String,
+}
+
+/// Parsed `(allow-host-primitive <name>...)` directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowHostPrimitiveDecl {
+    pub names: Vec<String>,
+}
+
+pub fn parse_strict_foundation_form(node: &Node) -> Result<StrictFoundationDecl, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => return Err("(strict-foundation <profile>) is required".to_string()),
+    };
+    if children.is_empty() || !matches!(children.first(), Some(Node::Leaf(h)) if h == "strict-foundation") {
+        return Err("(strict-foundation <profile>) is required".to_string());
+    }
+    if children.len() != 2 {
+        return Err("(strict-foundation <profile>) requires a single profile name".to_string());
+    }
+    let profile = match &children[1] {
+        Node::Leaf(s) if !s.is_empty() => s.clone(),
+        _ => return Err("(strict-foundation <profile>) requires a single profile name".to_string()),
+    };
+    if profile != "pure-links" {
+        return Err(format!(
+            "unknown strict-foundation profile: {} (expected pure-links)",
+            profile
+        ));
+    }
+    Ok(StrictFoundationDecl { profile })
+}
+
+pub fn parse_allow_host_primitive_form(node: &Node) -> Result<AllowHostPrimitiveDecl, String> {
+    let children = match node {
+        Node::List(items) => items,
+        _ => return Err("(allow-host-primitive <name>...) is required".to_string()),
+    };
+    if children.is_empty() || !matches!(children.first(), Some(Node::Leaf(h)) if h == "allow-host-primitive") {
+        return Err("(allow-host-primitive <name>...) is required".to_string());
+    }
+    if children.len() < 2 {
+        return Err(
+            "(allow-host-primitive <name>...) requires at least one construct name".to_string(),
+        );
+    }
+    let mut names = Vec::new();
+    for child in &children[1..] {
+        match child {
+            Node::Leaf(s) if !s.is_empty() => names.push(s.clone()),
+            _ => {
+                return Err(
+                    "(allow-host-primitive ...) names must be non-empty identifiers".to_string()
+                );
+            }
+        }
+    }
+    Ok(AllowHostPrimitiveDecl { names })
+}
+
+/// Operator leaves the strict scanner explicitly ignores — surface keywords
+/// (`with`, `proof`, `?`) and registry meta-forms that have nothing to do
+/// with the host-primitive substrate.
+fn pure_links_scanner_ignored(name: &str) -> bool {
+    matches!(
+        name,
+        "?" | "with"
+            | "proof"
+            | "by"
+            | "because"
+            | "let"
+            | "in"
+            | "where"
+            | ":"
+            | "::"
+            | "has"
+            | "probability"
+            | "is"
+            | "a"
+            | "an"
+            | "sequence"
+            | "normalizes-to"
+            | "applies"
+            | "premise"
+            | "premise-by"
+            | "conclusion"
+            | "uses"
+            | "judgement"
+            | "assumption"
+            | "axiom"
+            | "rule"
+            | "proof-object"
+            | "check-proof"
+            | "foundation"
+            | "with-foundation"
+            | "foundation-report"
+            | "foundation-report?"
+            | "root-construct"
+            | "strict-carrier"
+            | "truth-table"
+            | "strict-foundation"
+            | "allow-host-primitive"
+    )
+}
+
+fn is_strictly_offending_status(status: Option<&String>) -> bool {
+    match status {
+        Some(s) => s == "host-primitive" || s == "host-derived",
+        None => false,
+    }
+}
+
+fn strict_dependency_offenders(env: &Env, name: &str, path: &[String]) -> Vec<String> {
+    if env.allowed_host_primitives.contains(name) {
+        return Vec::new();
+    }
+    if path.iter().any(|n| n == name) {
+        return Vec::new();
+    }
+    let mut current_path = path.to_vec();
+    current_path.push(name.to_string());
+    let active = env.active_implementations.get(name);
+    let rc = env.root_constructs.get(name);
+    let status = active
+        .and_then(|i| i.status.as_ref())
+        .or_else(|| rc.and_then(|r| r.status.as_ref()));
+    let deps: Vec<String> = active
+        .map(|i| i.depends_on.clone())
+        .or_else(|| rc.map(|r| r.depends_on.clone()))
+        .unwrap_or_default();
+
+    if matches!(
+        active.and_then(|i| i.status.as_deref()),
+        Some("links-defined")
+    ) && deps.is_empty()
+    {
+        return Vec::new();
+    }
+    if is_strictly_offending_status(status) && deps.is_empty() {
+        return vec![format!(
+            "{} -> {}",
+            current_path.join(" -> "),
+            status.cloned().unwrap_or_default()
+        )];
+    }
+
+    let mut offenders: Vec<String> = Vec::new();
+    for dep in deps {
+        if env.allowed_host_primitives.contains(&dep) {
+            continue;
+        }
+        offenders.extend(strict_dependency_offenders(env, &dep, &current_path));
+    }
+    if is_strictly_offending_status(status) && offenders.is_empty() {
+        offenders.push(format!(
+            "{} -> {}",
+            current_path.join(" -> "),
+            status.cloned().unwrap_or_default()
+        ));
+    }
+    offenders
+}
+
+/// Walk a queried node and return sorted, deduplicated dependency paths that
+/// end at a `host-primitive` or `host-derived` construct and are not covered
+/// by `(allow-host-primitive ...)`.
+pub fn scan_pure_links_offenders(node: &Node, env: &Env) -> Vec<String> {
+    if !env.strict_pure_links {
+        return Vec::new();
+    }
+    let mut offenders: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    fn check(name: &str, env: &Env, offenders: &mut std::collections::BTreeSet<String>) {
+        if pure_links_scanner_ignored(name) || env.allowed_host_primitives.contains(name) {
+            return;
+        }
+        for offender in strict_dependency_offenders(env, name, &[]) {
+            offenders.insert(offender);
+        }
+    }
+    fn visit(node: &Node, env: &Env, offenders: &mut std::collections::BTreeSet<String>) {
+        match node {
+            Node::List(children) => {
+                if let Some(Node::Leaf(head)) = children.first() {
+                    check(head, env, offenders);
+                }
+                // Infix (L op R) — operator is the middle element.
+                if children.len() == 3 {
+                    if let Node::Leaf(op) = &children[1] {
+                        check(op, env, offenders);
+                    }
+                }
+                for c in children {
+                    visit(c, env, offenders);
+                }
+            }
+            Node::Leaf(s) => {
+                check(s, env, offenders);
+            }
+        }
+    }
+    visit(node, env, &mut offenders);
+    offenders.into_iter().collect()
 }
 
 /// Render the foundation report as a human-readable text block. Mirrors
@@ -2562,6 +4431,71 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
             lines.push(format!("  - {}", n));
         }
     }
+    if !report.active_implementations.is_empty() {
+        lines.push(String::new());
+        lines.push("active implementations:".to_string());
+        for implementation in &report.active_implementations {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(status) = &implementation.status {
+                parts.push(status.clone());
+            }
+            if let Some(implementation_name) = &implementation.implementation {
+                parts.push(format!("via {}", implementation_name));
+            }
+            if let Some(foundation) = &implementation.foundation {
+                parts.push(format!("foundation {}", foundation));
+            }
+            if !implementation.depends_on.is_empty() {
+                parts.push(format!(
+                    "depends on {}",
+                    implementation.depends_on.join(", ")
+                ));
+            }
+            lines.push(format!(
+                "  - {}: {}",
+                implementation.construct,
+                parts.join("; ")
+            ));
+        }
+    }
+    if !report.proof_rules.is_empty() {
+        lines.push(String::new());
+        lines.push("proof rules:".to_string());
+        for r in &report.proof_rules {
+            lines.push(format!(
+                "  - {} ({} premises → {})",
+                r.name,
+                r.premises.len(),
+                r.conclusion
+            ));
+        }
+    }
+    if !report.proof_assumptions.is_empty() {
+        lines.push(String::new());
+        lines.push("proof assumptions:".to_string());
+        for a in &report.proof_assumptions {
+            lines.push(format!("  - {} [{}] : {}", a.name, a.kind, a.judgement));
+        }
+    }
+    if !report.proof_objects.is_empty() {
+        lines.push(String::new());
+        lines.push("proof objects:".to_string());
+        for po in &report.proof_objects {
+            let refs = if po.premise_refs.is_empty() {
+                String::new()
+            } else {
+                format!(" using {}", po.premise_refs.join(", "))
+            };
+            lines.push(format!(
+                "  - {} : applies {} ({} premises{} → {})",
+                po.name,
+                po.rule,
+                po.premises.len(),
+                refs,
+                po.conclusion
+            ));
+        }
+    }
     if !report.foundations.is_empty() {
         lines.push(String::new());
         lines.push("foundations:".to_string());
@@ -2571,12 +4505,28 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
                 .as_ref()
                 .map(|d| format!(" — {}", d))
                 .unwrap_or_default();
-            lines.push(format!("  - {}{}", f.name, suffix));
+            let tag = if f.experimental {
+                " [experimental]"
+            } else {
+                ""
+            };
+            lines.push(format!("  - {}{}{}", f.name, tag, suffix));
             if let Some(n) = &f.numeric_domain {
                 lines.push(format!("      numeric domain: {}", n));
             }
             if let Some(t) = &f.truth_domain {
                 lines.push(format!("      truth domain: {}", t));
+            }
+            if let Some(r) = &f.root {
+                lines.push(format!("      root: {}", r));
+            }
+            if !f.abits.is_empty() {
+                let parts: Vec<String> = f
+                    .abits
+                    .iter()
+                    .map(|(s, m)| format!("{}={}", s, m))
+                    .collect();
+                lines.push(format!("      abits: {}", parts.join(", ")));
             }
             if !f.uses.is_empty() {
                 lines.push(format!("      uses: {}", f.uses.join(", ")));
@@ -2588,6 +4538,40 @@ pub fn format_foundation_report(report: &FoundationReport) -> String {
                     .map(|(k, v)| format!("{}={}", k, v))
                     .collect();
                 lines.push(format!("      defines: {}", parts.join(", ")));
+            }
+            if !f.truth_tables.is_empty() {
+                let mut sorted: Vec<&(String, Vec<TruthTableRow>)> =
+                    f.truth_tables.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                let parts: Vec<String> = sorted
+                    .iter()
+                    .map(|(op, rows)| format!("{}({} rows)", op, rows.len()))
+                    .collect();
+                lines.push(format!("      truth tables: {}", parts.join(", ")));
+            }
+        }
+    }
+    if report.strict_pure_links {
+        lines.push(String::new());
+        lines.push("pure-links strict mode: on".to_string());
+        if !report.allowed_host_primitives.is_empty() {
+            lines.push(format!(
+                "  allowed host primitives: {}",
+                report.allowed_host_primitives.join(", ")
+            ));
+        }
+    }
+    if !report.dependency_graph.is_empty() {
+        let non_empty: Vec<&(String, Vec<String>)> = report
+            .dependency_graph
+            .iter()
+            .filter(|(_, deps)| !deps.is_empty())
+            .collect();
+        if !non_empty.is_empty() {
+            lines.push(String::new());
+            lines.push("dependency graph (transitive):".to_string());
+            for (name, deps) in non_empty {
+                lines.push(format!("  - {} → {}", name, deps.join(", ")));
             }
         }
     }
@@ -3960,6 +5944,151 @@ fn query_requests_proof(node: &Node) -> bool {
     false
 }
 
+/// Read-only beta-normalization used by equality-layer classification.
+/// Unlike `normalize_term`, this helper only handles the on-the-fly
+/// `(apply (lambda (T x) body) arg)` redex shape and recurses into other
+/// nodes structurally. That keeps it free of `&mut Env` so it can run from
+/// the immutable `build_proof` walker without cloning the environment.
+fn pure_beta_normalize(node: &Node) -> Node {
+    if let Node::List(children) = node {
+        if children.len() == 3 {
+            if let Node::Leaf(head) = &children[0] {
+                if head == "apply" {
+                    let fn_n = pure_beta_normalize(&children[1]);
+                    let arg = pure_beta_normalize(&children[2]);
+                    if let Node::List(fn_children) = &fn_n {
+                        if fn_children.len() == 3 {
+                            if let Node::Leaf(fn_head) = &fn_children[0] {
+                                if fn_head == "lambda" {
+                                    if let Some((param, _)) =
+                                        parse_binding(&fn_children[1])
+                                    {
+                                        let reduced =
+                                            subst(&fn_children[2], &param, &arg);
+                                        return pure_beta_normalize(&reduced);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return Node::List(vec![Node::Leaf("apply".into()), fn_n, arg]);
+                }
+            }
+        }
+        let normalized: Vec<Node> = children.iter().map(pure_beta_normalize).collect();
+        return Node::List(normalized);
+    }
+    node.clone()
+}
+
+fn contains_lambda_or_apply(node: &Node) -> bool {
+    if let Node::List(children) = node {
+        if let Some(Node::Leaf(head)) = children.first() {
+            if head == "lambda" || head == "apply" {
+                return true;
+            }
+        }
+        return children.iter().any(contains_lambda_or_apply);
+    }
+    false
+}
+
+/// Equality-layer classification used by both `build_proof` and the
+/// per-query provenance walker. Precedence (issue #97): assigned >
+/// structural > definitional > numeric. Returns the rule string verbatim
+/// so JS and Rust emit identical labels.
+pub fn classify_equality_rule(l: &Node, r: &Node, op: &str, env: &Env) -> &'static str {
+    let is_inequality = op == "!=";
+    let k_prefix = key_of(&Node::List(vec![leaf("="), l.clone(), r.clone()]));
+    let k_infix = key_of(&Node::List(vec![l.clone(), leaf("="), r.clone()]));
+    if env.assign.contains_key(&k_prefix) || env.assign.contains_key(&k_infix) {
+        return if is_inequality {
+            "assigned-inequality"
+        } else {
+            "assigned-equality"
+        };
+    }
+    if is_structurally_same(l, r) {
+        return if is_inequality {
+            "structural-inequality"
+        } else {
+            "structural-equality"
+        };
+    }
+    // Definitional equality: if one side contains a lambda/apply and both
+    // sides beta-normalize to structurally-identical terms, the equality
+    // holds by reduction rather than by raw arithmetic.
+    if contains_lambda_or_apply(l) || contains_lambda_or_apply(r) {
+        let ln = pure_beta_normalize(l);
+        let rn = pure_beta_normalize(r);
+        if is_structurally_same(&ln, &rn) && !is_structurally_same(l, r) {
+            return if is_inequality {
+                "definitional-inequality"
+            } else {
+                "definitional-equality"
+            };
+        }
+    }
+    if is_inequality {
+        "numeric-inequality"
+    } else {
+        "numeric-equality"
+    }
+}
+
+/// Strip an optional `with proof` suffix and then unwrap a singleton
+/// container so `(? (a = b))` and `(? ((a = b)))` both yield `(a = b)`.
+fn query_body_for_provenance(form: &Node) -> Option<Node> {
+    if let Node::List(children) = form {
+        if let Some(Node::Leaf(head)) = children.first() {
+            if head == "?" {
+                let stripped = strip_with_proof(&children[1..]);
+                let mut body: Node = if stripped.len() == 1 {
+                    stripped[0].clone()
+                } else {
+                    Node::List(stripped.to_vec())
+                };
+                loop {
+                    match body {
+                        Node::List(ref inner) if inner.len() == 1 => {
+                            if matches!(&inner[0], Node::List(_)) {
+                                body = inner[0].clone();
+                            } else {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                return Some(body);
+            }
+        }
+    }
+    None
+}
+
+/// Return the equality-layer rule for a query whose body is a direct
+/// equality, or `None` for any other query shape. Composite queries like
+/// `((a = true) and (b = true))` are intentionally returned as `None`: the
+/// per-equality rules still appear in the proof witness, but the surface
+/// provenance describes the query itself.
+pub fn equality_provenance_for_query(form: &Node, env: &Env) -> Option<String> {
+    let body = query_body_for_provenance(form)?;
+    if let Node::List(children) = &body {
+        if children.len() == 3 {
+            if let Node::Leaf(op) = &children[1] {
+                if op == "=" || op == "!=" {
+                    return Some(
+                        classify_equality_rule(&children[0], &children[2], op, env)
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Build a derivation tree witnessing how `node` reduces under `env`.
 /// Returns a `Node::List` of the form `(by <rule> <subderivation>...)`.
 ///
@@ -3967,8 +6096,10 @@ fn query_requests_proof(node: &Node) -> bool {
 /// configuration directives become leaf witnesses, infix and prefix
 /// operators become rule applications whose subderivations recurse through
 /// `build_proof`, and equality picks `assigned-equality` /
-/// `structural-equality` / `numeric-equality` (and the negated counterparts)
-/// based on the same lookups `eval_node` performs.
+/// `structural-equality` / `definitional-equality` / `numeric-equality`
+/// (and the negated counterparts) based on the same lookups `eval_node`
+/// performs — delegating to `classify_equality_rule` so both the proof
+/// witness and the per-query provenance agree on which layer fired.
 pub fn build_proof(node: &Node, env: &Env) -> Node {
     match node {
         // Numeric and bare-symbol leaves are axiomatic at this level.
@@ -4105,29 +6236,7 @@ pub fn build_proof(node: &Node, env: &Env) -> Node {
                     if op_name == "=" || op_name == "!=" {
                         let l = &children[0];
                         let r = &children[2];
-                        let k_prefix =
-                            key_of(&Node::List(vec![leaf("="), l.clone(), r.clone()]));
-                        let k_infix =
-                            key_of(&Node::List(vec![l.clone(), leaf("="), r.clone()]));
-                        let rule = if env.assign.contains_key(&k_prefix)
-                            || env.assign.contains_key(&k_infix)
-                        {
-                            if op_name == "!=" {
-                                "assigned-inequality"
-                            } else {
-                                "assigned-equality"
-                            }
-                        } else if is_structurally_same(l, r) {
-                            if op_name == "!=" {
-                                "structural-inequality"
-                            } else {
-                                "structural-equality"
-                            }
-                        } else if op_name == "!=" {
-                            "numeric-inequality"
-                        } else {
-                            "numeric-equality"
-                        };
+                        let rule = classify_equality_rule(l, r, op_name, env);
                         // Sub-derivation of equality preserves the original
                         // operands as a link so the witness reads
                         // `(by structural-equality (a a))` per the issue.
@@ -7852,9 +9961,24 @@ pub fn eval_node(node: &Node, env: &mut Env) -> EvalResult {
                 {
                     if w1 == "has" && w2 == "probability" && is_num(w3) {
                         let p: f64 = w3.parse().unwrap_or(0.0);
+                        // Carrier enforcement (issue #97, Section 2): if an
+                        // enclosing `(with-foundation ...)` declared a strict
+                        // carrier, the assigned value must belong to that
+                        // carrier. Violations surface as E063 instead of
+                        // being silently clamped. We panic with a
+                        // "Carrier violation:" prefix so the surrounding
+                        // catch_unwind translates it to a Diagnostic.
+                        let clamped = env.clamp(p);
+                        if let Some(msg) = env.check_carrier_value(clamped) {
+                            panic!(
+                                "Carrier violation: Probability assignment {} = {} violates active foundation carrier: {}",
+                                key_of(&children[0]),
+                                format_trace_value(clamped),
+                                msg
+                            );
+                        }
                         env.set_expr_prob(&children[0], p);
                         let key = key_of(&children[0]);
-                        let clamped = env.clamp(p);
                         env.trace(
                             "assign",
                             format!("{} ← {}", key, format_trace_value(clamped)),
@@ -9604,6 +11728,7 @@ pub fn evaluate_file(file_path: &str, options: EvaluateOptions) -> EvaluateResul
                 diagnostics: vec![diag],
                 trace: Vec::new(),
                 proofs: Vec::new(),
+                provenance: Vec::new(),
             };
         }
     };
@@ -9860,6 +11985,7 @@ fn eval_foundation_body_form(
     diagnostics: &mut Vec<Diagnostic>,
     results: &mut Vec<RunResult>,
     proofs: &mut Option<Vec<Option<Node>>>,
+    provenance: &mut Option<Vec<Option<String>>>,
     options: &EvaluateOptions,
 ) {
     let mut form = form;
@@ -9912,7 +12038,14 @@ fn eval_foundation_body_form(
                 let bodies: Vec<Node> = children[2..].to_vec();
                 for body in bodies {
                     eval_foundation_body_form(
-                        body, span, env, diagnostics, results, proofs, options,
+                        body,
+                        span,
+                        env,
+                        diagnostics,
+                        results,
+                        proofs,
+                        provenance,
+                        options,
                     );
                 }
                 env.exit_foundation();
@@ -9978,8 +12111,165 @@ fn eval_foundation_body_form(
                 if let Some(p) = proofs.as_mut() {
                     p.push(None);
                 }
+                if let Some(pv) = provenance.as_mut() {
+                    pv.push(None);
+                }
                 return;
             }
+            if head == "rule" && is_proof_rule_shape(children) {
+                match parse_rule_form(&form) {
+                    Ok(rule) => {
+                        let name = rule.name.clone();
+                        env.register_proof_rule(rule);
+                        if options.trace {
+                            env.trace_events
+                                .push(TraceEvent::new("rule", name, span.clone()));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "assumption" || head == "axiom" {
+                match parse_proof_assumption_form(&form) {
+                    Ok(assumption) => {
+                        let kind = assumption.kind.clone();
+                        let name = assumption.name.clone();
+                        env.register_proof_assumption(assumption);
+                        if options.trace {
+                            env.trace_events
+                                .push(TraceEvent::new(&kind, name, span.clone()));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "proof-object" {
+                match parse_proof_object_form(&form) {
+                    Ok(po) => {
+                        let name = po.name.clone();
+                        env.register_proof_object(po);
+                        if options.trace {
+                            env.trace_events.push(TraceEvent::new(
+                                "proof-object",
+                                name,
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "check-proof" {
+                if children.len() != 2 {
+                    diagnostics.push(Diagnostic::new(
+                        "E064",
+                        "(check-proof <name>) requires a proof-object name",
+                        span.clone(),
+                    ));
+                    return;
+                }
+                let target = match &children[1] {
+                    Node::Leaf(s) if !s.is_empty() => s.clone(),
+                    _ => {
+                        diagnostics.push(Diagnostic::new(
+                            "E064",
+                            "(check-proof <name>) requires a proof-object name",
+                            span.clone(),
+                        ));
+                        return;
+                    }
+                };
+                let verdict = check_proof_object(env, &target);
+                let (value, error) = match verdict {
+                    CheckProofVerdict::Ok(_) => (1.0_f64, None),
+                    CheckProofVerdict::Err(msg) => (0.0_f64, Some(msg)),
+                };
+                results.push(RunResult::Num(value));
+                if let Some(p) = proofs.as_mut() {
+                    p.push(None);
+                }
+                if let Some(pv) = provenance.as_mut() {
+                    pv.push(None);
+                }
+                if let Some(msg) = error {
+                    diagnostics.push(Diagnostic::new("E064", msg, span.clone()));
+                }
+                if options.trace {
+                    env.trace_events.push(TraceEvent::new(
+                        "check-proof",
+                        format!("{} → {}", target, if value == 1.0 { "ok" } else { "fail" }),
+                        span.clone(),
+                    ));
+                }
+                return;
+            }
+            if head == "strict-foundation" {
+                match parse_strict_foundation_form(&form) {
+                    Ok(decl) => {
+                        env.strict_pure_links = true;
+                        if options.trace {
+                            env.trace_events.push(TraceEvent::new(
+                                "strict-foundation",
+                                decl.profile,
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E065", message, span.clone()));
+                    }
+                }
+                return;
+            }
+            if head == "allow-host-primitive" {
+                match parse_allow_host_primitive_form(&form) {
+                    Ok(decl) => {
+                        for name in &decl.names {
+                            env.allowed_host_primitives.insert(name.clone());
+                        }
+                        if options.trace {
+                            env.trace_events.push(TraceEvent::new(
+                                "allow-host-primitive",
+                                decl.names.join(" "),
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    Err(message) => {
+                        diagnostics.push(Diagnostic::new("E065", message, span.clone()));
+                    }
+                }
+                return;
+            }
+        }
+    }
+    if let Node::Leaf(head) = &form {
+        if head == "foundation-report" || head == "foundation-report?" {
+            let report = env.foundation_report();
+            if options.trace {
+                env.trace_events.push(TraceEvent::new(
+                    "foundation-report",
+                    report.active_foundation.clone(),
+                    span.clone(),
+                ));
+            }
+            results.push(RunResult::Foundation(report));
+            if let Some(p) = proofs.as_mut() {
+                p.push(None);
+            }
+            if let Some(pv) = provenance.as_mut() {
+                pv.push(None);
+            }
+            return;
         }
     }
 
@@ -9990,11 +12280,77 @@ fn eval_foundation_body_form(
         (expanded, eval_res)
     }));
     match inner_result {
-        Ok((_, eval_res)) => match eval_res {
-            EvalResult::Query(v) => results.push(RunResult::Num(v)),
-            EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
-            _ => {}
-        },
+        Ok((expanded, eval_res)) => {
+            let was_query = matches!(eval_res, EvalResult::Query(_) | EvalResult::TypeQuery(_));
+            let query_value = if let EvalResult::Query(v) = &eval_res {
+                Some(*v)
+            } else {
+                None
+            };
+            match eval_res {
+                EvalResult::Query(v) => results.push(RunResult::Num(v)),
+                EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
+                _ => {}
+            }
+            if was_query {
+                if let Some(p) = proofs.as_mut() {
+                    p.push(None);
+                }
+                let prov = equality_provenance_for_query(&expanded, env);
+                record_provenance(
+                    provenance,
+                    results.len(),
+                    prov,
+                    env,
+                    &expanded,
+                    span,
+                    options,
+                );
+                // Carrier enforcement (issue #97 Section 2): when the active
+                // foundation strict-carrier is on, a numeric query result
+                // outside the carrier produces an E063 diagnostic alongside
+                // the value, so the trace stays explainable without losing
+                // the result.
+                if let Some(v) = query_value {
+                    if let Some(msg) = env.check_carrier_value(v) {
+                        diagnostics.push(Diagnostic::new(
+                            "E063",
+                            format!(
+                                "Query result {} violates active foundation carrier: {}",
+                                format_trace_value(v),
+                                msg
+                            ),
+                            span.clone(),
+                        ));
+                    }
+                }
+                // Pure-links strict mode audit inside with-foundation bodies.
+                if env.strict_pure_links {
+                    if let Node::List(form_children) = &expanded {
+                        if matches!(form_children.first(), Some(Node::Leaf(s)) if s == "?") {
+                            let parts = &form_children[1..];
+                            let inner = strip_with_proof(parts);
+                            let target: Node = if inner.len() == 1 {
+                                inner[0].clone()
+                            } else {
+                                Node::List(inner.to_vec())
+                            };
+                            let offenders = scan_pure_links_offenders(&target, env);
+                            if !offenders.is_empty() {
+                                diagnostics.push(Diagnostic::new(
+                                    "E065",
+                                    format!(
+                                        "Query depends on host-primitive construct(s) under pure-links strict mode: {}",
+                                        offenders.join(", ")
+                                    ),
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Err(payload) => {
             let (code, message) = decode_panic_payload(&payload);
             diagnostics.push(Diagnostic::new(&code, message, span.clone()));
@@ -10002,7 +12358,44 @@ fn eval_foundation_body_form(
     }
 }
 
-fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &EvaluateOptions, ctx: &mut ImportContext) -> EvaluateResult {
+/// Append a per-query provenance entry, lazily allocating the vector on the
+/// first non-`None` rule (mirrors JS's `out.provenance` shape). When `rule`
+/// is `Some`, also emits an `equality-layer` trace event so tracing tools
+/// can attribute each classification to its source span.
+fn record_provenance(
+    provenance: &mut Option<Vec<Option<String>>>,
+    results_len: usize,
+    rule: Option<String>,
+    env: &mut Env,
+    _form: &Node,
+    span: &Span,
+    options: &EvaluateOptions,
+) {
+    if let Some(rule_name) = rule {
+        if provenance.is_none() {
+            let backfill = results_len.saturating_sub(1);
+            *provenance = Some(vec![None; backfill]);
+        }
+        provenance.as_mut().unwrap().push(Some(rule_name.clone()));
+        if options.trace {
+            env.trace_events.push(TraceEvent::new(
+                "equality-layer",
+                rule_name,
+                span.clone(),
+            ));
+        }
+    } else if let Some(pv) = provenance.as_mut() {
+        pv.push(None);
+    }
+}
+
+fn evaluate_inner(
+    text: &str,
+    file: Option<&str>,
+    env: &mut Env,
+    options: &EvaluateOptions,
+    ctx: &mut ImportContext,
+) -> EvaluateResult {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let extracted_literate = if is_literate_lino_path(file) {
         Some(extract_literate_lino(text))
@@ -10033,10 +12426,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
             // (mirrors the JS evaluator's `['whnf']` shape and lets the
             // normalization driver E038 fall-through fire).
             let toks = tokenize_one(link_str);
-            let toks = if toks.len() == 1
-                && toks[0] != "("
-                && toks[0] != ")"
-            {
+            let toks = if toks.len() == 1 && toks[0] != "(" && toks[0] != ")" {
                 vec!["(".to_string(), toks[0].clone(), ")".to_string()]
             } else {
                 toks
@@ -10069,6 +12459,14 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
     } else {
         None
     };
+
+    // Equality-layer provenance (issue #97). Lazily allocated on the first
+    // query that classifies into one of the four equality layers; prior
+    // bare queries are backfilled with `None` so indices stay aligned with
+    // `results`. When no equality query ever fires the vector stays empty
+    // and the public field is returned as `Vec::new()`, matching the JS
+    // `{results, diagnostics}` shape for legacy programs.
+    let mut provenance: Option<Vec<Option<String>>> = None;
 
     // Silence the default panic hook while we deliberately catch evaluator
     // panics — otherwise they'd leak to stderr alongside the diagnostics.
@@ -10111,8 +12509,11 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         } else {
                             env.namespace = Some(n.clone());
                             if options.trace {
-                                env.trace_events
-                                    .push(TraceEvent::new("namespace", n.clone(), span.clone()));
+                                env.trace_events.push(TraceEvent::new(
+                                    "namespace",
+                                    n.clone(),
+                                    span.clone(),
+                                ));
                             }
                         }
                         continue;
@@ -10207,11 +12608,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         Ok(descriptor) => {
                             let name = descriptor.name.clone();
                             if let Err(message) = env.register_root_construct(descriptor) {
-                                diagnostics.push(Diagnostic::new(
-                                    "E060",
-                                    message,
-                                    span.clone(),
-                                ));
+                                diagnostics.push(Diagnostic::new("E060", message, span.clone()));
                             } else if options.trace {
                                 env.trace_events.push(TraceEvent::new(
                                     "root-construct",
@@ -10231,11 +12628,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         Ok(foundation) => {
                             let name = foundation.name.clone();
                             if let Err(message) = env.register_foundation(foundation) {
-                                diagnostics.push(Diagnostic::new(
-                                    "E061",
-                                    message,
-                                    span.clone(),
-                                ));
+                                diagnostics.push(Diagnostic::new("E061", message, span.clone()));
                             } else if options.trace {
                                 env.trace_events.push(TraceEvent::new(
                                     "foundation",
@@ -10271,11 +12664,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         }
                     };
                     if let Err(message) = env.enter_foundation(&fname) {
-                        diagnostics.push(Diagnostic::new(
-                            "E062",
-                            message,
-                            span.clone(),
-                        ));
+                        diagnostics.push(Diagnostic::new("E062", message, span.clone()));
                         continue;
                     }
                     if options.trace {
@@ -10294,6 +12683,7 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                             &mut diagnostics,
                             &mut results,
                             &mut proofs,
+                            &mut provenance,
                             options,
                         );
                     }
@@ -10319,6 +12709,151 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                     results.push(RunResult::Foundation(report));
                     if let Some(p) = proofs.as_mut() {
                         p.push(None);
+                    }
+                    if let Some(pv) = provenance.as_mut() {
+                        pv.push(None);
+                    }
+                    continue;
+                }
+                // Proof-object substrate (issue #97, Phase 3). The
+                // `(rule <name> (premise ...)... (conclusion ...))` shape is
+                // routed here only when every clause uses the
+                // `premise`/`conclusion` keywords and at least one
+                // `conclusion` is present, so existing self-bootstrap
+                // grammars that use `(rule <name> (sequence ...) ...)` fall
+                // through to the legacy data path unchanged.
+                if head == "rule" && is_proof_rule_shape(children) {
+                    match parse_rule_form(&form) {
+                        Ok(rule) => {
+                            let name = rule.name.clone();
+                            env.register_proof_rule(rule);
+                            if options.trace {
+                                env.trace_events
+                                    .push(TraceEvent::new("rule", name, span.clone()));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "assumption" || head == "axiom" {
+                    match parse_proof_assumption_form(&form) {
+                        Ok(assumption) => {
+                            let kind = assumption.kind.clone();
+                            let name = assumption.name.clone();
+                            env.register_proof_assumption(assumption);
+                            if options.trace {
+                                env.trace_events
+                                    .push(TraceEvent::new(&kind, name, span.clone()));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "proof-object" {
+                    match parse_proof_object_form(&form) {
+                        Ok(po) => {
+                            let name = po.name.clone();
+                            env.register_proof_object(po);
+                            if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "proof-object",
+                                    name,
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E064", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "check-proof" {
+                    if children.len() != 2 {
+                        diagnostics.push(Diagnostic::new(
+                            "E064",
+                            "(check-proof <name>) requires a proof-object name",
+                            span.clone(),
+                        ));
+                        continue;
+                    }
+                    let target = match &children[1] {
+                        Node::Leaf(s) if !s.is_empty() => s.clone(),
+                        _ => {
+                            diagnostics.push(Diagnostic::new(
+                                "E064",
+                                "(check-proof <name>) requires a proof-object name",
+                                span.clone(),
+                            ));
+                            continue;
+                        }
+                    };
+                    let verdict = check_proof_object(env, &target);
+                    let (value, error) = match verdict {
+                        CheckProofVerdict::Ok(_) => (1.0_f64, None),
+                        CheckProofVerdict::Err(msg) => (0.0_f64, Some(msg)),
+                    };
+                    results.push(RunResult::Num(value));
+                    if let Some(p) = proofs.as_mut() {
+                        p.push(None);
+                    }
+                    if let Some(pv) = provenance.as_mut() {
+                        pv.push(None);
+                    }
+                    if let Some(msg) = error {
+                        diagnostics.push(Diagnostic::new("E064", msg, span.clone()));
+                    }
+                    if options.trace {
+                        env.trace_events.push(TraceEvent::new(
+                            "check-proof",
+                            format!("{} → {}", target, if value == 1.0 { "ok" } else { "fail" }),
+                            span.clone(),
+                        ));
+                    }
+                    continue;
+                }
+                // Pure-links strict mode (issue #97, Phase 6).
+                if head == "strict-foundation" {
+                    match parse_strict_foundation_form(&form) {
+                        Ok(decl) => {
+                            env.strict_pure_links = true;
+                            if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "strict-foundation",
+                                    decl.profile,
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E065", message, span.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if head == "allow-host-primitive" {
+                    match parse_allow_host_primitive_form(&form) {
+                        Ok(decl) => {
+                            for name in &decl.names {
+                                env.allowed_host_primitives.insert(name.clone());
+                            }
+                            if options.trace {
+                                env.trace_events.push(TraceEvent::new(
+                                    "allow-host-primitive",
+                                    decl.names.join(" "),
+                                    span.clone(),
+                                ));
+                            }
+                        }
+                        Err(message) => {
+                            diagnostics.push(Diagnostic::new("E065", message, span.clone()));
+                        }
                     }
                     continue;
                 }
@@ -10353,6 +12888,11 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                         .push(TraceEvent::new("eval", summary, span.clone()));
                 }
                 let was_query = matches!(eval_res, EvalResult::Query(_) | EvalResult::TypeQuery(_));
+                let query_value = if let EvalResult::Query(v) = &eval_res {
+                    Some(*v)
+                } else {
+                    None
+                };
                 match eval_res {
                     EvalResult::Query(v) => results.push(RunResult::Num(v)),
                     EvalResult::TypeQuery(s) => results.push(RunResult::Type(s)),
@@ -10395,6 +12935,63 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
                     } else if let Some(p) = proofs.as_mut() {
                         p.push(None);
                     }
+                    let prov = equality_provenance_for_query(&expanded_form, env);
+                    record_provenance(
+                        &mut provenance,
+                        results.len(),
+                        prov,
+                        env,
+                        &expanded_form,
+                        &span,
+                        options,
+                    );
+                    // Carrier enforcement (issue #97 Section 2): also surface
+                    // E063 at the top level so a `(with-foundation ...)` body
+                    // that returns into a top-level query path still flags
+                    // out-of-carrier results.
+                    if let Some(v) = query_value {
+                        if let Some(msg) = env.check_carrier_value(v) {
+                            diagnostics.push(Diagnostic::new(
+                                "E063",
+                                format!(
+                                    "Query result {} violates active foundation carrier: {}",
+                                    format_trace_value(v),
+                                    msg
+                                ),
+                                span.clone(),
+                            ));
+                        }
+                    }
+                    // Pure-links strict mode audit (issue #97 Phase 6). When
+                    // `(strict-foundation pure-links)` is active, scan the
+                    // queried form for operators registered as
+                    // `host-primitive`/`host-derived` that have not been
+                    // explicitly allow-listed via `(allow-host-primitive ...)`,
+                    // and emit a single E065 listing them.
+                    if env.strict_pure_links {
+                        if let Node::List(form_children) = &expanded_form {
+                            if matches!(form_children.first(), Some(Node::Leaf(s)) if s == "?") {
+                                let parts = &form_children[1..];
+                                let inner = strip_with_proof(parts);
+                                let target: Node = if inner.len() == 1 {
+                                    inner[0].clone()
+                                } else {
+                                    Node::List(inner.to_vec())
+                                };
+                                let offenders = scan_pure_links_offenders(&target, env);
+                                if !offenders.is_empty() {
+                                    diagnostics.push(Diagnostic::new(
+                                        "E065",
+                                        format!(
+                                            "Query depends on host-primitive construct(s) under pure-links strict mode: {}",
+                                            offenders.join(", ")
+                                        ),
+                                        span.clone(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Err(payload) => {
@@ -10424,11 +13021,22 @@ fn evaluate_inner(text: &str, file: Option<&str>, env: &mut Env, options: &Evalu
         Vec::new()
     };
 
+    let provenance_vec = match provenance {
+        Some(mut v) => {
+            while v.len() < results.len() {
+                v.push(None);
+            }
+            v
+        }
+        None => Vec::new(),
+    };
+
     EvaluateResult {
         results,
         diagnostics,
         trace,
         proofs: proofs.unwrap_or_default(),
+        provenance: provenance_vec,
     }
 }
 
@@ -10516,6 +13124,11 @@ fn decode_panic_payload(payload: &Box<dyn std::any::Any + Send>) -> (String, Str
         (
             "E041".to_string(),
             raw_msg.replacen("Domain plugin error: ", "", 1),
+        )
+    } else if raw_msg.starts_with("Carrier violation:") {
+        (
+            "E063".to_string(),
+            raw_msg.replacen("Carrier violation: ", "", 1),
         )
     } else {
         ("E000".to_string(), raw_msg)

@@ -103,8 +103,12 @@ The exit code is `1` whenever any diagnostic is emitted, `0` otherwise.
 | `E041` | Domain plugin error. Triggered by a malformed `(domain <name> ...)` block, an unknown domain plugin, or an unsupported request inside a registered domain plugin such as `automatic-sequences`. |
 | `E050` | Lean export error. Triggered when `rml export lean` sees forms outside the typed non-probabilistic subset, such as `has probability`, range/valence configuration, operator redefinitions, imports, namespaces, or templates. |
 | `E060` | Malformed `(root-construct …)` declaration. Triggered by a missing or non-symbolic name, an unrecognised child clause shape, or a non-symbolic value where a status / kind / dependency name is expected. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
-| `E061` | Malformed `(foundation …)` declaration. Triggered by a missing name, an unrecognised child clause shape, or a malformed `(defines <op> <aggregator>)` / `(extends …)` / `(numeric-domain …)` / `(truth-domain …)` clause. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
+| `E061` | Malformed `(foundation …)` declaration. Triggered by a missing name, an unrecognised child clause shape, or a malformed `(defines <op> <aggregator>)` / `(extends …)` / `(numeric-domain …)` / `(truth-domain …)` / `(carrier …)` / `(truth-table …)` clause. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
 | `E062` | `(with-foundation <name> …)` references a foundation that has not been registered. Evaluation skips the body but continues with the surrounding forms; the active foundation remains the previously-active one. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
+| `E063` | Carrier violation under `(strict-carrier)`. A probability assignment or query result fell outside the active foundation's declared carrier. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
+| `E064` | Proof-substrate error. Triggered by malformed proof rules, assumptions, proof objects, `(check-proof …)` forms, premise/rule/conclusion mismatches, unjustified raw premises, or cyclic proof dependencies. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
+| `E065` | Pure-links strict-mode error. Triggered by malformed `(strict-foundation …)` / `(allow-host-primitive …)` forms or by a query whose transitive dependency path reaches an unallowed `host-primitive` / `host-derived` construct. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
+| `E066` | MTC/anum encode/decode error. Triggered by non-`Node` encode inputs, characters outside the four-abit alphabet, unbalanced frames, malformed frame tags, or byte-unaligned leaf payloads. See [`FOUNDATIONS.md`](./FOUNDATIONS.md). |
 
 Codes are stable identifiers — they do not change between releases unless we
 explicitly note a breaking change in the changelog. The accompanying
