@@ -631,3 +631,8 @@ that do not use them.
   case-study analysis behind this surface, including the requirements
   extracted from issue #97, the root-cause analysis, the test plan, and
   links to the captured GitHub data.
+- [`META-THEORY-MAPPING.md`](./META-THEORY-MAPPING.md) — maps the
+  issue-#97 constructs (Peano naturals, proof objects,
+  rule-application, inductive closure, trust-report graph) to the
+  references / links / doublets / triplets vocabulary of
+  [Links Theory (meta-theory)](https://github.com/link-foundation/meta-theory).

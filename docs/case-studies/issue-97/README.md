@@ -735,3 +735,9 @@ foundation report.
   evidence for requirements R1–R16.
 - `evidence/cicd-template-review.md` — review of the four CI/CD
   templates against this repository's `.github/workflows/`.
+- [`../../META-THEORY-MAPPING.md`](../../META-THEORY-MAPPING.md) —
+  documents how the inductive Peano fragment, the proof-substrate,
+  rule application, inductive closure, and the trust report map onto
+  the references / links / doublets vocabulary of the
+  [meta-theory](https://github.com/link-foundation/meta-theory). The
+  bridge required by netkeep80's "meta-theory mapping" deliverable.
