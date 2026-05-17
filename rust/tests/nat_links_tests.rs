@@ -785,3 +785,72 @@ fn eval_nat_with_wrong_arity_raises_e067() {
         out.diagnostics[0].message
     );
 }
+
+#[test]
+fn full_nat_links_example_replays_cleanly_under_strict_pure_links() {
+    // Phase 12.5 acceptance: the whole Peano fragment — Nat formation,
+    // addition, multiplication, equality, induction, recursor, and the
+    // eval-nat structural rewriter — must replay end-to-end without
+    // emitting a single E065 diagnostic when strict pure-links audit is
+    // turned on. If any rule, proof object, or evaluator step silently
+    // leaned on host `+`/`*`/`=`, the strict scanner would surface it as
+    // `... -> decimal-12-arithmetic -> host-primitive` and break this
+    // test. Mirrors the JS parity test.
+    let path = repo_root().join("examples").join("nat-links.lino");
+    let body = std::fs::read_to_string(&path).expect("read nat-links.lino");
+    let src = format!("(strict-foundation pure-links)\n{}", body);
+    let out = run(&src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(
+        nums(&out.results),
+        vec![
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 0.0, 1.0, 2.0, 4.0,
+        ]
+    );
+}
+
+#[test]
+fn eval_nat_under_strict_pure_links_computes_without_delegating_to_host_arithmetic() {
+    // The strict pure-links scanner ignores `eval-nat` (a dedicated
+    // links-evaluated form), and the rewriter is implemented as
+    // structural rewriting at the links level rather than as a host
+    // `+`/`*` call. Together these properties give eval-nat its
+    // `semantic-status links-evaluated` claim: the foundation can
+    // compute with its own rules under the most paranoid audit mode.
+    let src = "(strict-foundation pure-links)\n\
+               (eval-nat (add (succ (succ zero)) (succ (succ (succ zero)))))\n\
+               (eval-nat (mul (succ (succ zero)) (succ (succ zero))))\n";
+    let out = run(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "diagnostics: {:?}",
+        out.diagnostics
+    );
+    assert_eq!(nums(&out.results), vec![5.0, 4.0]);
+}
+
+#[test]
+fn strict_pure_links_still_catches_a_stray_host_arithmetic_query_in_nat_context() {
+    // Negative-direction check: the strict audit is genuinely live in
+    // the Nat context. A `(? (1 + 2))` interleaved with the Peano
+    // fragment is rejected with E065 even though every nat-links
+    // declaration around it is clean. Without this test the
+    // "passes strict mode" claim above would be vacuous (no audit
+    // could ever flag anything).
+    let src = "(strict-foundation pure-links)\n\
+               (rule nat-zero-formation\n  (conclusion (zero has-type Nat)))\n\
+               (? (1 + 2))\n";
+    let out = run(src);
+    assert_eq!(out.diagnostics.len(), 1);
+    assert_eq!(out.diagnostics[0].code, "E065");
+    assert!(
+        out.diagnostics[0].message.contains("+"),
+        "diagnostic message: {}",
+        out.diagnostics[0].message
+    );
+}
