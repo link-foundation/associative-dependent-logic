@@ -346,7 +346,7 @@ env.exit_foundation();
 
 ## 5. Bundled foundations
 
-Three alternative foundations ship in [`lib/self/foundations.lino`](../lib/self/foundations.lino)
+Five alternative foundations ship in [`lib/self/foundations.lino`](../lib/self/foundations.lino)
 and are pre-seeded by the JS and Rust hosts:
 
 - **`boolean-links`** — two-valued Boolean logic over the strict carrier
@@ -364,10 +364,26 @@ and are pre-seeded by the JS and Rust hosts:
   `three-valued` and the numeric domain is the real unit interval; the
   midpoint `0.5` represents `unknown`. These bindings also use host
   aggregators.
+- **`typed-kernel-links`** — links-defined typed-kernel fragment. The
+  four rules `pi-formation`, `lambda-introduction`,
+  `application-elimination`, and `beta-conversion` are recorded as
+  `(root-construct … links-defined …)` and replayed through
+  `(check-proof …)` from
+  [`examples/typed-kernel-links.lino`](../examples/typed-kernel-links.lino).
+- **`nat-links`** — links-defined Peano naturals. The five proof
+  substrate rules `nat-zero-formation`, `nat-succ-formation`,
+  `nat-add-zero`, `nat-add-succ`, and `nat-induction` describe `Nat`,
+  `zero`, `succ`, addition, and induction as proof-substrate data
+  rather than host arithmetic. There is no `succ → +1` shortcut:
+  successor stays a literal constructor and addition is reduced
+  recursively. Replayed end-to-end by
+  [`examples/nat-links.lino`](../examples/nat-links.lino) and pinned in
+  `examples/expected.lino`.
 
 The example [`examples/foundation-boolean-kleene.lino`](../examples/foundation-boolean-kleene.lino)
-exercises both in one file and shows the default semantics being
-restored after each scope. A minimal single-operator showcase lives in
+exercises the Boolean/Kleene foundations in one file and shows the
+default semantics being restored after each scope. A minimal
+single-operator showcase lives in
 [`examples/foundation-with-min.lino`](../examples/foundation-with-min.lino).
 
 ## 6. Carrier enforcement: `(carrier ...)` and `(strict-carrier)`
@@ -563,6 +579,17 @@ and derivations are links data.
   four-abit alphabet and `encodeAnum` / `decodeAnum`; the companion
   theory declares MTC rules and replays a composite proof. It does not
   replace the default RML foundation.
+- **Phase 12 — links-defined Peano naturals.** Implemented as a
+  fifth bundled foundation (§5). `examples/nat-links.lino` declares the
+  five rules `nat-zero-formation`, `nat-succ-formation`,
+  `nat-add-zero`, `nat-add-succ`, and `nat-induction` as proof-substrate
+  data and replays the inhabitants `zero`, `(succ zero)`,
+  `(succ (succ zero))`, the additions `0+0`, `1+0`, `0+1`, `1+1`, and
+  one induction conclusion through `(check-proof …)`. Successor is a
+  literal constructor; there is no `succ → +1` host shortcut. The
+  default host numeric layer is unaffected — this phase adds the
+  inductive substrate the issue's Software Foundations reference uses,
+  not a replacement numeric domain.
 
 Everything in this document is the *backward-compatible* surface. The
 strict modes (`(strict-carrier)`, `(strict-foundation pure-links)`) are

@@ -620,6 +620,35 @@ class Env {
       root: null,
       abits: null,
     });
+    // Pre-seed the links-defined Peano naturals foundation (issue #97,
+    // Phase 12). Selecting it via `(with-foundation nat-links ...)`
+    // records the proof-substrate rules `nat-zero-formation`,
+    // `nat-succ-formation`, `nat-add-zero`, `nat-add-succ`, and
+    // `nat-induction` as the canonical links-defined replacement for
+    // host-numeric Peano arithmetic. The host's decimal numeric domain
+    // is unaffected; the foundation is selected so the trust audit can
+    // list the five rules as the active derivations for `Nat`.
+    this.foundations.set('nat-links', {
+      name: 'nat-links',
+      description: 'links-defined Peano naturals (zero/succ formation, add by recursion, induction)',
+      uses: [
+        'nat-zero-formation',
+        'nat-succ-formation',
+        'nat-add-zero',
+        'nat-add-succ',
+        'nat-induction',
+      ],
+      defines: new Map(),
+      extends: 'default-rml',
+      numericDomain: 'decimal-12',
+      truthDomain: 'default-truth',
+      carrier: null,
+      strictCarrier: false,
+      truthTables: null,
+      experimental: false,
+      root: null,
+      abits: null,
+    });
     seedBuiltinRootConstructs(this);
   }
 

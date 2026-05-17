@@ -1634,6 +1634,40 @@ impl Env {
         };
         self.foundations
             .insert(typed_kernel_links.name.clone(), typed_kernel_links);
+        // Pre-seed the links-defined Peano naturals foundation (issue #97,
+        // Phase 12). Selecting it via `(with-foundation nat-links ...)`
+        // records the proof-substrate rules `nat-zero-formation`,
+        // `nat-succ-formation`, `nat-add-zero`, `nat-add-succ`, and
+        // `nat-induction` as the canonical links-defined replacement for
+        // host-numeric Peano arithmetic. The host's decimal numeric domain
+        // is unaffected; the foundation is selected so the trust audit can
+        // list the five rules as the active derivations for `Nat`.
+        let nat_links = FoundationDescriptor {
+            name: "nat-links".to_string(),
+            description: Some(
+                "links-defined Peano naturals (zero/succ formation, add by recursion, induction)"
+                    .to_string(),
+            ),
+            uses: vec![
+                "nat-zero-formation".to_string(),
+                "nat-succ-formation".to_string(),
+                "nat-add-zero".to_string(),
+                "nat-add-succ".to_string(),
+                "nat-induction".to_string(),
+            ],
+            defines: Vec::new(),
+            extends: Some("default-rml".to_string()),
+            numeric_domain: Some("decimal-12".to_string()),
+            truth_domain: Some("default-truth".to_string()),
+            carrier: Vec::new(),
+            strict_carrier: false,
+            truth_tables: Vec::new(),
+            experimental: false,
+            root: None,
+            abits: Vec::new(),
+        };
+        self.foundations
+            .insert(nat_links.name.clone(), nat_links);
         seed_builtin_root_constructs(self);
     }
 
